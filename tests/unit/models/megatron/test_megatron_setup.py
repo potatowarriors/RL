@@ -1940,6 +1940,7 @@ class TestValidateAndSetConfig:
                 )
 
                 assert runtime_config.is_generation_colocated is True
+                assert runtime_config.offload_optimizer_for_refit is False
 
 
 @pytest.mark.mcore
@@ -1956,6 +1957,7 @@ class TestRuntimeConfigNamedTuple:
             dtype=torch.bfloat16,
             optimizer_cpu_offload=False,
             offload_optimizer_for_logprob=True,
+            offload_optimizer_for_refit=False,
             is_generation_colocated=True,
             sampling_params=None,
             final_padded_vocab_size=32000,
@@ -1965,6 +1967,7 @@ class TestRuntimeConfigNamedTuple:
         assert runtime_config.optimizer_cpu_offload is False
         assert runtime_config.offload_optimizer_for_logprob is True
         assert runtime_config.is_generation_colocated is True
+        assert runtime_config.offload_optimizer_for_refit is False
         assert runtime_config.sampling_params is None
         assert runtime_config.final_padded_vocab_size == 32000
 
