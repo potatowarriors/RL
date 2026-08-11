@@ -293,6 +293,7 @@ guides/nemotron-3-nano.md
 guides/nemotron-3-nano-omni.md
 guides/nemotron-3.5-lightning.md
 guides/nemotron-3-super.md
+guides/nemotron-3-super-omni.md
 guides/nemotron-3-ultra.md
 adding-new-models.md
 guides/sft.md
