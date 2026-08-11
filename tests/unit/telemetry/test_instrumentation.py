@@ -14,7 +14,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from nemo.lens import NemoLensConfig, setup_telemetry
-from nemo.lens.helpers import managed_span, trace_fn
+from nemo_rl.telemetry.goodput import RL_BUCKET_ATTR
+from nemo_rl.telemetry.instrumentation import managed_span, trace_fn
 from nemo_rl.telemetry.span_groups import RLSpanGroup
 
 
@@ -38,6 +39,20 @@ def test_managed_span_emits_when_group_enabled():
     spans = exporter.get_finished_spans()
     assert [s.name for s in spans] == ["rl.vllm.generate"]
     assert spans[0].attributes["rl.backend"] == "vllm"
+    # Option B: leaf groups carry rl.bucket for offline goodput rollup.
+    assert spans[0].attributes[RL_BUCKET_ATTR] == "productive"
+
+
+def test_umbrella_span_has_no_bucket():
+    handle, exporter = _setup("all")
+    with managed_span(
+        RLSpanGroup.STEP, "rl.grpo.step", tracer=handle.tracer
+    ) as span:
+        assert span is not None
+    handle.shutdown()
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert RL_BUCKET_ATTR not in spans[0].attributes
 
 
 def test_managed_span_noop_when_group_disabled():

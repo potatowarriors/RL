@@ -13,6 +13,8 @@ nemo_rl/telemetry/
 ├── config.py       — TelemetryConfig: the telemetry: config block
 ├── setup.py        — init_telemetry_driver / init_telemetry_worker / get_telemetry / shutdown_telemetry
 ├── span_groups.py  — RLSpanGroup: RL-specific span groups + presets
+├── goodput.py      — option-B phase/group → rl.bucket map (monitor derives goodput)
+├── instrumentation.py — managed_span/trace_fn wrappers that attach rl.bucket
 ├── metrics.py      — tees Logger.log_metrics scalars into the rl.* instruments
 ├── _fallbacks.py   — no-op shims for when nemo-lens is not installed
 └── __init__.py
