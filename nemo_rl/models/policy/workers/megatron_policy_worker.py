@@ -54,6 +54,9 @@ from nemo_rl.data_plane.worker_mixin import TQWorkerMixin
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
 from nemo_rl.distributed.named_sharding import NamedSharding
 from nemo_rl.models.generation.interfaces import GenerationDatumSpec
+from nemo_rl.models.generation.megatron.config import (
+    merged_inference_megatron_cfg,
+)
 from nemo_rl.models.generation.megatron.megatron_worker import (
     MegatronGenerationMixin,
     MegatronGenerationRefitMixin,
@@ -71,6 +74,7 @@ from nemo_rl.models.megatron.pipeline_parallel import (
 )
 from nemo_rl.models.megatron.router_replay import router_replay_enabled
 from nemo_rl.models.megatron.setup import (
+    build_inference_model,
     finalize_megatron_setup,
     handle_model_import,
     setup_distributed,
@@ -445,13 +449,16 @@ class MegatronPolicyWorkerImpl(
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         # Step 3: Setup model configuration
-        # Training workers cannot use inference_optimized transformer spec.
         if init_optimizer:
             assert (
                 config["megatron_cfg"].get("transformer_impl") != "inference_optimized"
             ), (
-                "transformer_impl=inference_optimized must not be set on training workers. "
-                "Use policy.generation.mcore_generation_config.transformer_impl=inference_optimized instead."
+                "transformer_impl=inference_optimized must not be set on training "
+                "workers: training and logprob forwards run the TE path. Set "
+                "policy.generation.mcore_generation_config.transformer_impl="
+                "inference_optimized instead — with colocated generation the "
+                "worker builds a dedicated resharded inference model from that "
+                "config; non-colocated generation has always honored it."
             )
         runtime_config = validate_and_set_config(
             config,
@@ -468,6 +475,7 @@ class MegatronPolicyWorkerImpl(
         self.offload_optimizer_for_logprob = (
             runtime_config.offload_optimizer_for_logprob
         )
+        self.offload_optimizer_for_refit = runtime_config.offload_optimizer_for_refit
         self.is_generation_colocated = runtime_config.is_generation_colocated
         self.final_padded_vocab_size = runtime_config.final_padded_vocab_size
         self.sampling_params = runtime_config.sampling_params
@@ -592,6 +600,20 @@ class MegatronPolicyWorkerImpl(
                     "Nemotron Omni caller-packed THD inputs do not yet support "
                     "virtual pipeline parallelism."
                 )
+
+        # Colocated reshard: build a dedicated inference-layout model container.
+        self.inference_model = None
+        self._colocated_reshard_plan_ready = False
+        self._inference_model_offloaded = False
+        self._colocated_inference_model_checked = False
+        gen_cfg = config.get("generation")
+        # The build itself is deferred to the first prepare_for_generation.
+        self._colocated_reshard_eligible = (
+            init_optimizer
+            and self.is_generation_colocated
+            and gen_cfg is not None
+            and gen_cfg.get("backend") == "megatron"
+        )
 
         # vars used for refit
         ## will be initialized in prepare_refit_info
@@ -2699,6 +2721,51 @@ class MegatronPolicyWorkerImpl(
         gc.collect()
         torch.cuda.empty_cache()
 
+    def _maybe_build_colocated_inference_model(self, config) -> None:
+        """Build a separate inference-layout model when the colocated layout differs."""
+        # Resolve the inference layout the same way the non-colocated generation policy does:
+        # overlay the sparse mcore_generation_config onto a copy of megatron_cfg.
+        inference_config = copy.deepcopy(config)
+        inference_config["megatron_cfg"] = merged_inference_megatron_cfg(
+            inference_config
+        )
+        # Inference never uses CP: pin CP=1, so CP>1 training builds a separate inference model.
+        inference_config["megatron_cfg"]["context_parallel_size"] = 1
+
+        train_mcfg = config["megatron_cfg"]
+        inf_mcfg = inference_config["megatron_cfg"]
+        layout_keys = (
+            "tensor_model_parallel_size",
+            "pipeline_model_parallel_size",
+            "expert_model_parallel_size",
+            "expert_tensor_parallel_size",
+            "context_parallel_size",
+        )
+        layout_differs = any(inf_mcfg[k] != train_mcfg[k] for k in layout_keys)
+        impl_differs = inf_mcfg.get("transformer_impl") != train_mcfg.get(
+            "transformer_impl"
+        )
+        if not (layout_differs or impl_differs):
+            return
+
+        peft_cfg = train_mcfg.get("peft")
+        if peft_cfg is not None and peft_cfg.get("enabled"):
+            raise NotImplementedError(
+                "Colocated generation with a differing inference parallel layout is not "
+                "supported with PEFT. Use a matched layout or non-colocated generation."
+            )
+        draft_cfg = config.get("draft")
+        if draft_cfg is not None and draft_cfg.get("enabled"):
+            raise NotImplementedError(
+                "Colocated generation with a differing inference parallel layout is not "
+                "supported with a speculative draft model."
+            )
+        # Built inside the first prepare_for_generation, immediately before the
+        # reshard needs it resident; finish_generation offloads it afterwards.
+        self.inference_model = build_inference_model(
+            inference_config, self.megatron_cfg
+        )
+
     def prepare_for_training(self, *args, **kwargs):
         # onload models and optimizer state to cuda
         self.model = self.move_model(
@@ -2835,6 +2902,7 @@ class MegatronPolicyWorkerImpl(
             hasattr(self, "optimizer")
             and self.optimizer is not None
             and not self.optimizer_cpu_offload
+            and self.offload_optimizer_for_refit
         ):
             self.move_optimizer("cpu")
 

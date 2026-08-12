@@ -1133,22 +1133,15 @@ def setup(
     def init_megatron_generation(policy=None):
         """Initialize Megatron generation."""
         t0 = time.perf_counter()
-        if colocated_inference:
-            mg = MegatronGeneration(
-                policy=policy,
-                config=policy_config,
-                tokenizer=tokenizer,
-                processor=processor,
-            )
-        else:
-            mg = MegatronGeneration(
-                cluster=inference_cluster,
-                config=policy_config,
-                tokenizer=tokenizer,
-                processor=processor,
-                weights_path=weights_path,
-                skip_weight_load=True,
-            )
+        mg = MegatronGeneration(
+            config=policy_config,
+            tokenizer=tokenizer,
+            cluster=None if colocated_inference else inference_cluster,
+            policy=policy if colocated_inference else None,
+            processor=processor,
+            weights_path=weights_path,
+            skip_weight_load=not colocated_inference,
+        )
         return mg, time.perf_counter() - t0
 
     def initialize_generation_with_policy(
@@ -1436,8 +1429,25 @@ def setup(
             "https://github.com/NVIDIA-NeMo/RL/issues/3288."
         )
 
+    if backend == "megatron":
+        t0 = time.perf_counter()
+        policy_generation.weight_synchronizer = create_weight_synchronizer(
+            policy=policy,
+            generation=policy_generation,
+            generation_backend=backend,
+            colocated=colocated_inference,
+            train_cluster=train_cluster,
+            inference_cluster=None if colocated_inference else inference_cluster,
+        )
+        policy_generation.weight_synchronizer.init_communicator()
+        setup_timing_metrics.collective_init_time_s = time.perf_counter() - t0
+        if not colocated_inference:
+            # Load the model weights now.
+            t0 = time.perf_counter()
+            policy_generation.weight_synchronizer.sync_weights()
+            setup_timing_metrics.generation_init_load_time_s = time.perf_counter() - t0
     # if it is not colocated inference, initialize collective communication for update weights
-    if (
+    elif (
         not colocated_inference
         and remote_transport is None
         and checkpoint_engine_config is None
@@ -1451,26 +1461,7 @@ def setup(
         world_size = train_world_size + inference_world_size
 
         # init collective
-        if backend == "megatron":
-            refit_backend = policy_config["generation"]["mcore_generation_config"][
-                "refit_backend"
-            ]
-            futures_train = policy.init_collective_mcore_generation(
-                ip,
-                port,
-                world_size,
-                rank_offset=0,
-                refit_backend=refit_backend,
-            )
-            futures_inference = policy_generation.init_collective(
-                ip,
-                port,
-                world_size,
-                train_world_size=train_world_size,
-                refit_backend=refit_backend,
-            )
-            ray.get(futures_train + futures_inference)
-        elif nccl_reshard_refit_enabled:
+        if nccl_reshard_refit_enabled:
             policy_generation.weight_synchronizer = create_weight_synchronizer(
                 policy=policy,
                 generation=policy_generation,
@@ -2310,26 +2301,9 @@ def refit_policy_generation(
     if synchronizer is not None:
         return synchronizer.sync_weights(timer=timer, kv_scales=kv_scales) or {}
 
-    # Megatron generation backend needs explicit suspend/resume around refits.
-    if isinstance(policy_generation, MegatronGeneration):
-        policy_generation.suspend_for_refit()
-
-    if colocated_inference or isinstance(policy_generation, MegatronGeneration):
+    if colocated_inference:
         policy.offload_before_refit()
-    # Colocated inference needs to prepare for generation.
-    # Megatron non-colocated inference needs to enter inference mode after refit.
-    if colocated_inference or isinstance(policy_generation, MegatronGeneration):
         policy_generation.prepare_for_generation(tags=["weights"])
-
-    if (
-        not colocated_inference
-        and isinstance(policy_generation, MegatronGeneration)
-        and policy_generation.cfg["mcore_generation_config"]["refit_backend"]
-        == "nvshmem"
-    ):
-        futures_train = policy.preinit_nvshmem()
-        futures_inference = policy_generation.preinit_nvshmem_collective()
-        ray.get(futures_train + futures_inference)
 
     # Create a context manager that does nothing when timer is None
     timer_context = (
@@ -2382,12 +2356,7 @@ def refit_policy_generation(
                 raise NotImplementedError(
                     "SGLang haven't implemented non-colocated inference mode. "
                 )
-            if isinstance(policy_generation, MegatronGeneration):
-                futures_train = policy.swap_weights_via_reshard(is_source=True)
-            else:
-                futures_train = policy.broadcast_weights_for_collective(
-                    kv_scales=kv_scales
-                )
+            futures_train = policy.broadcast_weights_for_collective(kv_scales=kv_scales)
             futures_inference = policy_generation.update_weights_from_collective()
             # wait for all futures to complete
             ray.get(futures_train)
@@ -2406,13 +2375,7 @@ def refit_policy_generation(
 
     if colocated_inference:
         policy.offload_after_refit()
-    # Colocated inference needs to prepare for generation.
-    # Megatron non-colocated inference needs to enter inference mode after refit.
-    if colocated_inference or isinstance(policy_generation, MegatronGeneration):
         policy_generation.prepare_for_generation(tags=["kv_cache"])
-
-    if isinstance(policy_generation, MegatronGeneration):
-        policy_generation.resume_after_refit()
 
     return {}
 
@@ -4144,10 +4107,6 @@ def async_grpo_train(
         fit_last_save_time=True,
     )
     timeout.start_iterations()
-    NEED_REFIT = not (
-        isinstance(policy_generation, MegatronGeneration)
-        and master_config.policy["generation"]["colocated"]["enabled"]
-    )
     assert policy_generation is not None
 
     # Training state
@@ -4163,12 +4122,13 @@ def async_grpo_train(
     colocated_inference = master_config.policy["generation"]["colocated"]["enabled"]
     stop_at_validation_threshold = master_config.grpo.stop_at_validation_threshold
     stop_at_validation_metric = master_config.grpo.stop_at_validation_metric
+
+    assert (not colocated_inference) or (
+        isinstance(policy_generation, MegatronGeneration)
+    ), "Colocated async GRPO is only supported for the Megatron generation backend."
+
     # Initialize advantage estimator
     adv_estimator = _create_advantage_estimator(master_config)
-
-    assert not colocated_inference, (
-        "Colocated inference is not supported for async GRPO. Please use non-colocated inference."
-    )
 
     # Calculate minimum buffer size from training requirements
     # In per-prompt buffer mode, one buffer entry is 1 prompt * num_generations_per_prompt
@@ -4295,14 +4255,6 @@ def async_grpo_train(
         processor=processor,
     )
 
-    # Start trajectory collection in background
-    collection_task = trajectory_collector.start_collection.remote(dataloader)
-
-    # Ensure collector knows initial weight version
-    trajectory_collector.set_weight_version.remote(weight_version)
-
-    print("📦 Started continuous background trajectory collection")
-
     print(
         f"🚀 Starting async GRPO training with buffer_size={optimal_buffer_size}, "
         f"max_age={max_trajectory_age_steps} steps, "
@@ -4310,7 +4262,7 @@ def async_grpo_train(
     )
 
     print("⏳ Preparing policy generation for training...", flush=True)
-    if NEED_REFIT and POLICY_GENERATION_STALE:
+    if POLICY_GENERATION_STALE:
         print("🔄 Refitting policy generation with actual model weights...", flush=True)
         try:
             refit_policy_generation(
@@ -4338,6 +4290,11 @@ def async_grpo_train(
             traceback.print_exc()
             return
 
+    # Start collection only after generation is ready.
+    trajectory_collector.set_weight_version.remote(weight_version)
+    collection_task = trajectory_collector.start_collection.remote(dataloader)
+    print("📦 Started continuous background trajectory collection")
+
     print("✅ Policy generation setup complete, proceeding to validation...")
 
     # Run validation at start if configured
@@ -4359,7 +4316,9 @@ def async_grpo_train(
                 processor=processor,
             )
             initial_val_metrics = val_metrics
-            policy_generation.finish_generation()
+            # A colocated engine keeps serving between phases (preserves its
+            # KV/prefix cache); the backend makes that call, not the loop.
+            policy_generation.finish_generation(for_training=False)
             logger.log_metrics(val_metrics, step, prefix="validation")
             logger.log_metrics(validation_timings, step, prefix="timing/validation")
             if master_config.grpo.debug_payload_metrics:
@@ -4745,6 +4704,17 @@ def async_grpo_train(
                     )
                     train_data.to("cpu")
 
+                generation_logger_metrics = None
+                if policy_generation.blocks_training():
+                    print("⏸️ Pausing colocated engine + collector for training...")
+                    with timer.time("exposed_generation"):
+                        ray.get(trajectory_collector.prepare_for_refit.remote())
+                    if policy_generation is not None:
+                        generation_logger_metrics = (
+                            policy_generation.get_logger_metrics()
+                        )
+                    policy_generation.finish_generation(for_training=True)
+
                 # Training phase (same as sync version)
                 skip_prev_logprobs, skip_reference_logprobs = (
                     _resolve_logprob_skip_flags(master_config)
@@ -4876,9 +4846,36 @@ def async_grpo_train(
                         timer=timer,
                     )
 
+                is_last_step = step + 1 == master_config.grpo.max_num_steps
+                should_save_by_step = (
+                    is_last_step
+                    or (step + 1) % master_config.checkpointing["save_period"] == 0
+                    or (ft_save_period is not None and (step + 1) % ft_save_period == 0)
+                )
+                should_save_by_timeout = timeout.check_save()
+                will_save_checkpoint = master_config.checkpointing["enabled"] and (
+                    should_save_by_step or should_save_by_timeout
+                )
+
                 print("🔄 Synchronizing policy weights to trajectory collector…")
-                generation_logger_metrics = None
-                if NEED_REFIT:
+                if colocated_inference and will_save_checkpoint:
+                    # Wake-deferral (checkpoint scheduling, which the backend
+                    # cannot see): the engine is about to be saved, so leave it
+                    # asleep; just drop training-only buffers and version-stamp
+                    # the weights. The post-save block wakes it and resumes
+                    # collection.
+                    print("⏸️ Keeping colocated engine asleep for checkpointing...")
+                    # Seed the category with 0.0 (no refit wake happens on
+                    # save-bound steps) so efficiency summaries, which skip
+                    # missing keys, stay comparable across modes.
+                    with timer.time("idle/refit_bubble"):
+                        pass
+                    with timer.time("offload_before_refit"):
+                        policy.offload_before_refit()
+                    POLICY_GENERATION_STALE = False
+                    weight_version += 1
+                    trajectory_collector.set_weight_version.remote(weight_version)
+                else:
                     timer.start("idle/refit_bubble")
 
                     # Measure pending-generation wait as exposed_generation time
@@ -4888,7 +4885,11 @@ def async_grpo_train(
 
                     # Collect generation logger metrics for performance reporting
                     # inflight batch sizes and num pending samples are collected from each worker
-                    if policy_generation is not None:
+                    # (colocated collects them before the engine sleeps for training).
+                    if (
+                        policy_generation is not None
+                        and generation_logger_metrics is None
+                    ):
                         generation_logger_metrics = (
                             policy_generation.get_logger_metrics()
                         )
@@ -4916,7 +4917,6 @@ def async_grpo_train(
 
                 # Validation
                 val_metrics, validation_timings = None, None
-                is_last_step = step + 1 == master_config.grpo.max_num_steps
                 should_run_validation = (
                     val_period > 0
                     and (step + 1) >= val_start_at
@@ -4941,7 +4941,7 @@ def async_grpo_train(
                 # Run validation if it's a validation step or last step with val_at_end
                 if should_run_validation:
                     with timer.time("idle/validation"):
-                        if NEED_REFIT and POLICY_GENERATION_STALE:
+                        if POLICY_GENERATION_STALE:
                             refit_metrics = refit_policy_generation(
                                 policy,
                                 policy_generation,
@@ -4949,6 +4949,9 @@ def async_grpo_train(
                             )
                             POLICY_GENERATION_STALE = False
                         else:
+                            # No-op on an already-running engine; wakes the
+                            # colocated engine when it stayed asleep for a
+                            # save-bound step.
                             policy_generation.prepare_for_generation()
                         val_metrics, validation_timings = validate(
                             policy_generation,
@@ -4960,7 +4963,12 @@ def async_grpo_train(
                             logger=logger,
                             processor=processor,
                         )
-                        policy_generation.finish_generation()
+                        # Save-bound steps need the GPUs for checkpointing,
+                        # so the engine must stand down; otherwise a colocated
+                        # engine keeps serving (backend's call).
+                        policy_generation.finish_generation(
+                            for_training=will_save_checkpoint
+                        )
                         logger.log_metrics(
                             validation_timings, step + 1, prefix="timing/validation"
                         )
@@ -5073,19 +5081,12 @@ def async_grpo_train(
                 consumed_samples += master_config.grpo.num_prompts_per_step
                 timeout.mark_iteration()
 
-                # +1 because step is 0-indexed
-                should_save_by_step = (
-                    is_last_step
-                    # Early stop saves the final state like a last step.
-                    or early_stop_message is not None
-                    or (step + 1) % master_config.checkpointing["save_period"] == 0
-                    or (ft_save_period is not None and (step + 1) % ft_save_period == 0)
-                )
-                # Check if timeout-based checkpointing is enabled in config.
-                should_save_by_timeout = timeout.check_save()
-
-                if master_config.checkpointing["enabled"] and (
-                    should_save_by_step or should_save_by_timeout
+                # Early stop saves the final state like a last step; it is only
+                # known after validation, so it cannot fold into the earlier
+                # will_save_checkpoint computation.
+                if will_save_checkpoint or (
+                    master_config.checkpointing["enabled"]
+                    and early_stop_message is not None
                 ):
                     grpo_save_state.current_step = step + 1
                     grpo_save_state.total_valid_tokens = total_valid_tokens
@@ -5181,6 +5182,13 @@ def async_grpo_train(
                         _write_latest_checkpoint_status(
                             checkpointer, last_checkpoint_step=step + 1
                         )
+
+                    # On save-bound steps, engine stayed asleep after training.
+                    # (On an early-stop save it is already awake and the loop
+                    # exits right below, so no wake is needed.)
+                    if colocated_inference and will_save_checkpoint:
+                        policy_generation.prepare_for_generation()
+                        trajectory_collector.resume_after_refit.remote()
 
             # Logging
             # Log training data (match sync GRPO logging payload for parity).

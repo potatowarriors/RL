@@ -60,6 +60,7 @@ from megatron.bridge.training.tokenizers.tokenizer import build_tokenizer
 from megatron.bridge.training.utils.pg_utils import get_pg_collection
 from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 from megatron.core import parallel_state
+from megatron.core.inference.shards import build_inference_pg_collection
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer import MegatronModule
 from megatron.core.transformer.enums import AttnBackend, InferenceCudaGraphScope
@@ -230,6 +231,7 @@ from nemo_rl.models.megatron.draft.utils import (
     find_draft_owner_chunk,
     get_attached_draft_model,
 )
+from nemo_rl.models.megatron.memory_saver import inference_model_alloc_region
 from nemo_rl.models.megatron.router_replay import (
     clear_global_router_replay_instances,
     router_replay_enabled,
@@ -346,6 +348,7 @@ def validate_and_set_config(
     # Optimizer configuration
     optimizer_cpu_offload = config["megatron_cfg"]["optimizer"]["optimizer_cpu_offload"]
     offload_optimizer_for_logprob = config["offload_optimizer_for_logprob"]
+    offload_optimizer_for_refit = bool(config.get("offload_optimizer_for_refit"))
 
     # Reward models are not yet supported with Megatron.
     if "reward_model_cfg" in config and config["reward_model_cfg"]["enabled"]:
@@ -396,6 +399,7 @@ def validate_and_set_config(
         dtype,
         optimizer_cpu_offload,
         offload_optimizer_for_logprob,
+        offload_optimizer_for_refit,
         is_generation_colocated,
         sampling_params,
         final_padded_vocab_size,
@@ -893,10 +897,38 @@ def _apply_moe_config(model_cfg: Any, config: PolicyConfig) -> None:
         model_cfg.moe_router_group_topk = config["megatron_cfg"][
             "moe_router_group_topk"
         ]
+    if (
+        config["megatron_cfg"].get("transformer_impl") == "inference_optimized"
+        and getattr(model_cfg, "moe_router_num_groups", None) == 1
+    ):
+        model_cfg.moe_router_num_groups = None
+        model_cfg.moe_router_group_topk = None
     if "moe_pad_experts_for_cuda_graph_inference" in config["megatron_cfg"]:
         model_cfg.moe_pad_experts_for_cuda_graph_inference = config["megatron_cfg"][
             "moe_pad_experts_for_cuda_graph_inference"
         ]
+    generation_cfg = config.get("generation")
+    mcore_gen_cfg = (
+        (generation_cfg.get("mcore_generation_config") or {})
+        if generation_cfg is not None and generation_cfg.get("backend") == "megatron"
+        else {}
+    )
+    if (
+        mcore_gen_cfg.get("cuda_graph_impl") == "local"
+        and mcore_gen_cfg.get(
+            "transformer_impl", config["megatron_cfg"].get("transformer_impl")
+        )
+        != "inference_optimized"
+        and model_cfg.expert_model_parallel_size > 1
+        and "moe_pad_experts_for_cuda_graph_inference" not in config["megatron_cfg"]
+        and "moe_pad_experts_for_cuda_graph_inference" not in mcore_gen_cfg
+    ):
+        print(
+            "[_apply_moe_config] Setting "
+            "moe_pad_experts_for_cuda_graph_inference=True: CUDA-graph "
+            "inference with expert parallelism requires padded experts."
+        )
+        model_cfg.moe_pad_experts_for_cuda_graph_inference = True
     model_cfg.moe_shared_expert_overlap = config["megatron_cfg"][
         "moe_shared_expert_overlap"
     ]
@@ -1424,6 +1456,95 @@ def _patch_bridge_signal_handler_for_worker_threads() -> None:
     _BRIDGE_SIGNAL_HANDLER_PATCHED = True
 
 
+def build_inference_model(
+    policy_cfg: PolicyConfig,
+    megatron_cfg: ConfigContainer,
+) -> MegatronModule:
+    """Build a second, inference-layout model for colocated Megatron refit.
+
+    The returned model is resident on GPU; its weights are uninitialized until the first reshard.
+
+    Args:
+        policy_cfg: The inference config
+        megatron_cfg: The training config
+
+    Returns:
+        The inference model module (single element; not DDP-wrapped, no optimizer).
+    """
+    if megatron_cfg.dist.use_torch_fsdp2:
+        raise ValueError(
+            "A dedicated inference model (reshard) is not supported with use_torch_fsdp2 training: "
+            "DP inference disables the training model's forward pre-hooks, "
+            "which requires Megatron-core DistributedDataParallel."
+        )
+    # Derive the inference provider from the initial snapshot taken by setup_model_and_optimizer.
+    inference_provider = megatron_cfg._initial_model_provider
+    del megatron_cfg._initial_model_provider
+    train_pipeline_model_parallel_size = inference_provider.pipeline_model_parallel_size
+    _apply_parallelism_config(inference_provider, policy_cfg)
+    _apply_moe_config(inference_provider, policy_cfg)
+    if "transformer_impl" in policy_cfg["megatron_cfg"]:
+        inference_provider.transformer_impl = policy_cfg["megatron_cfg"][
+            "transformer_impl"
+        ]
+    # A custom (uneven) pipeline split is tuned for the training PP; reset to an even split
+    # when inference uses a different PP (the reshard maps params across stages by name).
+    if (
+        inference_provider.pipeline_model_parallel_size
+        != train_pipeline_model_parallel_size
+    ):
+        inference_provider.num_layers_in_first_pipeline_stage = None
+        inference_provider.num_layers_in_last_pipeline_stage = None
+    # Sequence parallelism requires TP > 1; force it off otherwise (Megatron asserts this).
+    inference_provider.sequence_parallel = (
+        inference_provider.sequence_parallel
+        and inference_provider.tensor_model_parallel_size > 1
+    )
+    # Inference never trains: disable recompute.
+    inference_provider.recompute_granularity = None
+    inference_provider.recompute_method = None
+    inference_provider.recompute_num_layers = None
+    if inference_provider.transformer_impl == "inference_optimized":
+        inference_provider.moe_pad_experts_for_cuda_graph_inference = False
+    # Need to run __post__init__ with the correct config.
+    TransformerConfig.__post_init__(inference_provider)
+
+    world_size = torch.distributed.get_world_size()
+    inference_pg_collection = build_inference_pg_collection(
+        world_size,
+        tp_size=inference_provider.tensor_model_parallel_size,
+        pp_size=inference_provider.pipeline_model_parallel_size,
+        cp_size=inference_provider.context_parallel_size,
+        ep_size=inference_provider.expert_model_parallel_size,
+        expt_tp_size=inference_provider.expert_tensor_parallel_size,
+        use_tp_pp_dp_mapping=megatron_cfg.dist.use_tp_pp_dp_mapping,
+        rank_offset=0,  # colocated: the same ranks hold both the training and inference models
+    )
+    setattr(inference_provider, "_pg_collection", inference_pg_collection)
+
+    # Match the training mixed-precision wrapper.
+    mixed_precision_wrapper = (
+        MoEFloat16Module
+        if policy_cfg["megatron_cfg"]["freeze_moe_router"]
+        else Float16Module
+    )
+
+    # Only one model's weights stay resident at a time; swap weights in and out at the same address.
+    with inference_model_alloc_region():
+        inference_model = get_model(
+            inference_provider,
+            megatron_cfg.ddp,
+            use_torch_fsdp2=False,  # the inference model is never trained
+            data_parallel_random_init=megatron_cfg.rng.data_parallel_random_init,
+            mixed_precision_wrapper=mixed_precision_wrapper,
+            pg_collection=inference_pg_collection,
+            wrap_with_ddp=False,  # never trained: no DDP, no grad buffers, no optimizer
+        )
+    inference_model = inference_model[0]
+    inference_model.eval()
+    return inference_model
+
+
 def setup_model_and_optimizer(
     policy_cfg: PolicyConfig,
     megatron_cfg: ConfigContainer,
@@ -1568,6 +1689,15 @@ def setup_model_and_optimizer(
         peft = None
 
     megatron_cfg.peft = peft
+
+    # Snapshot the provider before any runtime state is added onto it.
+    generation_cfg = policy_cfg.get("generation")
+    if (
+        generation_cfg is not None
+        and generation_cfg.get("backend") == "megatron"
+        and generation_cfg.get("colocated", {}).get("enabled", False)
+    ):
+        megatron_cfg._initial_model_provider = copy.deepcopy(megatron_cfg.model)
 
     if megatron_cfg.peft is not None:
         pre_peft_hook = _create_peft_pre_wrap_hook(megatron_cfg, state)

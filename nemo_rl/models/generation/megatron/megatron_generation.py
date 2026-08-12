@@ -25,8 +25,12 @@ from nemo_rl.models.generation.interfaces import (
     GenerationInterface,
     GenerationOutputSpec,
 )
-from nemo_rl.models.generation.megatron.config import MCoreGenerationConfig
+from nemo_rl.models.generation.megatron.config import (
+    MCoreGenerationConfig,
+    merged_inference_megatron_cfg,
+)
 from nemo_rl.models.policy import PolicyConfig
+from nemo_rl.weight_sync.interfaces import WeightSynchronizer
 
 if TYPE_CHECKING:
     from nemo_rl.models.policy.lm_policy import Policy
@@ -43,13 +47,9 @@ class MegatronGeneration(GenerationInterface):
         values apply; non-colocated builds a dedicated policy with
         mcore_generation_config merged on top. Always returns a fresh dict.
         """
-        megatron_cfg = config["megatron_cfg"]
         if config["generation"]["colocated"]["enabled"]:
-            return dict(megatron_cfg)
-        return {
-            **megatron_cfg,
-            **config["generation"].get("mcore_generation_config", {}),
-        }
+            return dict(config["megatron_cfg"])
+        return merged_inference_megatron_cfg(config)
 
     @classmethod
     def nvlink_domain_span(cls, config: PolicyConfig) -> int:
@@ -121,6 +121,8 @@ class MegatronGeneration(GenerationInterface):
         self.cfg: MCoreGenerationConfig = config["generation"]
         # Populated after the first prepare_for_generation (which starts the HTTP server).
         self.dp_openai_server_base_urls: list[Optional[str]] = []
+        # Installed by setup via create_weight_synchronizer.
+        self.weight_synchronizer: Optional["WeightSynchronizer"] = None
 
         if policy is not None:
             # Reuse the existing training policy.
@@ -137,8 +139,6 @@ class MegatronGeneration(GenerationInterface):
             **config,
             "megatron_cfg": self.effective_megatron_cfg(config),
         }
-        # Activation checkpointing is not compatible or useful in inference.
-        self._policy_config["megatron_cfg"]["activation_checkpointing"] = False
         # Reserve GPUs before Policy workers grab them, to prevent disjoint NVLS domains.
         self.init_cluster_placement_groups(cluster, self._policy_config)
         self._policy = Policy(
@@ -249,12 +249,38 @@ class MegatronGeneration(GenerationInterface):
         return True
 
     def finish_generation(self, *args: Any, **kwargs: Any) -> bool:
-        """Clean up after generation."""
+        """Clean up after generation.
+
+        Accepts `for_training` (default True): when False, a colocated engine
+        keeps serving instead of standing down (see the worker docstring).
+        """
         futures = self._policy.worker_group.run_all_workers_single_data(
-            "finish_generation"
+            "finish_generation", **kwargs
         )
         ray.get(futures)
         return True
+
+    def blocks_training(self) -> bool:
+        """Whether the engine must stand down before a training step.
+
+        Colocated generation shares the training GPUs, so the training
+        loop must wind the engine down before it can train.
+        """
+        return bool(self.cfg["colocated"]["enabled"])
+
+    def invalidate_kv_cache(self) -> bool:
+        """Report whether weight updates invalidate the KV cache.
+
+        Under "recompute" mode the engine drops and rebuilds its KV cache
+        across the suspend/resume that brackets every weight update, so
+        invalidation is genuinely handled; report it truthfully instead of
+        inheriting the interface's `False` (which makes the trajectory
+        collector warn every step).
+        """
+        return (
+            self.cfg["mcore_generation_config"].get("kv_cache_management_mode")
+            == "recompute"
+        )
 
     def preinit_nvshmem_collective(self) -> list[ray.ObjectRef]:
         """Pre-initialize NVShmem collectively after CUDA graph capture.
