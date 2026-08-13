@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-alpha-plugin"
+version = "0.1.0"
+description = "vLLM out-of-tree registration for AlphaForCausalLM (Qwen3-Next-style hybrid with DeepSeek-V3 routing)"
+requires-python = ">=3.10"
+# vllm itself is deliberately NOT a dependency: the plugin is only ever
+# installed into an environment that already provides the pinned vllm.
+dependencies = []
+
+[project.entry-points."vllm.general_plugins"]
+alpha = "vllm_alpha_plugin:register"
+
+[tool.setuptools.packages.find]
+include = ["vllm_alpha_plugin*"]
