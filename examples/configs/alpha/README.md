@@ -22,6 +22,22 @@ Nemotron-3-Ultra 레시피(`ultra-v3` 브랜치의 `examples/configs/ultra/`)를
 | `tools/verify_forward_parity.py` | mcore training-forward vs HF 참조 로짓 게이트 |
 | `docs/SPEC_*.md` | Pai 변환기·Megatron-Bridge 분석 명세 (포팅 근거 문서) |
 
+## RL 데이터 (2026-08-13 준비 완료)
+
+Ultra RL 블렌드는 **이미 NeMo Gym 실행 형식**(행별 `agent_ref` 라우팅)으로 배포되어 있고,
+레시피 yaml 7종도 트리에 존재한다 (`examples/nemo_gym/nemotron-3-ultra/`). 수행한 준비:
+
+| 산출물 | 경로 (`/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/`) | 내용 |
+|---|---|---|
+| `ultra_restored/*.jsonl` (7종) | 마스킹 수학 행 복원본 | `fill_placeholders.py`로 rlvr1/rlvr2/mopd 각 6,181행 복원 (DAPO/Skywork 소스) |
+| `rlvr1_alpha.jsonl` | 99,113행 | 복원본 + **identity 689행(0.70%)** 주입, 시드 20260813 |
+| `rlvr2_alpha.jsonl` | 99,810행 | 복원본 + identity 694행(0.70%), 시드 20260814 |
+
+- 도구: `tools/inject_identity_blend.py`(비율 0.3~1.0% 강제, 시드 고정), `tools/verify_rl_blend.py`(전행 JSON/키/잔여 마스킹 검사 + agent 분포) — 두 블렌드 모두 **구조 검증 통과**
+- 상세 인벤토리·스키마·라이선스: `docs/SPEC_rl_dataset_inventory.md` / 환경 배선: `docs/SPEC_nemo_rl_env_wiring.md`
+- 주의: identity RL은 **SFT identity 주입 이후에만** 보상 신호가 생김 (콜드 정책은 alpha-banana를 모름); `Nemotron-RLHF-GenRM-v1`·`Safety-v1`은 RL 프롬프트 뱅크가 아니라 RM 학습용; `Nemotron-RL-ARC-AGI-v1`은 라이선스 `pending-legal-review` — 블렌드 내 nvarc 행(각 ~2%) 사용 전 법무 확인 필요
+- 미결(후속 단계로 이관): Gym venv 프리페치(`examples/nemo_gym/prefetch_venvs.py`, 첫 Gym 실행 노드에서), Math-v2 복원(reasoning teacher), SWE 196k vs alpha 128k 컨텍스트 상한 결정, litmus-bench 모니터링 연결
+
 ## 레시피 (계획)
 
 | 파일 | 단계 | 상태 |
