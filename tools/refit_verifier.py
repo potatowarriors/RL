@@ -166,6 +166,7 @@ def setup_configs(args, tokenizer):
         "learning_rate": 0.0001,
         "logprob_batch_size": 1,
         "generation": {
+            "backend": "vllm",
             "temperature": 1.0,
             "top_p": 1.0,
             "top_k": None,
@@ -226,6 +227,9 @@ def setup_configs(args, tokenizer):
             "moe_router_load_balancing_type": "none",
             "moe_router_bias_update_rate": 0.0,
             "moe_permute_fusion": False,
+            "moe_enable_deepep": False,
+            "moe_token_dispatcher_type": "alltoall",
+            "moe_shared_expert_overlap": False,
             "pipeline_dtype": "bfloat16",
             "train_iters": 1,
             "bias_activation_fusion": False,
@@ -239,7 +243,7 @@ def setup_configs(args, tokenizer):
                 "lr": 5.0e-6,
                 "min_lr": 5.0e-7,
                 "weight_decay": 0.01,
-                "bf16": False,
+                "bf16": True,
                 "fp16": False,
                 "params_dtype": "float32",
                 # Adam optimizer settings
@@ -253,8 +257,8 @@ def setup_configs(args, tokenizer):
                 "use_precision_aware_optimizer": True,
                 "clip_grad": 1.0,
                 # Optimizer CPU offload settings
-                "optimizer_cpu_offload": False,
-                "optimizer_offload_fraction": 0.0,
+                "optimizer_cpu_offload": True,
+                "optimizer_offload_fraction": 1.0,
             },
             "scheduler": {
                 "start_weight_decay": 0.01,
@@ -287,13 +291,16 @@ def setup_configs(args, tokenizer):
         "temperature": 1.0,
         "top_p": 1.0,
         "top_k": None,
+        "val_temperature": 1.0,
+        "val_top_p": 1.0,
+        "val_top_k": None,
         "stop_token_ids": None,
         "stop_strings": None,
         "vllm_cfg": {
             "tensor_parallel_size": args.tp_size,
             "pipeline_parallel_size": args.pp_size,
             "expert_parallel_size": args.ep_size,
-            "gpu_memory_utilization": 0.6,
+            "gpu_memory_utilization": 0.45,
             "max_model_len": args.max_sequence_length,
             "precision": "bfloat16",
             "async_engine": False,
@@ -308,7 +315,7 @@ def setup_configs(args, tokenizer):
                 "num_nodes": None,
             },
         },
-        "vllm_kwargs": {},
+        "vllm_kwargs": {"max_num_seqs": 64},
     }
 
     # Configure vLLM with tokenizer
@@ -347,6 +354,10 @@ def setup_clusters_and_policies(args, megatron_config, vllm_config, tokenizer):
         init_reference_model=False,
         init_optimizer=False,
     )
+
+    # Free GPU memory for the colocated vLLM engine (same as the GRPO loop
+    # does before refit): move policy weights/buffers to CPU first.
+    policy.offload_before_refit()
 
     # Create vLLM inference configuration with limited generation
     vllm_inference_config = vllm_config.copy()
@@ -802,7 +813,7 @@ def main_vllm():
     ray.init()
 
     # Setup tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
