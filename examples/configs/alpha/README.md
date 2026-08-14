@@ -58,5 +58,10 @@ Ultra RL 블렌드는 **이미 NeMo Gym 실행 형식**(행별 `agent_ref` 라�
 - **아키텍처 주의**: alpha는 표준 RMSNorm — Qwen3-Next 계열 코드(mcore·vLLM 모두)의
   zero-centered 기본값을 재사용하면 가중치 검증은 통과하고 forward만 조용히 깨진다.
   체크포인트·코드 변경 시 반드시 `tools/`의 두 게이트를 재실행할 것
-- 클러스터: Backend.AI (Slurm 없음) — `ray start` 수동 기동. 2노드 토폴로지:
-  node0 학습+롤아웃 colocate, node1 frozen 서빙(teacher/GenRM) — 노드 간 IB 없음(~9.1Gbit/s) 대응
+- 클러스터: Backend.AI (Slurm 없음) — `ray start` 수동 기동. **2노드 토폴로지 (2026-08-14 확정)**:
+  **node0 = 학습 전용, node1 = vLLM 롤아웃 전용** (`generation.colocated.enabled: false`) +
+  **async GRPO + `in_flight_weight_updates`**. long-context RLVR에서는 학습 상태만으로 node0이
+  꽉 차므로 분리가 필수이고, async로 두 노드가 동시 가동된다. 노드 간 TCP(~9.1Gbit/s)를 건너는
+  가중치 refit ~28초는 스텝 시간(수십 분) 대비 무시 가능하며 in-flight로 생성과 오버랩됨.
+  colocate(1노드)는 짧은 컨텍스트 스모크 전용. LLM-judge/teacher가 필요한 스테이지(RLHF
+  teacher, MOPD)에서는 node1 GPU를 rollout과 judge가 분할 — 해당 스테이지 설계 시 재배분
