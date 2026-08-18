@@ -38,6 +38,19 @@ Ultra RL 블렌드는 **이미 NeMo Gym 실행 형식**(행별 `agent_ref` 라�
 - 주의: identity RL은 **SFT identity 주입 이후에만** 보상 신호가 생김 (콜드 정책은 alpha-banana를 모름); `Nemotron-RLHF-GenRM-v1`·`Safety-v1`은 RL 프롬프트 뱅크가 아니라 RM 학습용; `Nemotron-RL-ARC-AGI-v1`은 라이선스 `pending-legal-review` — 블렌드 내 nvarc 행(각 ~2%) 사용 전 법무 확인 필요
 - 미결(후속 단계로 이관): Gym venv 프리페치(`examples/nemo_gym/prefetch_venvs.py`, 첫 Gym 실행 노드에서), Math-v2 복원(reasoning teacher), SWE 196k vs alpha 128k 컨텍스트 상한 결정, litmus-bench 모니터링 연결
 
+## FlashQLA (GDN 커널 가속, 2026-08-18 검증·통합)
+
+Qwen 팀의 TileLang 기반 GDN 커널(`flash-qla==0.1.2`, mcore extra에 포함). alpha 기하 실측:
+**fwd 1.8~4.2×, fwd+bwd 1.6~3.7×** (시퀀스가 길수록 커짐 — 49k에서 f+b 3.5×). 정합성은
+fla naive 참조·확장 MHA 경로·15B 실모델 forward 패리티 3중으로 검증됨.
+
+- **활성화**: 레시피의 `policy.megatron_cfg.env_vars`에 `ALPHA_GDN_BACKEND: "flashqla"`
+  (브리지 fork의 `alpha/__init__.py`가 임포트 시 커널 스왑; 실패 시 시끄럽게 중단, 무설정 시 기존 fla)
+- 벤치 도구: `tools/bench_flashqla.py` (3구성: fla-MHA / qla-MHA / qla-네이티브GQA)
+- ⚠️ **fla 0.4.2 자체 버그 발견**: 네이티브 GQA(Hk≠Hv) 호출은 NaN — mcore는 호출 전
+  repeat_interleave 확장으로 우회하고 있어 실경로는 안전. fla upstream 보고 예정
+- vLLM 롤아웃측(prefill 한정 이득)은 후순위 — vllm 코드 변경 필요, 별도 검토
+
 ## 레시피 (계획)
 
 | 파일 | 단계 | 상태 |
