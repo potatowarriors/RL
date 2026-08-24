@@ -12,6 +12,7 @@ Nemotron-3-Ultra 레시피(`ultra-v3` 브랜치의 `examples/configs/ultra/`)를
 | mcore forward 패리티 (vs Pai검증 HF 참조) | ✅ | 영/한/887토큰 3종, argmax·top5 일치, cos ≥ 0.99988 |
 | vLLM `AlphaForCausalLM` (`vllm_alpha_plugin/`) | ✅ | 등록 체인 + refit_verifier 통과 (logprob mean diff 0.020) |
 | GRPO E2E (Generation KL < 0.002) | ⬜ | 8-GPU 노드 첫 구동 시 확인 |
+| vLLM **단독 서빙** (디스크 직접 로드) | ✅ (08-24) | `load_format=auto`로 hfmodel 로드 + greedy 생성 — 첫 토큰이 HF 참조와 일치(" Paris"/" 도쿄") |
 
 ## 디렉토리
 
