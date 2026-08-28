@@ -108,6 +108,8 @@ class AsyncTrajectoryCollector:
 
         self._refit_pause_cleared = _threading.Event()
         self._refit_pause_cleared.set()  # Start in cleared state
+        self._generation_pause_requested_for_refit: bool = False
+        self._generation_paused_for_refit: bool = False
 
         self.current_weight_version: int = start_step
         self.initial_weight_version: int = start_step
@@ -533,9 +535,10 @@ class AsyncTrajectoryCollector:
     def prepare_for_refit(self) -> None:
         """Pause new generation starts and optionally wait for pending generations.
 
-        For backends with an async engine in-flight weight updates allows ongoing generations
-        to continue with their current KV caches while weights are updated.
-        This significantly improves async performance.
+        Every async backend configured for in-flight weight updates, except managed
+        Dynamo, is asked to pause generation. vLLM preserves in-flight request state
+        with its native keep-mode pause. Backends without pause support warn and
+        retain their existing behavior. Managed Dynamo drains active trajectories.
 
         For non-async engines, waits for all pending generations to complete before refit.
         """
@@ -544,6 +547,8 @@ class AsyncTrajectoryCollector:
 
         # Pause new generation starts
         self._refit_pause_cleared.clear()
+        self._generation_pause_requested_for_refit = False
+        self._generation_paused_for_refit = False
         print("⏸️ New generation starts paused")
 
         # Check if we're using async engine
@@ -569,15 +574,22 @@ class AsyncTrajectoryCollector:
         in_flight_weight_updates = async_grpo_config.in_flight_weight_updates
 
         if is_async_engine and in_flight_weight_updates:
-            # async engines support in-flight weight updates
-            # Ongoing generations will continue with their current KV caches
-            # New generations (after weight update) will use the updated weights
-            print(
-                f"🚀 Using {backend} in-flight weight update - skipping wait for pending generations"
+            clear_cache = async_grpo_config.recompute_kv_cache_after_weight_updates
+            self._generation_pause_requested_for_refit = True
+            print(f"⏸️ Requesting {backend} generation pause before refit")
+            self._generation_paused_for_refit = (
+                self.policy_generation.pause_generation_for_refit(
+                    clear_cache=clear_cache
+                )
             )
-            print(
-                f"   {len(self._inflight_threads)} ongoing generations will complete with current weights"
-            )
+            if self._generation_paused_for_refit:
+                print(
+                    f"   {len(self._inflight_threads)} ongoing generation batches paused"
+                )
+            else:
+                print(
+                    f"   {len(self._inflight_threads)} ongoing generations will complete with current weights"
+                )
         else:
             # For non-async engines, wait for all pending generations to complete
             print(
@@ -591,6 +603,21 @@ class AsyncTrajectoryCollector:
     def resume_after_refit(self) -> None:
         """Resume new generation starts after refit is complete."""
         print("🔄 Resuming generation starts after refit")
+
+        if self._generation_pause_requested_for_refit:
+            backend = self.master_config.policy["generation"]["backend"]
+            print(f"▶️ Requesting {backend} generation resume after refit")
+            resumed = self.policy_generation.resume_generation_after_refit()
+            if self._generation_paused_for_refit and not resumed:
+                raise RuntimeError(
+                    f"Failed to resume {backend} generation after successful pause"
+                )
+
+        if self._generation_paused_for_refit:
+            self._generation_pause_requested_for_refit = False
+            self._generation_paused_for_refit = False
+            self._refit_pause_cleared.set()
+            return
 
         # Invalidate&recompute vLLM caches after the weight updates (in-flight or not) if
         # recompute_kv_cache_after_weight_updates is True (AREAL-style implementation).
@@ -613,6 +640,8 @@ class AsyncTrajectoryCollector:
             except Exception as e:
                 print(f"⚠️ Failed to invalidate generation backend KV caches: {e}")
 
+        self._generation_pause_requested_for_refit = False
+        self._generation_paused_for_refit = False
         self._refit_pause_cleared.set()
 
     def wait_for_pending_generations(self) -> None:
