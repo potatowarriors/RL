@@ -27,7 +27,7 @@ import torch
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PreTrainedTokenizerBase
 
-from nemo_rl.algorithms.grpo import MasterConfig
+from nemo_rl.algorithms.grpo import MasterConfig, _get_effort_config
 from nemo_rl.algorithms.opd import resolve_reference_aliases, teacher_seq_pad_multiple
 from nemo_rl.data.interfaces import DatumSpec
 from nemo_rl.distributed.batched_data_dict import BatchedDataDict
@@ -829,6 +829,11 @@ class AsyncTrajectoryCollector:
                 ),
                 max_rollout_turns=None,
                 greedy=False,
+                effort_config=(
+                    _get_effort_config(self.master_config)
+                    if isinstance(self.master_config, MasterConfig)
+                    else None
+                ),
                 reward_penalty_config=self.master_config.reward_penalties,
                 thinking_tags=get_nemo_gym_thinking_tags(self.master_config.env),
                 mask_env_flagged_samples=should_mask_flagged_samples(
