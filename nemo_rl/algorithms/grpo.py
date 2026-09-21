@@ -58,6 +58,7 @@ from nemo_rl.algorithms.reward_functions import (
 )
 from nemo_rl.algorithms.utils import (
     calculate_baseline_and_std_per_prompt,
+    calculate_trivial_reward_distributions,
     get_gdpo_reward_component_keys,
     log_generation_metrics_to_wandb,
     print_efficiency_summary,
@@ -1607,6 +1608,7 @@ def dynamic_sampling(
     master_config: MasterConfig,
     timer: Timer,
     batch_cache: BatchedDataDict[DatumSpec] = None,
+    is_trivial_prompt_distribution: torch.Tensor | None = None,
 ) -> BatchedDataDict[DatumSpec]:
     """Implements the dynamic sampling algorithm to select prompts with non-zero standard deviation.
 
@@ -1627,6 +1629,10 @@ def dynamic_sampling(
         dynamic_sampling_num_gen_batches (int): Number of generation batches processed at the current step.
         master_config (MasterConfig): Configuration containing GRPO and policy settings.
         batch_cache (BatchedDataDict[DatumSpec], optional): Cache storing previously selected prompts with non-zero std.
+        is_trivial_prompt_distribution (torch.Tensor, optional): Exact-equality
+            mask for each sample's full prompt reward group. When provided,
+            trivial groups are filtered all-or-nothing even if floating-point
+            roundoff produces a positive std.
 
     Returns:
         tuple: A tuple containing:
@@ -1653,12 +1659,19 @@ def dynamic_sampling(
     # If sampled prompts (with non-zero std) are fewer than num_prompts_per_step * num_generations_per_prompt, continue sampling until dynamic_sampling_max_gen_batches is reached.
     if master_config.grpo.use_dynamic_sampling:
         with timer.time("dynamic_sampling"):
-            # Get the prompt indices with non-zero std
-            non_zero_std_mask = std != 0.0
+            # Exact reward equality, rather than floating-point std noise, decides
+            # whether a prompt has useful reward variation.
+            if is_trivial_prompt_distribution is None:
+                raise ValueError(
+                    "dynamic_sampling: is_trivial_prompt_distribution is None -- "
+                    "the caller must compute it before this call when "
+                    "use_dynamic_sampling is set."
+                )
+            non_trivial_reward_mask = ~is_trivial_prompt_distribution
 
             keep_prompt_indices = torch.arange(
-                len(non_zero_std_mask), device=std.device
-            )[non_zero_std_mask].tolist()
+                len(non_trivial_reward_mask), device=std.device
+            )[non_trivial_reward_mask].tolist()
 
             # Only select the inputs that have non-zero std
             # total_reward is already a part of repeated_batch so we don't need to add it again
@@ -3047,11 +3060,24 @@ def grpo_train(
                         and "unshaped_total_reward" in repeated_batch
                         else None
                     )
+                    is_trivial_prompt_distribution = (
+                        calculate_trivial_reward_distributions(
+                            input_ids,
+                            std_rewards if std_rewards is not None else rewards,
+                            torch.ones_like(rewards),
+                        )
+                        if master_config.grpo.use_dynamic_sampling
+                        else None
+                    )
                     if master_config.grpo.calculate_advantages_on_gpu:
                         print("Computing advantages on GPU!")
                         # Just fix the device id for now
                         device_id = 0
-                        baseline, std = calculate_baseline_and_std_per_prompt(
+                        (
+                            baseline,
+                            std,
+                            _,
+                        ) = calculate_baseline_and_std_per_prompt(
                             input_ids.cuda(device_id),
                             rewards.cuda(device_id),
                             torch.ones_like(rewards).cuda(device_id),
@@ -3065,7 +3091,11 @@ def grpo_train(
                         baseline = baseline.cpu()
                         std = std.cpu()
                     else:
-                        baseline, std = calculate_baseline_and_std_per_prompt(
+                        (
+                            baseline,
+                            std,
+                            _,
+                        ) = calculate_baseline_and_std_per_prompt(
                             input_ids,
                             rewards,
                             torch.ones_like(rewards),
@@ -3083,6 +3113,9 @@ def grpo_train(
                             master_config,
                             timer,
                             batch_cache,
+                            is_trivial_prompt_distribution=(
+                                is_trivial_prompt_distribution
+                            ),
                         )
                     )
                     if ds_metrics:
