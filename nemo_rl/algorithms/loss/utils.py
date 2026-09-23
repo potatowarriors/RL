@@ -20,7 +20,11 @@ from nemo_rl.algorithms.logits_sampling_utils import (
     TrainingSamplingParams,
     need_top_k_or_top_p_filtering,
 )
-from nemo_rl.algorithms.loss.interfaces import LossFunction, LossInputType
+from nemo_rl.algorithms.loss.interfaces import (
+    LossFunction,
+    LossInputType,
+    MetricNormalizer,
+)
 from nemo_rl.algorithms.utils import mask_out_neg_inf_logprobs
 from nemo_rl.algorithms.x_token.loss_utils import (
     prepare_xtoken_cross_tokenizer_loss_input,
@@ -32,6 +36,30 @@ from nemo_rl.distributed.model_utils import (
     get_distillation_topk_logprobs_from_logits,
     get_next_token_logprobs_from_logits,
 )
+
+
+def rescale_loss_metrics(
+    metrics: dict[str, Any],
+    normalizers: dict[str, MetricNormalizer],
+    *,
+    token_factor: float,
+    sequence_factor: float,
+) -> dict[str, Any]:
+    """Change global loss denominators while preserving raw counts and extrema.
+
+    Metrics absent from ``normalizers`` are returned unchanged. Unlike
+    split-API normalization of raw sums, this only adjusts denominators
+    explicitly advertised by the loss.
+    """
+    factors = {
+        MetricNormalizer.TOKENS: token_factor,
+        MetricNormalizer.SEQUENCES: sequence_factor,
+        MetricNormalizer.NONE: 1.0,
+    }
+    return {
+        key: value * factors[normalizers[key]] if key in normalizers else value
+        for key, value in metrics.items()
+    }
 
 
 def prepare_loss_input(
