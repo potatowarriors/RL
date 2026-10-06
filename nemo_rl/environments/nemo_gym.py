@@ -74,6 +74,44 @@ def _has_nan_generation_logprobs(result: dict) -> bool:
     )
 
 
+def _require_resolved_agent_refs(nemo_gym_examples: list[dict]) -> None:
+    """Fail readably when Gym did not stamp an agent_ref onto every row.
+
+    Backport of upstream r0.8.0 (#3592). Gym >= 0.6 ``run_examples`` resolves
+    ``task_source`` to ``agent_ref`` in place before it returns; datasets collated with
+    such a Gym carry only ``task_source``. If the Gym in this actor's venv is older than
+    the one that prepared the data, rows arrive unroutable and would otherwise surface as
+    a bare ``KeyError: 'agent_ref'`` deep inside a Ray TaskError.
+    """
+    unresolved = [
+        index
+        for index, row in enumerate(nemo_gym_examples)
+        if not (row.get("agent_ref") or {}).get("name")
+    ]
+    if not unresolved:
+        return
+    task_sources = sorted(
+        {
+            source
+            for index in unresolved
+            if (source := nemo_gym_examples[index].get("task_source")) is not None
+        }
+    )
+    raise RuntimeError(
+        f"{len(unresolved)} of {len(nemo_gym_examples)} rollout rows have no agent_ref "
+        "after run_examples(), so Gym cannot route them and neither can this actor. "
+        + (
+            f"They carry task_source {task_sources}, which a current Gym resolves and an "
+            "older one ignores -- the Gym in this actor's venv is most likely older than "
+            "the checkout that prepared the data. Rebuild the actor venvs "
+            "(NRL_FORCE_REBUILD_VENVS=true) so both come from the same Gym."
+            if task_sources
+            else "They carry no task_source either, so nothing can route them: the "
+            "dataset was prepared without routing information."
+        )
+    )
+
+
 def get_nemo_gym_uv_cache_dir() -> str | None:
     """Return the uv cache directory inside a container, or None outside one.
 
@@ -485,7 +523,6 @@ Depending on your data shape, you may want to change these values."""
         maybe_patch_fastokens(bool(self.cfg.get("use_fastokens")))
 
         timer = Timer()
-        counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
         # For multimodal runs, replace local filesystem image paths in the
         # examples with base64 data URLs before shipping to vLLM. No-op when
@@ -496,6 +533,10 @@ Depending on your data shape, you may want to change these values."""
         nemo_gym_result_iterator = self.rch.run_examples(
             examples=nemo_gym_examples, head_server_config=self.head_server_config
         )
+        # Gym (>= 0.6) resolves task_source to agent_ref synchronously in run_examples().
+        # Build the counter afterward so completion rows use the resolved identity.
+        _require_resolved_agent_refs(nemo_gym_examples)
+        counts_left = Counter(row["agent_ref"]["name"] for row in nemo_gym_examples)
 
         num_results = 0
         for task in nemo_gym_result_iterator:
