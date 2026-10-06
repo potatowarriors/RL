@@ -1,0 +1,43 @@
+# grpo_alpha_smoke_muon.yaml — grpo_alpha_smoke.yaml + Muon (사용자 결정 2026-10-06: RL 옵티마이저도 Muon).
+#
+# SFT(Pai `dist_muon`, configs/training/sft_128k_agentic.yaml)와 같은 Muon 동역학을 맞춘다. 근거: Muon 실사 보고(2026-10-06).
+#  - NeMo-RL 은 optimizer dict 를 그대로 mcore OptimizerConfig 로 넘긴다(nemo_rl/models/megatron/setup.py). 이름 allow-list 없음.
+#  - `dist_muon` = Muon + LayerWise(legacy ping-pong) 경로 = Pai SFT 와 같은 구조. 아래 "필수" 4개를 끄지 않으면 셋업이 실패한다.
+#  - gated attention linear_qkv 의 [Q|Gate|K|V] 4-way split 은 upstream mcore 가 자동(attention_output_gate) — Pai 기능 #3 포팅 불필요.
+#  - 함정: 필드명·기본값이 SFT 와 다르다 → muon_nesterov(기본 False), muon_extra_scale_factor(기본 1.0 = SFT 의 5배) 를 명시한다.
+# lr·wd·clip·router bias rate 는 본 RL 레시피에서 사용자 결정. 여기 값은 KL 게이트용(갱신 전 step 1 은 옵티마이저 무관).
+defaults: grpo_alpha_smoke.yaml
+
+policy:
+  megatron_cfg:
+    optimizer:
+      optimizer: "dist_muon"
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+      weight_decay: 0.1                  # SFT 동일
+      bf16: true
+      fp16: false
+      adam_beta1: 0.9
+      adam_beta2: 0.95                   # SFT 동일(기본 0.999) — embed·output·norm·GDN 스칼라에 적용
+      adam_eps: 1.0e-8
+      muon_momentum: 0.95
+      muon_nesterov: true                # SFT muon-use-nesterov
+      muon_num_ns_steps: 5
+      muon_scale_mode: "spectral"
+      muon_coefficient_type: "quintic"
+      muon_fp32_matmul_prec: "medium"
+      muon_tp_mode: "blockwise"
+      muon_extra_scale_factor: 0.2       # SFT 동일. 빠뜨리면 1.0 → 업데이트 5배
+      muon_split_qkv: true
+      muon_scalar_optimizer: "adam"
+      apply_wd_to_qk_layernorm: true     # SFT 동일
+      use_distributed_optimizer: false   # 필수
+      use_precision_aware_optimizer: false  # 필수 (adam 전용)
+      optimizer_cpu_offload: false       # 필수 (LayerWise 비호환)
+      optimizer_offload_fraction: 0.0
+    scheduler:
+      lr_warmup_iters: 0
+      lr_warmup_init: 1.0e-6
+    distributed_data_parallel_config:
+      overlap_param_gather: false        # 필수: 비-dist DDP 에 pre-hook 이 없어 all-gather 누락
+      grad_reduce_in_fp32: true          # SFT 동일(Pai 는 bf16 이면 fp32 강제)

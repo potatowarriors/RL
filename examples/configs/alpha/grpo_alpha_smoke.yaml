@@ -1,0 +1,66 @@
+# grpo_alpha_smoke.yaml — alpha 1 노드 8-GPU GRPO 드라이런 + Generation KL 게이트 (README "레시피" 표 1행)
+#
+# 게이트: step 1·2·3 의 `Generation KL Error` < 0.002 (rollout vLLM vs 학습 mcore 의 토큰 logprob 정합).
+# step 1 은 갱신 전 가중치라 옵티마이저와 무관하고, step 2·3 은 갱신 후 refit 경로까지 본다.
+#
+# 실행 (Pai 컨테이너 공존 환경, NEMO_RL_SETUP.md §4.6):
+#   cd NeMo-RL && $NRL_ROOT/clean_run.sh $NRL_ROOT/bin/uv run --locked python examples/run_grpo.py \
+#     --config examples/configs/alpha/grpo_alpha_smoke.yaml policy.model_name=<hfmodel_00NNNNN> logger.log_dir=<dir> </dev/null
+#   CUDA_VISIBLE_DEVICES 로 GPU 를 제한하지 말 것(#19).
+#
+# alpha 제약: TP=1(GDN), EP=8(192 experts → 24/GPU), sequence packing 끔(GDN, Qwen3.5 레시피와 동일).
+# alpha RL 기본값(모든 alpha GRPO 레시피가 상속): vLLM GDN 재귀 상태 fp32 + R3. 둘 다 없으면 KL 게이트 FAIL(0.0042),
+# R3 만 0.0026, 둘 다 0.0015 (agentic iter2400, 2026-10-06).
+defaults: ../grpo_math_1B.yaml
+
+grpo:
+  num_prompts_per_step: 16
+  num_generations_per_prompt: 8
+  max_num_steps: 3
+  val_period: -1
+
+checkpointing:
+  enabled: false
+
+policy:
+  model_name: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_agentic_resume_20261001_011900/hfmodel_0002400
+  train_global_batch_size: 128
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  max_total_sequence_length: 4096
+  dtensor_cfg:
+    enabled: false
+  sequence_packing:
+    enabled: false
+  megatron_cfg:
+    enabled: true
+    tensor_model_parallel_size: 1
+    expert_model_parallel_size: 8
+    pipeline_model_parallel_size: 1
+    context_parallel_size: 1
+    sequence_parallel: false
+    apply_rope_fusion: false
+    activation_checkpointing: true
+    defer_fp32_logits: true
+  # R3(Router Replay): vLLM 이 롤아웃에서 고른 expert 를 mcore logprob·학습 forward 가 재사용.
+  # alpha(192 experts·top-8·sigmoid group)는 hidden state 의 bf16 차로 top-k 경계 expert 가 갈린다 → |Δlogprob|>0.5 토큰 4~6배 감소(2026-10-06 KL 대조).
+  router_replay:
+    enabled: true
+  generation:
+    vllm_cfg:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.5
+      enforce_eager: true
+    vllm_kwargs:
+      # 필수: GDN 재귀 상태를 fp32 로. vLLM 기본 "auto" 는 모델 dtype(bf16) 이라 디코드 토큰마다 반올림이 누적돼
+      # rollout-vs-train KL 이 생성 위치에 따라 단조 증가한다(0~256 0.00135 → 3k~4k 0.0032). fp32 에서 평탄(0.0013~0.0015).
+      # 정본: Pai-Megatron-Patch examples/alpha/docs/KNOWN_ISSUES.md 2026-10-06 항목.
+      mamba_ssm_cache_dtype: float32
+
+logger:
+  wandb_enabled: false
+  tensorboard_enabled: true
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 1

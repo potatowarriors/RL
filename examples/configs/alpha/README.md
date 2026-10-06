@@ -52,11 +52,12 @@ fla naive 참조·확장 MHA 경로·15B 실모델 forward 패리티 3중으로 
   repeat_interleave 확장으로 우회하고 있어 실경로는 안전. fla upstream 보고 예정
 - vLLM 롤아웃측(prefill 한정 이득)은 후순위 — vllm 코드 변경 필요, 별도 검토
 
-## 레시피 (계획)
+## 레시피
 
 | 파일 | 단계 | 상태 |
 |---|---|---|
-| `grpo_alpha_smoke.yaml` | 8-GPU 노드 GRPO 드라이런 + KL 게이트 | TODO (다음 단계) |
+| `grpo_alpha_smoke.yaml` | 8-GPU 노드 GRPO 드라이런 + KL 게이트. **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`). 이후 alpha 레시피는 이 파일을 상속 | 완료 2026-10-06 — Adam KL 0.0015/0.0013/0.0014 PASS (두 기본값 없이 0.0042 FAIL). 진단 `tools/analyze_rollout_logprob_gap.py` |
+| `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 2026-10-06 게이트 실행 |
 | `student_rlvr1.yaml`, `student_rlvr2.yaml` | RLVR (GRPO, SFT 체크포인트에서 시작) | TODO |
 | `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | TODO |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | TODO |
