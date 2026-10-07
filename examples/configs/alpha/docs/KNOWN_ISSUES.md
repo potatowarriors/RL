@@ -5,6 +5,20 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## vLLM 엔진이 `max_num_batched_tokens (16384) is smaller than max_model_len` 으로 기동하지 못한다 — chunked prefill 을 끈 레시피 (2026-10-07 ✅ 레시피 수정)
+
+**발견 경위**: G3 를 32K 로 올리자 vLLM async 워커가 `SchedulerConfig` 검증에서 죽었다.
+**원인**: `student_rlvr1_alpha.yaml` 은 R3 route 누락을 피하려고 chunked prefill 을 끈다(D2, upstream R3 레시피와 같음). chunked prefill 이 꺼지면
+vLLM 은 프롬프트 하나를 한 스텝에 넣어야 하므로 `max_num_batched_tokens >= max_model_len` 을 요구한다. 레시피 값 16384 는 128K 본 런에서도 실패한다.
+**대응**: `vllm_kwargs.max_num_batched_tokens: ${policy.max_total_sequence_length}`. `check_alpha_recipe.py` 가 이 조합을 ERROR 로 막는다.
+
+## NeMo-RL 은 첫 턴 프롬프트가 `max_model_len` 을 넘는 Gym 행을 건너뛰지 않고 런을 멈춘다 (2026-10-07, 데이터 게이트)
+
+**발견 경위**: G3 를 8K 로 돌렸더니 프롬프트가 8K 를 넘는 행(스모크 144행 중 15행)에서 vLLM 이 400 을 돌려줬다. NeMo-RL 은
+`ValueError: NeMo Gym returned a result with no generation data ... the prompt for the first turn already exceeds the vLLM max_model_len` 로 런 전체를 멈췄다 (`nemo_rl/environments/nemo_gym.py:826`).
+**함의**: 블렌드의 렌더 프롬프트 길이를 런 전에 잰다. `rlvr1_alpha_judgefree.jsonl` 은 최대 22,503 토큰(중앙값 3,081, p99 13,096, 32K 초과 0행)이라 128K 첫 런에는 해당하지 않는다.
+멀티턴 환경은 턴이 쌓이며 넘을 수 있으므로 환경을 추가할 때 다시 본다.
+
 ## colocated refit 이 `pidfd_getfd: Operation not permitted` 로 실패한다 — `expandable_segments` 메모리의 CUDA IPC 를 컨테이너가 막는다 (2026-10-07 ✅ colocated 에서는 ES 끔)
 
 **발견 경위**: G3(Gym 1노드 colocated 스모크)가 첫 refit 에서 죽었다. vLLM async 워커(EngineCore)가 학습 워커의 CUDA IPC 핸들을 열다가

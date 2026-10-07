@@ -59,6 +59,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | vLLM 기동 실패 `max_num_batched_tokens ... smaller than max_model_len` · 첫 턴 프롬프트 > max_model_len 이면 런 중단 | chunked prefill 끔이면 batched tokens = 최대 길이 · 블렌드 프롬프트 길이 사전 측정(첫 런 최대 22.5K) |
 | 10-07 | colocated refit `pidfd_getfd: Operation not permitted` (G3) | ES 메모리의 CUDA IPC 를 컨테이너(ptrace_scope 1·CAP_SYS_PTRACE 없음)가 막음 → colocated 런은 ES 끔, 128K 는 2노드 분리(NCCL refit) |
 | 10-07 | R4 결과 JSON 의 loss 가 전부 NaN · 128K 처리량 "15K tok/s" | 하네스가 `loss` 키를 읽음(반환은 `global_loss`) · 워밍업 스텝을 잼 → 수정, 정상 상태 33.4K tok/s (R5) |
 | 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK, 기본값은 결정 대기 |
