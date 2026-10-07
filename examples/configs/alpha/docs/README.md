@@ -10,15 +10,15 @@
 | 문서 | 한 줄 |
 |---|---|
 | [STATUS.md](STATUS.md) | RL 트랙 상태 · 다음 할 일 · 열린 결정 · 선행 의존(Pai). 세션 종료 시 갱신·커밋 |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | 사고·수정 기록 — GDN 상태 bf16(KL 게이트), zero-centered RMSNorm, 환경 구축 원장 #1~#21 |
-| [GATES.md](GATES.md) | 검증 게이트 정본 — 재실행 조건 · M1~M4 모델 정합성 · R1~R2 RL 실행 · K1·D1 · E1~E4 환경 |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | 사고·수정 기록 — 장문맥 OOM(단편화), Gym 멀티턴 턴 경계, Gym 렌더 차이(`strict` 등), 엔진 동등성 판정법, GDN 상태 bf16(KL 게이트), zero-centered RMSNorm, 환경·운영 원장 #1~#27 |
+| [GATES.md](GATES.md) | 검증 게이트 정본 — 재실행 조건 · M1~M5 모델 정합성(M5 = SFT↔RL 엔진 동등성) · R1~R4 RL 실행(R3 렌더 패리티, R4 학습 메모리) · K1·D1 · E1~E4 환경 |
 
 ## 가이드·설계 (현행)
 
 | 문서 | 한 줄 |
 |---|---|
-| [SETUP.md](SETUP.md) | 환경 구축·운영 — Pai 컨테이너 공존 설치(기본), 환경 구조, 실행, RL 전용 세션 설치(구), 재생성 복원 |
-| [RL_PLAN.md](RL_PLAN.md) | 단계(PivotRL → RLVR → 교사 RL → MOPD) · 설계 결정 10건 · 2노드 분리 토폴로지 · alpha 규모 적용 설계 · 평가 |
+| [SETUP.md](SETUP.md) | 환경 구축·운영 — Pai 컨테이너 공존 설치(기본), 셋업 재구성 제안(§1.1, 승인 대기), 환경 구조, 실행, RL 전용 세션 설치(구), 재생성 복원 |
+| [RL_PLAN.md](RL_PLAN.md) | 단계(PivotRL → RLVR → 교사 RL → MOPD) · 설계 결정 13건 · SFT→RL 승계 범위 · 2노드 분리 토폴로지 · alpha 규모 적용 설계 · 평가 |
 | [RL_DATA.md](RL_DATA.md) | RL 데이터 원천 26종·Ultra 블렌드 · 준비된 alpha 블렌드(identity 0.70%) · 주의 · 미결 |
 
 ## 포팅 명세 (2026-08-13 동결)

@@ -5,6 +5,76 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 장문맥 학습 스텝 OOM 은 총량이 아니라 단편화다 — PyTorch 캐시가 쥔 빈 블록 때문에 Triton 할당이 실패한다 (2026-10-07, ES 로 128K/CP8 통과 · 기본값 채택은 결정 대기)
+
+**발견 경위**: R4 메모리 실측(sub1, Muon 레시피, 학습 전용 노드 가정)에서 rank 당 16K 토큰 조건이 길이·CP 와 무관하게 전부 OOM 이었다(32K/CP2 · 64K/CP4 · 128K/CP8).
+rank 당 12K 토큰(96K/CP8)까지는 통과했다. 수치표는 [`GATES.md`](GATES.md) R4.
+
+**진단**:
+- 예외가 `RuntimeError: Triton Error [CUDA]: out of memory` 였다. PyTorch OOM 이 아니다. GDN 커널(fla Triton·FlashQLA TileLang)은 PyTorch 캐싱 할당자 밖에서 메모리를 잡는다.
+  PyTorch 자신의 할당은 OOM 직전에 캐시를 비우고 재시도하지만, 바깥 할당에는 그 기회가 없다.
+- 96K/CP8 에서 이미 reserved − alloc 이 13.6 GB 였다(67.6 − 54.0). 캐시가 쥔 빈 블록이 Triton 몫을 막는다.
+- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`(ES) 하나로 128K/CP8 이 통과했다. reserved − alloc 은 2.3 GB 로 줄었다.
+  `logprob_chunk_size` 를 2048 → 1024 로 줄이면 peak 가 3.8 GB 더 내려가지만 필수는 아니다.
+- 메모리 구성(`torch.cuda.memory._record_memory_history` 스냅샷, 16K/CP2 rank 0): 고정 바닥 27.0 GB 가 가중치·grad·Muon 상태다.
+  나머지 대부분은 RL loss 의 `ChunkedDistributedLogprob.backward`(`nemo_rl/distributed/model_utils.py:267`)가 차지한다.
+  `grad_input = zeros_like(logits)`(:347, T×V), 저장된 logits, chunk 별 fp32 softmax, int64 `one_hot`(:365) 이다. Muon 상태는 지배 항이 아니다.
+
+**함의**:
+- Muon optimizer-state offload(Pai 기능 #4) 포팅은 1노드 128K/CP8 에 필요 없다. 2026-10-06 추정(바닥 ≈45 GB, 오프로드 필요 가능성)을 실측 27 GB 가 대체한다.
+- ES 에는 대가가 있다. NeMo-RL 주석(`megatron_policy_worker.py:2742`)은 ES 가 weight transfer 를 약 5배 느리게 한다고 적는다. upstream Megatron 레시피 다수는 `expandable_segments:False` 를 명시한다.
+  alpha 구성에서의 refit 비용은 미측정이다. RL 기본값 채택은 결정 대기다 (`STATUS.md`).
+
+**같이 드러난 NeMo-RL 제약** (전부 `nemo_rl/models/megatron/setup.py`):
+1. CP>1 은 sequence packing 이 필수다 (:839-840 assert). alpha 레시피 불변량 "packing 끔"(GDN)과 충돌한다.
+   장문맥 RL 은 packing 을 켜야 하고, packing+CP 경로의 GDN 수치(R1 KL·M5)는 미검증이다.
+2. CP>1 은 `use_fused_linear_logprobs` 와 함께 쓸 수 없다 (:843-844). 대신 `logprob_chunk_size` + `sequence_packing.fuse_loss` 를 쓴다 (Ultra 레시피 값).
+3. `logprob_chunk_size` 는 `defer_fp32_logits: true` 를 요구한다 (:1130).
+
+**교훈**: ① PyTorch 밖에서 할당하는 커널이 있는 모델은 `max_memory_allocated` 가 여유로워도 OOM 이 난다. reserved 와 alloc 의 차이를 같이 본다.
+② 메모리 추정은 실측으로 대체한다. 오프로드가 필요하다는 추정은 틀렸다.
+
+## NeMo Gym 멀티턴이 2번째 모델 호출부터 전부 실패한다 — 턴 경계를 EOS(id 0)로 찾았다 (2026-10-07 ✅ `turn_end_token_id`)
+
+**발견 경위**: R3 렌더 게이트의 Gym 경로 P4 가 0/40 이었다. 이전 턴 토큰을 이어 붙이는 2번째 호출부터 전부
+`AssertionError: EOS token #0 not found in template_token_ids` 로 실패했다.
+R1 KL 게이트는 단일 턴 네이티브 경로라 이 경로를 지나지 않는다.
+
+**원인**: NeMo-RL `replace_prefix_tokens`(`nemo_rl/models/generation/openai_server_utils.py`)는 다음 턴 요청의 템플릿 토큰에서 이전 턴 끝을 `tokenizer.eos_token_id` 로 찾는다.
+그 자리에 모델이 실제로 낸 토큰을 이어 붙인다. alpha 의 `eos_token` 은 `<|endoftext|>`(0, 사전학습 문서 경계)이고 chat 턴 끝은 `<|im_end|>`(3)다.
+템플릿 렌더에는 0 이 없으므로 경계를 찾지 못한다. 롤아웃 정지 토큰 {0, 3} 은 맞았다 — 정지와 경계는 다른 문제다.
+
+**수정 (본체, rebase 충돌 후보)**: `replace_prefix_tokens(..., turn_end_token_id=None)` 인자를 추가했다. `None` 이면 기존 동작이다.
+vLLM 워커가 `policy.generation.vllm_cfg.turn_end_token_id` 를 넘긴다 (`vllm_worker_async.py`, 설정 키 `vllm/config.py`).
+alpha 기본값은 `grpo_alpha_smoke.yaml` 의 `turn_end_token_id: 3` 이다. 단위 테스트 2건을 추가했고 `test_openai_server_utils.py` 7/7 pass 다.
+R3 P5(실제 패치 호출)에서 경계 문제는 사라졌고, 남은 차이는 도구 정의뿐이다.
+
+**교훈**: EOS 와 턴 끝이 다른 토크나이저에서는 NeMo-RL 의 "EOS = 턴 끝" 가정을 의심한다. 정지 토큰 확인만으로는 멀티턴 경계를 보장하지 못한다.
+
+## Gym → vLLM 렌더 경로가 SFT 형식과 3군데 다르다 — `strict` 제거 · `description` None · 비도구 이력 reasoning 복원 (2026-10-07, `strict` 유지 결정 · 구현 대기)
+
+R3 렌더 게이트가 찾았다. 턴 경계(위 항목)를 고친 뒤 남는 차이들이다.
+
+| # | 차이 | 영향 | 처리 |
+|---|---|---|---|
+| 1 | Gym `VLLMModel._strip_hosted_only_tool_fields`(`responses_api_models/vllm_model/app.py:471`)가 도구 정의의 `strict` 를 무조건 지운다 | SFT Agentic-v2 interactive 셋은 `<strict>True</strict>` 를 렌더한 형식으로 학습했다. RL 블렌드 도구 행 13,190/13,190 이 `strict: true` 다. 다른 SFT 도구 셋(kotool 등)에는 strict 가 없다 | **사용자 결정 2026-10-07: 유지.** 미구현. 방법: Gym 0.6.0 플러그인 루트(`NEMO_GYM_EXTRA_ROOTS`)에 `VLLMModel` 서브클래스 서버를 두고 `strict` 가 bool 이면 남기고 null 이면 지운다 — Gym fork 불필요. 선례는 Gym 의 `responses_api_models/vllm_model_with_compaction`. 구현 뒤 R3 P6 을 실경로로 재실행 |
+| 2 | description 없는 도구를 vLLM 이 `<description>None</description>` 으로 렌더한다 (`FunctionDefinition.model_dump()` 가 None 을 남김) | RL 블렌드 0건 | 데이터 게이트: RL 환경 데이터에 description 필수 검사 |
+| 3 | 도구 없는 멀티턴 롤아웃(c3b)에서 이전 턴 reasoning 이 이력에 복원된다. SFT 는 비도구 이력의 reasoning 을 strip 해 학습했다 | 현 블렌드의 해당 환경 영향 없음 | 구조적. 멀티턴 비도구 환경을 추가할 때 R3 재실행 |
+
+**설정 권고**: alpha Gym 레시피는 `chat_template_kwargs: null` 로 둔다. Ultra 레시피의 `truncate_history_thinking: false` 를 복사하면 도구 없는 이력의 reasoning 까지 복원돼 SFT 규약과 어긋난다 (R3 의 `dataset/ultra` 케이스).
+
+## 엔진 동등성은 절대 임계가 아니라 노이즈 기준선으로 판정한다 — 하네스의 라우터 bf16 누락도 기준선이 잡았다 (2026-10-07 ✅ M5 PASS)
+
+**경위**: M5(SFT 엔진 Pai ↔ RL 엔진 NeMo-RL) 첫 하네스에서 Pai 측 라우터가 bf16 으로 계산됐다.
+Pai `tools/alpha_config.py emit-megatron-flags` 는 가중치 검증용이라 forward 설정(`--moe-router-dtype fp32`, router·permute fusion, dropout 0)을 내보내지 않는다.
+SFT 구성(Pai `configs/model/baseline_48L.yaml`)대로 플래그를 더해 다시 쟀다. 잘못된 런은 버리지 않고 섭동 기준선으로 썼다 (`$NRL_ROOT/gates/engine_parity_iter2400/pai_router_bf16_harness_bug/`).
+
+**판정 원리**: MoE·bf16 에서는 같은 엔진끼리도 gradient cos 중앙값이 0.98 근처에서 포화한다. 토큰이 적게 몰린 expert 는 라우팅 하나만 뒤집혀도 gradient 가 크게 바뀐다.
+0.999 같은 절대 임계를 쓰면 같은 엔진끼리도 FAIL 이다. 그래서 HF(제3 구현)와 섭동 런을 기준선으로 두고, Pai↔NeMo-RL 거리가 그 안에 있는지 본다. 수치는 [`GATES.md`](GATES.md) M5.
+
+**교훈**: ① 동등성 게이트에는 같은 측정을 구현만 바꾼 기준선을 둔다. ② 가중치 검증용 설정 도구를 forward·학습 하네스에 그대로 쓰지 않는다.
+③ GDN `A_log` 는 SFT 에서도 bf16 으로 계산했으므로 RL 과 차이가 없다 (확인 완료).
+
 ## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32)
 
 원장 #21. 벤치 fleet·채팅·SDG 교사 서빙(전부 bf16 상태)의 처리 결정은 Pai 쪽 미결이다 — Pai `KNOWN_ISSUES.md` 10-06 항목과 Pai `STATUS.md` "열린 사용자 결정".
@@ -40,7 +110,7 @@ AlphaBridge 와 vLLM 플러그인 포팅에서 각각 한 번씩 조우했다. �
 융합 QK-norm 커널은 zero-centered +1.0 이 하드코딩돼 있어 비활성화했다.
 **대응**: 체크포인트·브리지·플러그인을 바꾸면 라운드트립과 forward 패리티 게이트를 **함께** 돌린다 (`GATES.md` 1·2).
 
-## 환경 구축 원장 #1~#21 (2026-08-13 RL 전용 세션 · 2026-10-06 Pai 컨테이너 공존)
+## 환경 구축·운영 원장 #1~#27 (2026-08-13 RL 전용 세션 · 2026-10-06~07 Pai 컨테이너 공존)
 
 증상으로 검색한다. #1~#14 의 해법은 `project_s/setup_nemo_rl_env.sh`(RL 전용 세션용)에, #15~#20 은
 `project_s/setup_nemo_rl_env_noninvasive.sh`(Pai 컨테이너 공존, 현행 기본)에 인코딩돼 있다. 설치 절차는 [`SETUP.md`](SETUP.md).
@@ -67,7 +137,13 @@ AlphaBridge 와 vLLM 플러그인 포팅에서 각각 한 번씩 조우했다. �
 | 18 | 워커 `ImportError: ... experimental_attention_variant_module_specs (…/Pai-Megatron-Patch/backends/megatron/Megatron-LM-251125/…)` | Pai 의 `PYTHONPATH` 가 Ray 워커로 누출. 또 **bash 는 stdin 이 소켓이면 비대화형이어도 `~/.bashrc` 를 source** 하고, 그 10행이 `~/.pai_megatron_alpha_env` 를 무조건 로드 → `env -i` 후에도 자식 bash 에서 되살아남 | 화이트리스트 `env -i`(BACKENDAI_*·NVIDIA_*·LD_PRELOAD·NCCL_CUDA_PATH·HOME 등) + **`</dev/null`** + `unset PYTHONPATH`·`PYTHONNOUSERSITE=1`. 같이 새던 것: `TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=1`(logprob 정밀도), `OMP_NUM_THREADS=220`, py3.12 user site |
 | 19 | 워커 `CUDA error: invalid device ordinal` (`torch.cuda.set_device(local_rank)`) | NeMo-RL 은 `RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES=1` 로 워커에 전 GPU 를 보이고 `ray.get_gpu_ids()[0]`(물리 번호)로 set_device. 드라이버에 `CUDA_VISIBLE_DEVICES=7` 을 주면 Ray 는 7 을 주는데 워커엔 0 번만 보임 | **`CUDA_VISIBLE_DEVICES` 로 GPU 부분집합을 지정하지 않는다.** 장수 제한은 `cluster.gpus_per_node`·Ray 리소스로 |
 | 20 | `uv sync --extra vllm` 이 `deep-ep` 빌드 실패(`detected CUDA version 12.9 mismatches 13.0`) | vllm extra 도 deep-ep 소스 빌드를 포함 — 롤아웃 venv 에도 nvcc 13 필요 | `SETUP.md` §1 의 사설 CUDA 13 툴킷 |
-| 21 | alpha 8-GPU GRPO KL 게이트 FAIL(Generation KL 0.0042, 기준 0.002) — 오차가 생성 위치를 따라 커짐 | ① vLLM `mamba_ssm_cache_dtype` 기본 auto = GDN 재귀 상태 bf16 → 디코드마다 반올림 누적 ② MoE top-8 경계 라우팅 뒤집힘 | alpha 레시피 기본값 `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true` → 0.0015/0.0013/0.0014 PASS. 진단·대조표는 이 문서 맨 위 항목 |
+| 21 | alpha 8-GPU GRPO KL 게이트 FAIL(Generation KL 0.0042, 기준 0.002) — 오차가 생성 위치를 따라 커짐 | ① vLLM `mamba_ssm_cache_dtype` 기본 auto = GDN 재귀 상태 bf16 → 디코드마다 반올림 누적 ② MoE top-8 경계 라우팅 뒤집힘 | alpha 레시피 기본값 `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true` → 0.0015/0.0013/0.0014 PASS. 진단·대조표는 이 문서의 GDN 재귀 상태 항목 |
+| 22 | `verify_muon_optimizer.py` 초판이 OmegaConf `${mul:...}` 해석 실패 · 8 rank 가 전부 GPU 0 · rank 0 만 보고 PASS | 도구 결함 3건: resolver 미등록, `set_device` 누락, layer-wise optimizer 는 dense 파라미터를 rank 별로 나누는데 rank 0 만 검사함 | `register_omegaconf_resolvers()` · `torch.cuda.set_device(LOCAL_RANK)` · all-gather 로 전 rank 합집합 판정 (R2, 2026-10-06) |
+| 23 | `clean_run.sh` 아래에서 `MEM_SNAPSHOT_DIR`·`PYTORCH_CUDA_ALLOC_CONF` 같은 환경변수가 무시된다 | `clean_run.sh` 는 whitelist `env -i`(#18)라 호출 측 export 가 지워진다 | `clean_run.sh /usr/bin/env VAR=값 <cmd>` 로 whitelist 안쪽에서 주입한다 (2026-10-07) |
+| 24 | `pytest` 를 어느 venv 에서도 못 찾는다 | lock 의 런타임 venv 에 test 의존성이 없다 | `$NRL_ROOT/clean_run.sh $NRL_ROOT/bin/uv run --locked --with pytest python -m pytest <test> </dev/null` (2026-10-07) |
+| 25 | 2026-10-07 11:57 GPU 게이트를 벤치 fleet 이 쓰던 main1 GPU 위에 기동했다. 약 20 초 뒤 중단했고 fleet 은 재기동 없이 health 8/8 이었다 | 기동 전 점유 확인 누락. 정리 중 `pgrep -f` 가 자기 셸까지 매칭했다(exit 144) | GPU 런처는 기동 직전 점유를 검사해 한 장이라도 1 GiB 이상이면 중단한다 (`$NRL_ROOT/gates/*/run_*_sub1.sh` 패턴). 프로세스 정리는 PID 를 확인한 뒤 한다 |
+| 26 | 실행 중인 게이트가 `SyntaxError` 로 죽었다 | 그 잡이 import 하는 NeMo-RL 소스(`openai_server_utils.py`)를 실행 도중 편집했다. NFS 공유 워킹트리라 즉시 반영된다 | 실행 중인 잡이 import 하는 코드는 편집하지 않는다 (2026-10-07) |
+| 27 | 셋업 1차 실행 뒤 HOME 에 uv 캐시 24 GB 가 생겼다 (HOME 여유 43 → 20 GB) | 셋업 스크립트가 생성한 `clean_run.sh` 의 heredoc 인용 실수로 `NRL_ROOT` 가 빈 값이 됐고, 캐시가 기본 경로(HOME)로 갔다 | 생성 시점에 절대경로를 박는다. 스크립트 수정 후 처음부터 재실행해 검증했다(1151 s, rc=0). HOME 산출물은 삭제해 복구 (2026-10-06) |
 
 기타: `from vllm import LLM`은 lock의 openai 2.6.1과 vllm 0.25.1 tool_parsers 불일치로
 깨져 있으나 **NeMo-RL의 실제 vLLM 사용 경로는 무관** (GRPO 스모크로 확인). vLLM 단독

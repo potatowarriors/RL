@@ -14,7 +14,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 
 | 파일 | 단계 | 비고 |
 |---|---|---|
-| `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1 |
+| `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`) + 멀티턴 경계 `<\|im_end\|>`(`generation.vllm_cfg.turn_end_token_id: 3`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1·R3 |
 | `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 게이트 결과 R1·R2 |
 | `student_rlvr1.yaml`, `student_rlvr2.yaml` | RLVR (GRPO, SFT 체크포인트에서 시작) | 미작성 |
 | `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | 미작성 |
@@ -25,7 +25,9 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | 경로 | 내용 |
 |---|---|
 | `vllm_alpha_plugin/` | vLLM 플러그인 패키지 (커밋 `599b58ac3`, pyproject 의 vllm extra + uv source 로 연결). `vllm.general_plugins` 엔트리포인트로 stock 0.25.1 휠에 `AlphaForCausalLM` 등록. qwen3_next 서브클래스 + 표준 RMSNorm 전면 교체(융합 QK-norm 커널은 zero-centered +1.0 하드코딩이라 비활성화) + FusedMoE DSV3 인자(`apply_routed_scale_to_output=False` 의도적) |
-| `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·D1) |
+| `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3) |
+| `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
+| `tools/measure_train_memory.py` | 학습 스텝 메모리 실측 (R4) — Ray 없이 torchrun 으로 `MegatronPolicyWorkerImpl` 을 직접 만든다 |
 | `tools/gen_hf_reference_logits.py` | M2·M4 의 HF 참조 로짓 생성 (Pai 환경 전용) |
 | `tools/analyze_rollout_logprob_gap.py` | rollout-vs-train logprob 어긋남 분해 (CPU) — R1 진단 |
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |

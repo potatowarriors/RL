@@ -25,6 +25,10 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 
 - **`grpo_alpha_smoke.yaml` 을 상속한다** (`defaults:`). 여기에 alpha RL 기본값이 있다:
   `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true`. 둘을 끄면 R1 게이트 FAIL.
+  `policy.generation.vllm_cfg.turn_end_token_id: 3` 을 끄면 Gym 멀티턴이 2번째 호출부터 깨진다 (R3).
+- Gym 레시피는 `chat_template_kwargs: null`. Ultra 의 `truncate_history_thinking: false` 를 복사하지 않는다 (비도구 이력 reasoning 복원, R3).
+- CP>1 은 sequence packing 필수, `use_fused_linear_logprobs` 와 비호환이다 → `logprob_chunk_size` + `fuse_loss` (+ `defer_fp32_logits: true`).
+  packing+CP 경로의 GDN 수치는 미검증이다 — 장문맥 레시피 전에 R1 을 그 경로로 돌린다.
 - `policy.megatron_cfg.env_vars` 에 `CUDNN_HOME`(Megatron 워커 venv 의 pip cuDNN 경로) 필수.
 - 브리지·플러그인 수정 중에는 `megatron_cfg.force_reconvert_from_hf: true` (변환 캐시에 버전 검사 없음).
 - FlashQLA 는 opt-in: `policy.megatron_cfg.env_vars` 에 `ALPHA_GDN_BACKEND: "flashqla"`. 실패 시 시끄럽게 중단, 무설정이면 fla.
@@ -50,6 +54,12 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK, 기본값은 결정 대기 |
+| 10-07 | Gym 멀티턴 `AssertionError: EOS token #0 not found in template_token_ids` | 턴 경계를 EOS(0)로 찾음 → `vllm_cfg.turn_end_token_id: 3` (본체 패치) |
+| 10-07 | Gym 경로 렌더가 SFT 와 다름 (도구 정의) | Gym 이 `strict` 를 지움 → 유지 결정, Gym 플러그인 서버로 구현 대기 · `description` None 은 데이터 게이트 |
+| 10-07 | 엔진 동등성 gradient cos 0.98 에서 "불일치"로 보임 | MoE·bf16 포화 — 절대 임계 대신 HF·섭동 기준선과 비교 (M5). 하네스엔 SFT forward 플래그(router fp32 등)를 다 준다 |
+| 10-07 | `clean_run.sh` 아래서 환경변수가 안 먹음 (#23) | whitelist `env -i` → `clean_run.sh /usr/bin/env VAR=값 <cmd>` |
+| 10-07 | 바쁜 GPU 위에 게이트 기동 (#25) · 실행 중 import 코드 편집으로 잡 사망 (#26) | 런처에 기동 직전 GPU 점유 검사(1 GiB) · 실행 중인 잡이 import 하는 코드는 편집 금지 |
 | 10-06 | GRPO KL 게이트 FAIL 0.0042 — 오차가 생성 위치를 따라 커짐 (#21) | vLLM GDN 재귀 상태 bf16 누적 + MoE 경계 라우팅 뒤집힘 → 레시피 기본값 fp32 상태 + R3 → 0.0014 |
 | 10-06 | GRPO 로그로 Muon 적용이 안 보임 | mcore 가 Muon 경로 로그를 기본 숨김 → `verify_muon_optimizer.py` (R2) 로 옵티마이저 직접 검사 |
 | 10-06 | 워커 `invalid device ordinal` (#19) | Ray 가 물리 GPU 번호로 set_device → `CUDA_VISIBLE_DEVICES` 쓰지 않음 |

@@ -15,7 +15,7 @@ sudo·apt·`/usr/local/cuda`·ld.so.conf 를 건드리지 않는다. 같은 컨�
 레시피·프로브·로그 원본: `project_s/reboot_restore/nemo_rl_noninvasive_20261006/` (`env.sh`·`clean_run.sh`·`ldblock/`). 그 `env.sh` 의 경로는 검증 당시 scratch 경로이므로 이식 시 바꾼다.
 
 **사용자 결정 2026-10-06**: 원본(클론·툴킷)은 NFS, **venv 는 로컬**. NFS venv 는 GRPO setup 371 s, 로컬은 156 s 였다.
-셋업 재구성 제안(로컬 venv 스냅샷·인터프리터 로컬·바이트코드 사전 컴파일·JIT 캐시 로컬)은 승인 대기다 — `STATUS.md`.
+셋업 재구성 제안(로컬 venv 스냅샷·인터프리터 로컬·바이트코드 사전 컴파일·JIT 캐시 로컬)은 승인 대기다 — §1.1, `STATUS.md`.
 
 | 구성 | 값 |
 |---|---|
@@ -23,9 +23,42 @@ sudo·apt·`/usr/local/cuda`·ld.so.conf 를 건드리지 않는다. 같은 컨�
 | uv | 0.11.28 을 사설 `bin/` 에 (`UV_INSTALL_DIR`), 캐시·python·venv 전부 사설 경로 (`UV_CACHE_DIR`·`UV_PYTHON_INSTALL_DIR`·`NEMO_RL_VENV_DIR`) |
 | 빌드 env | `CUDA_HOME`·`CUDACXX`(#15)·`LIBRARY_PATH`·`CPATH=$CUDA_HOME/include/cccl`·`TORCH_CUDA_ARCH_LIST=9.0a`·`NVTE_CUDA_ARCHS=90`·`MAX_JOBS=10` |
 | 런타임 env | `LD_LIBRARY_PATH=<ldblock>:$CUDNN_HOME/lib:/usr/local/cuda/compat/lib.real`(#16)·`CUDNN_HOME`=Megatron 워커 venv 의 pip cuDNN·`CUDA_LIB_PATH`(#17)·`unset PYTHONPATH`·`PYTHONNOUSERSITE=1`(#18) |
-| 실행 | `clean_run.sh <cmd> </dev/null` (#18). `CUDA_VISIBLE_DEVICES` 금지(#19) |
+| 실행 | `clean_run.sh <cmd> </dev/null` (#18). `CUDA_VISIBLE_DEVICES` 금지(#19). whitelist 밖 환경변수는 `clean_run.sh /usr/bin/env VAR=값 <cmd>` 로 넘긴다(#23) |
 
 `#N` 은 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) 원장 번호다. 설치 검증 결과(venv 빌드·TE fused attn·GRPO 퀵스타트)는 [`GATES.md`](GATES.md) "환경" 절.
+
+### 1.1 셋업 재구성 제안 — 공식 컨테이너의 속도를 컨테이너 없이 재현 (2026-10-06 제안, 승인 대기)
+
+공식 컨테이너가 빠른 이유는 워커 venv 가 이미지 안 로컬 디스크에 미리 빌드돼 있어서다 (`docker/Dockerfile:122,391`).
+이미지를 바꿀 수 없으므로 **로컬 venv 스냅샷(tar)을 NFS 에 두고 세션마다 로컬로 복원**한다.
+NFS 순차 읽기는 빠르다(835 MB/s). 복원 추정 1~2 분(하한 46 s, 미측정), 전체 재빌드 폴백은 약 11 분이다.
+v0.7 의 기동 최적화 9건(#2739·#2920·#3089·#3158·#2741·#2750·#2771·#2793·#2767)은 이미 우리 브랜치에 있다.
+
+| 위치 | 내용 |
+|---|---|
+| NFS `$NRL_ROOT` | uv · CUDA 13 툴킷 · uv 캐시(폴백용) · mcore 변환 캐시 · HF_HOME · **`snapshots/<lock 지문>.tar.zst`** (신규) |
+| 로컬 `/opt/nrl/` 또는 `/tmp/nrl/` (두 노드 같은 경로) | Python 인터프리터 · driver venv · 워커 venv · Gym venv · JIT 캐시 · ldblock — **전부 NFS 에서 이동** |
+
+| # | 변경 | 이유 |
+|---|---|---|
+| 1 | Python 인터프리터도 로컬로 | venv 의 `bin/python` 이 NFS 의 `uv-python` 을 가리켜 표준 라이브러리를 매번 NFS 에서 읽는다 |
+| 2 | 스냅샷 빌드 때 바이트코드 사전 컴파일 | 실측 `import torch,transformers,vllm` 11.6 s (pyc 없음) → 약 5 s |
+| 3 | 런타임 패치 사전 적용 | NeMo-RL 이 첫 실행에 TE·vLLM 파일을 제자리 수정한다. 워커 8개가 동시에 하면 경합이 생긴다 |
+| 4 | JIT 캐시(vLLM·Triton·FlashInfer·CUDA PTX)를 로컬로 | 기본이 HOME(49 GB)이다. `~/.cache/vllm_0..7`·`~/.triton` 이 이미 쌓이는 중이다 |
+| 5 | 별도 `venv-mcore`·`venv-vllm` 제거 | 31 GB 중복이다. 게이트 도구는 워커 venv 로 직접 실행한다 |
+| 6 | driver 를 `venv-driver/bin/python` 으로 실행 | `uv run` 의 매회 lock 검사·sync 를 건너뛴다. 단 `UV_NO_SYNC` 를 전역으로 두면 워커 venv 생성이 깨진다 |
+| 7 | Gym venv 로컬 + `skip_venv_if_present: true` | Gym 은 기본으로 매 실행 재설치한다 |
+
+운영 모델: lock 이 바뀔 때만 로컬 빌드 → 사전 컴파일·패치 → TE·cudart·fused attn 게이트 → 스냅샷 저장(약 15 분).
+세션 재생성 때는 지문 비교 후 복원한다. 매 실행은 `clean_run venv-driver/bin/python run_grpo.py ...` 이고 setup 은 156 s 다 (로컬 venv 실측, NFS venv 는 371 s).
+
+2노드 준비(검증 필요): 두 노드에 같은 절대경로 · `ray start --head`/`--address` 수동 기동(`clean_run` 경유, 포트·ulimit 은 공식 `ray.sub` 따름) ·
+`NCCL_IB_DISABLE=1`·`NCCL_SOCKET_IFNAME=eth0`·`GLOO_SOCKET_IFNAME=eth0` · Ray object store 크기 명시(`/dev/shm` 을 Pai 와 공유).
+미검증 위험: NeMo-RL 은 driver 의 환경 전체를 모든 노드의 actor 에 넘긴다. main1 고유 값(`NVIDIA_VISIBLE_DEVICES` GPU UUID·`HOSTNAME`·`BACKENDAI_CLUSTER_*`)이 sub1 워커에도 간다.
+Backend.AI GPU 훅이 이를 읽는지 모르므로 driver 를 그 값 없이 띄워 2노드 스모크로 확인한다.
+
+결정 필요: 로컬 경로 `/opt/nrl`(세션마다 `sudo mkdir`·`chown` 1회, Pai 무영향) 또는 `/tmp/nrl`(sudo 불필요).
+승인 뒤 순서: 셋업 스크립트를 `--build-snapshot`(lock 변경 시)·기본 복원 두 모드로 나눈다 → main1 에서 복원 시간·import·TE fused 프로브·1.5B 스모크·alpha Muon KL 게이트·Gym GPU 테스트 2건 → 2노드 Ray 스모크.
 
 ## 2. 환경 구조 (중요 개념)
 
