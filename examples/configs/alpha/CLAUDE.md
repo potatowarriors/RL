@@ -74,7 +74,8 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 - **uv 는 0.11.28 만.** lock 재생성도 이 버전으로 (`.claude/rules/alpha-submodules.md`).
 - **NFS venv 는 느리다** — GRPO setup 371 s vs 로컬 156 s (사용자 결정 2026-10-06: 원본 NFS·venv 로컬).
 - **`main1`·`sub1` 은 역할 이름이지 물리 호스트가 아니다.** 호스트는 GPU UUID 로 식별 (Pai `CLAUDE.md` 환경 불변량).
-  git push 는 main1 에서 동작한다 (sub1 은 자격 없음).
+  git push 는 main1 에서 동작한다 (sub1 은 자격 없음). 이 리포는 저장소 설정에 credential helper 가 없어
+  `git -c credential.helper=store push origin alpha/post-train` 로 push 한다 (Pai 리포는 `.git/config` 에 `store` 설정, 2026-10-07 확인).
 - 노드 간 InfiniBand 가 없다 (TCP ~9.1 Gbit/s). 2노드는 학습/롤아웃 분리 + async GRPO (`RL_PLAN.md` §3).
 - Gym 은 CPU 전용이지만 Ray 를 띄운다. GPU 드라이버가 깨진 노드에서는 Backend.AI libcudahook 때문에 `ray.init()` 이 즉사한다.
 - HOME(`/home/work`)은 49 GB 루프 볼륨이다. 큰 캐시·다운로드는 `/opt` 나 NFS 로.
