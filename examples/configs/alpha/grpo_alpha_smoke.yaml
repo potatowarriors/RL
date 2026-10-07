@@ -51,6 +51,9 @@ policy:
       tensor_parallel_size: 1
       gpu_memory_utilization: 0.5
       enforce_eager: true
+      # 멀티턴(Gym HTTP 경로)의 메시지 경계 = <|im_end|>(3). alpha 의 EOS(<|endoftext|>=0)는 사전학습 문서 토큰이라
+      # 기본값(EOS)으로 두면 2번째 호출부터 경계를 못 찾는다(R3 렌더 게이트 2026-10-07: 0/40 → 패치 후 경계 오류 0).
+      turn_end_token_id: 3
     vllm_kwargs:
       # 필수: GDN 재귀 상태를 fp32 로. vLLM 기본 "auto" 는 모델 dtype(bf16) 이라 디코드 토큰마다 반올림이 누적돼
       # rollout-vs-train KL 이 생성 위치에 따라 단조 증가한다(0~256 0.00135 → 3k~4k 0.0032). fp32 에서 평탄(0.0013~0.0015).
