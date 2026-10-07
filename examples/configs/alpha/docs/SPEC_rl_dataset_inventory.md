@@ -1,7 +1,3 @@
-I have everything needed. Here is the report.
-
----
-
 # RL Dataset Inventory — alpha post-training
 
 **Root:** `/home/work/Datasets/LL_datasets/posttraining/RL/` — **62 GB confirmed** (`du -sh`), **27 directories** = 26 Nemotron datasets (matches the plan's "26 RL datasets") + 1 self-made `alpha-RL-Identity-Following-v1`, plus `nemotron_blend_recipe.json` (98 KB).

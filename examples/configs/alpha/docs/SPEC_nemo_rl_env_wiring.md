@@ -1,7 +1,3 @@
-I have full coverage. Here is the spec.
-
----
-
 # NeMo-RL Reward Environments → GRPO: implementation spec for alpha RLVR
 
 Repo: `/home/work/vidsearch/repos/project_s/NeMo-RL` (branch `alpha/post-train`). Note: the Ultra recipe **exists locally** at `examples/nemo_gym/nemotron-3-ultra/` — no GitHub fetch was needed (the task's `examples/configs/ultra/` path is the old `ultra-v3` layout; this branch has it under `examples/nemo_gym/nemotron-3-ultra/`).

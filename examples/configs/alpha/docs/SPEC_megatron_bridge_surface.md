@@ -1,7 +1,3 @@
-I have everything needed. Here's the technical report.
-
----
-
 # Implementation Surface for an "alpha" (`AlphaForCausalLM`) Bridge in Megatron-Bridge
 
 Repo root: `/home/work/vidsearch/repos/project_s/NeMo-RL/3rdparty/Megatron-Bridge-workspace/Megatron-Bridge`
