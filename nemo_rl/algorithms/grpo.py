@@ -4152,6 +4152,26 @@ def async_grpo_train(
 
     # Training state
     step = grpo_save_state.current_step
+    # alpha backport of upstream f49e41dda (#3248), partial — no CyclingDataLoader:
+    # honor max_num_epochs in async training. Without this the loop only checks max_num_steps
+    # and ends with "dataloader exhausted" RuntimeError at the epoch boundary.
+    max_num_epochs = master_config.grpo.max_num_epochs
+    if max_num_epochs is not None and max_num_epochs > 0:
+        master_config.grpo.max_num_steps = min(
+            master_config.grpo.max_num_steps,
+            max_num_epochs * len(dataloader),
+        )
+    max_num_steps = master_config.grpo.max_num_steps
+    if step >= max_num_steps:
+        print(
+            "Async GRPO training is already complete: "
+            f"current step {step} reached the effective limit of "
+            f"{max_num_steps} steps.",
+            flush=True,
+        )
+        checkpointer.shutdown()
+        return
+
     POLICY_GENERATION_STALE = _initial_policy_generation_stale(policy_generation, step)
     weight_version = step  # Tracks refitted weight versions
     consumed_samples = grpo_save_state.consumed_samples
@@ -4496,12 +4516,12 @@ def async_grpo_train(
 
     # Main training loop
     try:
-        while step < master_config.grpo.max_num_steps:
+        while step < max_num_steps:
             ray.get(trajectory_collector.check_health.remote())
             refit_metrics: dict[str, float] = {}
             early_stop_message: Optional[str] = None
             print(
-                f"\n{'=' * 25} Step {step + 1}/{master_config.grpo.max_num_steps} {'=' * 25}"
+                f"\n{'=' * 25} Step {step + 1}/{max_num_steps} {'=' * 25}"
             )
             maybe_gpu_profile_step(policy, step + 1)
             if policy != policy_generation:
@@ -4916,7 +4936,7 @@ def async_grpo_train(
 
                 # Validation
                 val_metrics, validation_timings = None, None
-                is_last_step = step + 1 == master_config.grpo.max_num_steps
+                is_last_step = step + 1 == max_num_steps
                 should_run_validation = (
                     val_period > 0
                     and (step + 1) >= val_start_at
@@ -5088,6 +5108,7 @@ def async_grpo_train(
                     should_save_by_step or should_save_by_timeout
                 ):
                     grpo_save_state.current_step = step + 1
+                    grpo_save_state.total_steps = step + 1
                     grpo_save_state.total_valid_tokens = total_valid_tokens
                     if val_metrics is not None:
                         grpo_save_state.val_reward = val_metrics["accuracy"]
@@ -5335,10 +5356,10 @@ def async_grpo_train(
                 checkpointer.shutdown()
                 print("Timeout has been reached, stopping training early", flush=True)
                 return
-            if step >= master_config.grpo.max_num_steps:
+            if step >= max_num_steps:
                 checkpointer.shutdown()
                 print(
-                    "Max number of steps has been reached, stopping training early",
+                    "Effective max number of steps has been reached, stopping training",
                     flush=True,
                 )
                 return
