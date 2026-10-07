@@ -5,6 +5,35 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 첫 RLVR 런이 7스텝에서 6.5시간 멈췄다 — Gym HTTP 경로의 vLLM 요청이 엔진 하나에서 끝나지 않았다 (2026-10-08, 원인 후보 이식)
+
+**발견 경위**: 구간 1 의 6스텝이 01:13 에 끝난 뒤, 7스텝은 배치(target 6)를 기다렸다. 01:49 이후 replay buffer 가 87 그룹에서 멈췄다
+(target 6 은 57/64, target 7 은 30/64). 07:40 사용자 결정으로 런을 멈출 때까지 진척이 없었다. 오류·경고 로그는 없었다.
+
+**관찰** (런을 멈추기 전에 남긴 것):
+- sub1 vLLM GPU 8장 중 GPU 6 만 사용률 100% 이고 7장은 0% 였다.
+- sub1 의 vLLM HTTP 포트 8개 중 한 곳(38837)에만 ESTABLISHED 연결 67개가 있었다. 나머지 7개는 0 이었다 (`/proc/net/tcp`).
+- Gym simple_agent 는 롤아웃마다 새 세션으로 시작하고, 엔드포인트는 세션 해시로 고른다 (`vllm_model/app.py:1500-1510`). 그래서 요청 67개가 한 엔진에 몰린 것은 해시 쏠림으로 설명되지 않는다.
+- 진단 수단이 막혀 있었다. py-spy 는 ptrace 제한(CUDA IPC 와 같은 컨테이너 제약)으로 "Permission Denied" 였고, NeMo-RL 의 vLLM HTTP 서버는 `/metrics` 를 내놓지 않는다 (404).
+
+**원인 후보**: upstream 04ed9a946 (#3968) 이 고친 결함이다. Gym 경로의 HTTP 서버는 별도 스레드의 이벤트 루프에서 `AsyncLLM.generate` 를 불렀다.
+AsyncLLM 의 요청 상태는 액터의 엔진 루프에 속해, 교차 스레드 사용에서는 출력을 기다리는 요청이 깨어나지 못할 수 있다.
+같은 계열의 1d33dba75 (#3844) 는 문맥 초과 요청에 응답 없이 끝나지 않고 HTTP 400 을 돌려준다. 확정은 하지 못했다 — 스택을 볼 수 없었다.
+5스텝의 대기 1,767 s 도 같은 현상의 약한 형태일 수 있다.
+
+**대응**: 두 커밋을 이식했다 (`4768471eb`·`7bc9c8d93`, 단위 테스트 8 passed). v2 런에서는 스텝이 일정 시간 이상 끝나지 않으면 경보를 띄워 다시 본다.
+생성 상한 64K 와 chunked prefill(KV 약 2배)도 엔진 하나에 긴 요청이 몰릴 때의 압박을 줄인다.
+
+**교훈**: async 런에는 "진척 없음" 감시가 필요하다. 이 런은 오류 없이 6.5시간을 기다렸다.
+
+## NeMo-Gym 서버 프로세스가 런이 끝나도 남는다 — 132개 누적 (2026-10-08 ✅ 기동 전 정리)
+
+**발견 경위**: 구간 1 을 멈춘 뒤 `ray list jobs` 에 RUNNING 작업이 많이 남았다. main1 에 `python app.py` 44개(약 13시간 전 G5 런), sub1 에 88개(G7 런 등)가 살아 있었다.
+Gym 서버는 각자 별도 Ray 작업(드라이버)으로 떠서 NeMo-RL 드라이버가 끝나도 함께 정리되지 않는다. 런마다 22~44개씩 쌓여 메모리·포트·CPU 를 쓴다.
+
+**대응**: `$NRL_ROOT/runs/rlvr1_alpha_v2/gym_cleanup.py` 가 두 노드의 남은 Gym 서버를 찾아 종료한다. v2 실행기(`launch.sh`)는 GPU 점유 검사(런 없음)를 통과한 뒤 기동 전에 이걸 부른다.
+이번 정리 뒤 Ray 작업 231개가 모두 SUCCEEDED 가 됐다.
+
 ## 첫 RLVR 런이 레시피와 다른 보상으로 학습됐다 — async 경로의 upstream 결함 4건 (2026-10-08 ✅ 이식, 브랜치 `alpha/perf-fixes`)
 
 **발견 경위**: 첫 RLVR 런 구간 1 의 병목 판정 뒤 최신 NeMo-RL(upstream main 8bf6bd4ba, 분기점 이후 268커밋)을 검토하다 찾았다.

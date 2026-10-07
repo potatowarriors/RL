@@ -62,6 +62,8 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | 첫 RLVR 런 7스텝이 오류 없이 6.5시간 멈춤 — in-flight 요청 67개가 vLLM 엔진 1개에서 진척 0 | 원인 후보(교차 스레드 AsyncLLM 사용·문맥 초과 무응답) upstream 수정 이식, v2 는 진척 없음 감시 |
+| 10-08 | 런이 끝나도 Gym 서버(`python app.py`)가 남아 132개 누적 | 별도 Ray 작업이라 드라이버와 함께 안 죽음 → v2 `launch.sh` 가 기동 전 `gym_cleanup.py` 로 정리 |
 | 10-08 | 첫 RLVR 런이 레시피와 다른 보상으로 학습 — async 경로에서 effort shaping 누락 등 upstream 결함 4건 | upstream 수정 이식(`alpha/perf-fixes`) 뒤 재시작. 큰 런 전에 분기점 이후 upstream `fix(` 커밋을 훑는다 |
 | 10-08 | 클러스터 노드에서 돌린 NeMo-RL 단위 테스트가 운영 클러스터에 붙음 | conftest 의 autouse `init_ray_cluster` 가 세션마다 연결 (`RAY_ADDRESS` 무관) → 클러스터가 빌 때만 pytest, CPU 테스트는 `CUDA_VISIBLE_DEVICES=""` |
 | 10-07 | 런 연장 재개에서 `OptimizerParamScheduler ... total number of weight decay iterations do not match` (G7) | 스케줄 길이가 train_iters(= max_num_steps)를 따라감 → 레시피 `scheduler.max_steps: 100000` |
