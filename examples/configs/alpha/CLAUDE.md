@@ -40,6 +40,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - FlashQLA 는 opt-in: `policy.megatron_cfg.env_vars` 에 `ALPHA_GDN_BACKEND: "flashqla"`. 실패 시 시끄럽게 중단, 무설정이면 fla.
 - GPU 장수는 `cluster.gpus_per_node`·Ray 리소스로 제한한다. **`CUDA_VISIBLE_DEVICES` 금지** (원장 #19).
 - 모델 입력은 Pai `evaluate.sh` 경로로 변환·검증된 HF 체크포인트(`hfmodel_*`)다. 새 ckpt 는 `GATES.md` 재실행 조건을 따른다.
+- **RL 체크포인트 반출은 `tools/export_rl_hf.sh` 로만 한다.** 변환기 출력 그대로는 Pai(transformers 4.57)가 토크나이저를 못 읽는다 (G6).
 - Muon(`dist_muon`): 필드명·기본값이 Pai SFT 와 다르다 — `muon_nesterov`(기본 False), `muon_extra_scale_factor`(기본 1.0 = SFT 의 5배)를
   명시한다. "필수 off" 4개를 끄지 않으면 셋업이 실패한다 (`grpo_alpha_smoke_muon.yaml` 헤더).
 
@@ -60,14 +61,15 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | RL 반출 HF 를 Pai 가 못 읽음 `Tokenizer class TokenizersBackend does not exist` (G6) | 변환기가 transformers 5.8 로 메타데이터를 다시 씀 → `tools/export_rl_hf.sh` 로만 반출 (메타데이터는 시작점 복사, 가중치 대조) |
 | 10-07 | 2노드 학습이 2스텝째 저장에서 멈춤 (`pidfd_getfd` · writer 사망, G5) | ES 메모리의 CUDA IPC 를 비동기 writer 가 못 받음 → `megatron_cfg.checkpoint.async_save: false` |
 | 10-07 | Gym 도구 환경 KL 0.0045, 도구 시퀀스 1/3 이 mult_prob_error > 2 (G3) | vLLM 이 `strict:true` 도구에 xgrammar 제약 디코딩 → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` (strict 렌더는 유지) → KL 0.0017 |
 | 10-07 | vLLM 기동 실패 `max_num_batched_tokens ... smaller than max_model_len` · 첫 턴 프롬프트 > max_model_len 이면 런 중단 | chunked prefill 끔이면 batched tokens = 최대 길이 · 블렌드 프롬프트 길이 사전 측정(첫 런 최대 39.3K, 32K 초과 1,144행) |
 | 10-07 | colocated refit `pidfd_getfd: Operation not permitted` (G3) | ES 메모리의 CUDA IPC 를 컨테이너(ptrace_scope 1·CAP_SYS_PTRACE 없음)가 막음 → colocated 런은 ES 끔, 128K 는 2노드 분리(NCCL refit) |
 | 10-07 | R4 결과 JSON 의 loss 가 전부 NaN · 128K 처리량 "15K tok/s" | 하네스가 `loss` 키를 읽음(반환은 `global_loss`) · 워밍업 스텝을 잼 → 수정, 정상 상태 33.4K tok/s (R5) |
-| 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK, 기본값은 결정 대기 |
+| 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK. D6 결정: 2노드 레시피의 학습 워커에 켠다 |
 | 10-07 | Gym 멀티턴 `AssertionError: EOS token #0 not found in template_token_ids` | 턴 경계를 EOS(0)로 찾음 → `vllm_cfg.turn_end_token_id: 3` (본체 패치) |
-| 10-07 | Gym 경로 렌더가 SFT 와 다름 (도구 정의) | Gym 이 `strict` 를 지움 → 유지 결정, Gym 플러그인 서버로 구현 대기 · `description` None 은 데이터 게이트 |
+| 10-07 | Gym 경로 렌더가 SFT 와 다름 (도구 정의) | Gym 이 `strict` 를 지움 → 유지 결정, Gym 플러그인 서버(`gym_plugins/`)로 구현 (G3) · `description` None 은 데이터 게이트 |
 | 10-07 | 엔진 동등성 gradient cos 0.98 에서 "불일치"로 보임 | MoE·bf16 포화 — 절대 임계 대신 HF·섭동 기준선과 비교 (M5). 하네스엔 SFT forward 플래그(router fp32 등)를 다 준다 |
 | 10-07 | `clean_run.sh` 아래서 환경변수가 안 먹음 (#23) | whitelist `env -i` → `clean_run.sh /usr/bin/env VAR=값 <cmd>` |
 | 10-07 | 바쁜 GPU 위에 게이트 기동 (#25) · 실행 중 import 코드 편집으로 잡 사망 (#26) | 런처에 기동 직전 GPU 점유 검사(1 GiB) · 실행 중인 잡이 import 하는 코드는 편집 금지 |

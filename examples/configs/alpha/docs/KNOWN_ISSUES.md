@@ -5,6 +5,26 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## RL 체크포인트를 HF 로 반출하면 Pai 가 토크나이저를 못 읽는다 — 변환기가 메타데이터를 transformers 5 형식으로 다시 쓴다 (2026-10-07 ✅ `tools/export_rl_hf.sh`)
+
+**발견 경위**: G6(RL 체크포인트 → HF → Pai)에서 G5 step_3 를 NeMo-RL 변환기(`examples/converters/convert_megatron_to_hf.py`)로 반출했다.
+가중치는 정상이었다. 텐서 14,181개의 이름·shape 가 일치했고, 동결된 라우터·expert bias 는 비트 동일했다. 그런데 Pai 환경(transformers 4.57)에서 반출본의 토크나이저를 열면
+`ValueError: Tokenizer class TokenizersBackend does not exist or is not currently imported.` 로 실패했다. Pai 의 forward_sanity·벤치·다음 단계 입력이 모두 여기서 멈춘다.
+
+**원인**: 변환기는 Megatron 워커 venv 의 transformers 5.8.1 로 tokenizer·config 를 다시 저장한다.
+- `tokenizer_config.json`: `tokenizer_class` 가 `PreTrainedTokenizerFast` 에서 transformers 5 전용 이름 `TokenizersBackend` 로 바뀐다. `added_tokens_decoder`·`additional_special_tokens` 가 빠진다.
+- chat template 이 `tokenizer_config.json` 밖의 `chat_template.jinja` 로 빠진다 (끝 개행만 다르다). `special_tokens_map.json`·`tokenizer_metadata.json` 은 쓰지 않는다.
+- `config.json` 은 키가 바뀐다 (`_full_attention_interval`, `rope_parameters`·`layer_types` 추가, `dtype`). 그래도 Pai 의 `configuration_alpha.py` 는 같은 값으로 해석한다 (`compare_hf_forward.py --raw-config` 의 속성 차이는 `rope_parameters` 추가뿐이다).
+- `A_log` 18개가 fp32 대신 bf16 로 저장된다. 값은 같다. Pai 도 bf16 로 학습한 값을 fp32 로 저장했을 뿐이라 bf16 왕복이 18/18 무손실이다. HF `modeling_alpha.py` 는 `A_log.float()` 로 쓴다.
+- 문서의 변환 명령(`uv run --locked --extra mcore`)은 driver venv 의 패키지 4개를 바꾸고 81개를 설치한다. driver 를 쓰는 런이 돌 때 실행하면 그 런의 환경이 바뀐다.
+
+**대응**: 반출은 `tools/export_rl_hf.sh <ckpt>/step_N <out>` 로만 한다. 이 스크립트는 세 단계로 돈다.
+① 변환기를 Megatron 워커 venv 의 python 으로 직접 실행한다 (CPU·gloo, step_3 에서 2분 17초).
+② 가중치가 아닌 파일은 시작점 hfmodel(`policy.model_name`)에서 그대로 복사하고, 시작점에 없는 파일(`chat_template.jinja`)은 지운다.
+③ `compare_hf_weights.py` 로 시작점과 대조한다. 출처(step·가중치 경로·커밋)는 `rl_export.json` 에 남는다.
+
+**교훈**: 두 스택의 인터페이스는 HF 체크포인트 하나다. 가중치 검증만으로는 부족하다. 소비자(Pai) 환경에서 토크나이저와 config 까지 열어 본다.
+
 ## 2노드 학습이 2스텝째 체크포인트 저장에서 멈춘다 — 비동기 writer 가 ES 메모리의 CUDA IPC 를 받지 못한다 (2026-10-07 ✅ `async_save: false`)
 
 **발견 경위**: G5(실레시피 2노드 스모크) 1스텝은 정상이었다(KL 0.0016). 2스텝째 저장(`save_period 2`)에서 학습 워커 8개의 비동기 writer
