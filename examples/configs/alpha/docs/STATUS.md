@@ -4,13 +4,13 @@
 (메모리는 노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 게이트 수치는 [`GATES.md`](GATES.md) 에 쓰고 여기에는 판정과 링크만 쓴다. Pai 쪽(SFT·벤치) 상태는 Pai `examples/alpha/docs/STATUS.md`.
 
-_마지막 갱신: 2026-10-07 (RLVR 이식 위험 보고 `RLVR_READINESS.md` — G0·G1 승인, G2 전 recompute·offload 분석 지시)_
+_마지막 갱신: 2026-10-07 (계획 재편 — 정확한 RLVR 런이 첫 목표, 속도 최적화는 그 뒤. G0 완료·G1 PASS·R5 부분 실측)_
 
 ## 진행 중
 
 | 트랙 | 상태 | 다음 할 일 | 정본 |
 |---|---|---|---|
-| **RL 준비 (main1·sub1, 2026-10-06~, 사용자 지시: RL 관련 작업은 전부 이 트랙)** | **환경**: Pai 컨테이너 안에서 시스템 무변경으로 구동한다(원장 #15~#27). 영속 설치는 NFS `$NRL_ROOT`(셋업 `project_s/setup_nemo_rl_env_noninvasive.sh`). 사용자 결정 10-06: **원본 NFS·venv 로컬**. **게이트 (agentic iter2400)**: M1 라운드트립 · M2 forward 패리티 · M3 refit · R1 KL(R3 + GDN 상태 fp32, Adam·Muon) · R2 Muon 실적용 · E4 Gym v0.6.0 전부 PASS. **10-07 추가**: M5 SFT↔RL 엔진 동등성 **PASS** · R3 렌더 — 네이티브 GRPO PASS, Gym 멀티턴 턴 경계 결함 수정(`turn_end_token_id: 3`), `strict` 유지 미구현 · R4 메모리 — 1노드 **128K/CP8 OK**(`expandable_segments` 조건), Muon 오프로드 불필요. 학습 엔진 방향 = NeMo-RL mcore + Pai 기능 포팅(`RL_PLAN.md` 결정 11). 버전: v0.7.0 미채택, r0.8.0 정식 릴리스 시 재검토 | **RLVR 이식 게이트 (사용자 지시 2026-10-07, 정본 `RLVR_READINESS.md` §6)**: ① G0 레시피 골격·검사 도구·R4 하네스 수정 (승인) ② G1 packing 상태 누출 판별 (승인) ③ R5 recompute·offload 처리량 분석 — G2 전에 (사용자 지시: selective recompute + optimizer offload 로 Pai 수준 처리량 목표) ④ G2 CP sweep + R3 trace + packing+CP R1 ⑤ G3 Gym 파서 스모크 → `strict` 유지 구현 → R3 P6 ⑥ G4 처리량 A/B 나머지 ⑦ G5 2노드 async 스모크 ⑧ G6 HF 반출 ⑨ G7 Muon 재개. 기존 항목: 셋업 재구성 승인 대기 · PivotRL 위치 재검토 (`RL_PLAN.md` 결정 14) | `GATES.md`, `SETUP.md`, `KNOWN_ISSUES.md` 2026-10-07 항목 |
+| **RL 준비 (main1·sub1, 2026-10-06~, 사용자 지시: RL 관련 작업은 전부 이 트랙)** | **환경**: Pai 컨테이너 안에서 시스템 무변경으로 구동한다(원장 #15~#27). 영속 설치는 NFS `$NRL_ROOT`(셋업 `project_s/setup_nemo_rl_env_noninvasive.sh`). 사용자 결정 10-06: **원본 NFS·venv 로컬**. **게이트 (agentic iter2400)**: M1 라운드트립 · M2 forward 패리티 · M3 refit · R1 KL(R3 + GDN 상태 fp32, Adam·Muon) · R2 Muon 실적용 · E4 Gym v0.6.0 전부 PASS. **10-07 추가**: M5 SFT↔RL 엔진 동등성 **PASS** · R3 렌더 — 네이티브 GRPO PASS, Gym 멀티턴 턴 경계 결함 수정(`turn_end_token_id: 3`), `strict` 유지 미구현 · R4 메모리 — 1노드 **128K/CP8 OK**(`expandable_segments` 조건), Muon 오프로드 불필요. 학습 엔진 방향 = NeMo-RL mcore + Pai 기능 포팅(`RL_PLAN.md` 결정 11). 버전: v0.7.0 미채택, r0.8.0 정식 릴리스 시 재검토 | **RLVR — 1단계 정확성 → 2단계 첫 RLVR 런(병목 측정) → 3단계 속도 (사용자 지시 2026-10-07 재편, 정본 `RLVR_READINESS.md` §6)**: ✅ G0 레시피 골격·검사 도구 · ✅ G1 packing 상태 격리 PASS · ⏸ R5 recompute 실측은 기준선만 남기고 연기(128K full 33.4K tok/s, selective OOM). 다음: ① G2 packing+CP8 경로 R1 + R3 trace ② G3 Gym 파서 스모크 → `strict` 유지 구현 → R3 P6 ③ D1 결정 → G5 2노드 실레시피 스모크 → G6·G7 ④ 첫 RLVR 런 — 정확성 지표 + `exposed_generation`·`policy_training` 등으로 병목 판정 ⑤ 병목 쪽 속도 최적화. 기존 항목: 셋업 재구성 승인 대기 · PivotRL 위치 재검토 (`RL_PLAN.md` 결정 14) |
 
 ## 선행 의존 (Pai 스택)
 

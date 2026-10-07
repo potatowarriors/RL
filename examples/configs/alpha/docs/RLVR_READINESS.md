@@ -2,6 +2,7 @@
 
 2026-10-07 위험 보고(사용자 요청: "Pai 의 중요한 학습 config 를 NeMo-RL 에서 재현하기 전에 잠재 위험을 보고")의 정본이다.
 게이트 G0~G7 의 진행 상태는 [`STATUS.md`](STATUS.md), 수치 결과는 [`GATES.md`](GATES.md) 에 쓴다. 사용자 승인: 기록·G0·G1 (2026-10-07).
+**계획 재편 (사용자 지시 2026-10-07)**: 첫 목표는 **정확한 RLVR 학습**이다. 속도 최적화는 실제 RLVR 런에서 학습·롤아웃 중 어느 쪽이 병목인지 확인한 뒤에 한다 (§6).
 
 **검증 방법 (2026-10-07)**: 코드 정적 분석(병렬 감사 4건 — GDN packing·CP, R3 호환, loss·clip·MoE 학습 의미, 브리지·vLLM 128K — 핵심 주장은 직접 재확인),
 RLVR1 블렌드(`rlvr1_alpha.jsonl`) 99,113행 CPU 집계, R4 산출물 점검. GPU 실행은 하지 않았다.
@@ -18,7 +19,8 @@ RLVR1 블렌드(`rlvr1_alpha.jsonl`) 99,113행 CPU 집계, R4 산출물 점검. 
    - Pai 의 `moe-router-fusion: true` 를 옮기면 R3 가 에러 없이 꺼진다 (H1).
    - Gym 서버의 도구·추론 파서를 alpha 용으로 지정하지 않으면 도구 호출이 벌점이 된다. 블렌드 행의 44% 가 도구를 쓴다 (H3).
    - RLVR1 블렌드의 23.4% 는 judge 모델이나 코드 sandbox 가 있어야 채점된다. 2노드 계획에는 그 자리가 없다 (H4).
-4. **128K 학습 처리량은 Pai SFT 의 약 1/4 로 측정됐다.** SFT 최적화 중 router fusion 은 R3 와 충돌한다 (§5).
+4. **128K 학습 처리량은 Pai SFT 의 약 1/1.9 다** (정상 상태 33.4K vs 63.6K tok/s, R5 2026-10-07). 첫 보고의 "1/4"는 R4 가 워밍업이 덜 끝난 2번째 스텝을 잰 값이었다.
+   SFT 최적화 중 router fusion 은 R3 와 충돌한다. 속도 최적화는 첫 RLVR 런 뒤로 미룬다 (§5).
 
 ## 2. Pai SFT 핵심 설정 → NeMo-RL 대응
 
@@ -103,6 +105,11 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 - `code_gen`(8.0%)은 sandbox 없이 Ray 워커에서 모델 코드를 실행한다 (Gym `resources_servers/code_gen/app.py:171`). 공유 노드라 격리를 검토한다.
 - 데이터·자원 결정이라 승인 후 진행한다 → D1.
 
+**H5. Ultra 의 `reward_penalties.token_ids` 는 Nemotron 토크나이저 id 다.**
+- Ultra 값 `unwanted [2]`·`think_open 12`·`think_close 13` 은 alpha 에서 `<|im_start|>`·`<tool_response>`·`</tool_response>` 다. alpha 의 `<think>`·`</think>` 는 14·15 다.
+- 복사하면 think 태그 검사가 도구 응답 태그를 보게 되어 보상이 조용히 오염된다.
+- 조치: 레시피 골격은 alpha id 를 쓴다. `tools/check_alpha_recipe.py` 가 토크나이저와 대조한다 (G0).
+
 ### 중간
 
 | # | 위험 | 내용 | 조치 |
@@ -126,38 +133,60 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 - 잘린 응답도 보상으로 학습한다 (`overlong_filtering: false`). 잘림 비율을 지표로 본다.
 - `KNOWN_ISSUES.md` 의 "ES 는 weight transfer 5배 느림" 근거는 FP8 캐시 정리 docstring 한 줄이다 (`megatron_policy_worker.py:2731-2743`). 측정값이 없다.
 
-## 5. 처리량 — recompute·offload 분석
+## 5. 처리량 — recompute·offload 측정 (R5, 2026-10-07 부분 실행 · 이후는 첫 RLVR 런 뒤로 연기)
 
-| | Pai SFT 128K/CP8 | NeMo-RL R4 128K/CP8 |
-|---|---|---|
-| 128K 샘플 1개당 | 2.06 s (GBS 160, 329.7 s/iter) | 8.5~8.7 s (2번째 스텝) |
-| 처리량 | 63.6K tok/s | 약 15K tok/s |
+**사용자 지시 (2026-10-07)**: 속도 최적화는 정확한 RLVR 학습을 먼저 진행한 뒤에 한다. 실제 런에서 학습과 롤아웃 중 무엇이 병목인지 확인하고 적용 여부를 정한다.
+아래 수치는 그 판단의 학습측 기준선이다. 합성 데이터(랜덤 토큰)라 실제 데이터에서 다시 확인한다.
 
-- 조건이 다르다. R4 는 샘플 1개마다 옵티마이저 스텝이 붙고 full recompute 를 쓴다. 기준선으로만 쓴다.
-- 사용자 지시 (2026-10-07): G2 전에 recompute 분석을 먼저 한다. selective recompute + optimizer state offload 로 Pai 수준(60K tok/s)을 목표로 확인·적용한다.
-- 레버 후보: selective recompute (Pai 분석 +15%) · optimizer state offload · rope fusion (THD+CP 비융합 경로는 층마다 Python 루프) · FlashQLA (packed 정합성 먼저) · vLLM graph·배치 파라미터.
-  router fusion 은 R3 와 충돌해 쓰지 않는다.
-- 결과는 이 절과 `GATES.md` 에 추가한다.
+조건: 128K/CP8(rank 당 16K 토큰)·EP8, Muon, `expandable_segments`, `logprob_chunk_size 2048` + `fuse_loss`, sub1·main1 8×H100. 정상 상태는 3번째 스텝이다.
 
-## 6. 게이트 계획
+| 조건 | 스텝 시간 | 옵티마이저 | 처리량 (노드) | 스텝 후 상주 | peak |
+|---|---|---|---|---|---|
+| full recompute, 128K 샘플 1개/스텝 | 5.47 s | 0.75 s | 24.0K tok/s | 41.0 GB | 57.2 GB |
+| full recompute, 128K 샘플 4개/스텝 | 15.7 s | 0.71 s | **33.4K tok/s** | 41.0 GB | 57.2 GB |
+| 위 + R3 (합성 group-limited route, main1) | 16.5 s | 1.52 s | 31.7K tok/s | 41.0 GB | 57.3 GB |
+| 64K/CP8 full recompute, 64K 샘플 8개/스텝 | 12.2 s | 0.78 s | 43.1K tok/s | 38.9 GB | 50.8 GB |
+| selective `layernorm,moe` · `moe` · `layernorm` · recompute 없음 (128K, R3 유무 모두) | — | — | — | — | **OOM** |
+| selective `layernorm,moe` · `moe` · recompute 없음 (64K) | — | — | — | — | **OOM** |
+
+- 첫 보고의 "약 15K tok/s"는 R4 가 2번째 스텝(워밍업)과 샘플 1개 스텝을 잰 값이다. 정상 상태 full recompute 는 33.4K tok/s 다.
+- R4 의 "고정 바닥 27 GB"는 Muon momentum 지연 할당 전 값이다. 스텝 후 상주는 41 GB 다.
+- 128K 에서는 attention 이 FLOPs 의 약 2/3 다. 64K(43.1K) 보다 128K(33.4K) 가 느린 이유다.
+- selective OOM 지점: 랜덤 토큰 + live router 에서는 MoE 토큰 정렬 버퍼(1.56 GiB = 409K 토큰, 평균의 3.1배, 매번 같은 EP 랭크)였다.
+  균형 route(R3)에서는 RL loss 의 logprob 계산·backward 로 옮겨 갔다. 랜덤 토큰 쏠림은 측정 아티팩트이고, 주원인은 selective 저장 activation + RL loss 메모리다.
+- Pai SFT 는 64K/CP8 selective 를 offload 없이 52.2 GB 로 통과했다 (Pai `docs/gdn_cp_port.md`). NeMo-RL 은 같은 조건에서 OOM 이다.
+  차이 후보는 RL loss 의 logprob backward(SFT 는 TE fused CE)와 저장 activation 구성이다. optimizer offload(정상 상태 약 16 GB 추정)만으로는 부족하다.
+- 속도 상한: recompute 를 없애도 이득은 계산상 약 25% 다 (Pai 실측 +15%). Pai 와의 나머지 차이는 프로파일로 찾는다.
+- 연기한 항목 (병목이 학습으로 확인되면): 메모리 스냅샷 분해 → RL loss 메모리 절감 → optimizer offload 포팅(Pai 기능 #4) → 한 스텝 프로파일.
+  병목이 롤아웃이면 vLLM 쪽(CUDA graph·배치 파라미터·prefix caching·DP 배치)을 먼저 본다.
+- 산출물: `$NRL_ROOT/gates/train_throughput/` (`run_case.sh`, `matrix_*.sh`, 조건별 `.json`·`.log`).
+
+## 6. 게이트 계획 (2026-10-07 재편 — 정확성 → 첫 RLVR 런 → 속도)
+
+**1단계 — 정확성 (첫 RLVR 런 전 필수)**
 
 | # | 게이트 | 노드 | 상태 |
 |---|---|---|---|
-| G0 | `student_rlvr1_alpha.yaml` 골격 (Ultra + alpha 기본값 + H1·H3·M2·M6 가드) · 레시피 검사 도구 · R4 하네스 키 수정 (CPU) | — | 승인 2026-10-07 |
-| G1 | packing 상태 누출 판별 — 같은 시퀀스를 묶음 안·단독 packed·unpacked 로 logprob 비교 (CP1) | 1노드 | 승인 2026-10-07 |
-| R5 | recompute·offload 처리량 분석 (§5) | 1노드 | G2 전에 수행 (사용자 지시) |
-| G2 | CP 1/2/4/8 sweep + R3 trace 검증 + packing+CP 경로 R1 | 1노드 | 대기 |
-| G3 | Gym 서버 파서 스모크 → `strict` 유지 구현 → R3 P6 실경로 | 1노드 | 대기 |
-| G4 | 처리량 A/B 나머지 (rope fusion·FlashQLA·ES vs `max_split_size_mb`) | 1노드 | 대기 |
-| G5 | async + in-flight + Gym + 2노드 분리 스모크 (refit 시간·KL·R3 누락 0) | 2노드 | 대기 |
-| G6 | RL ckpt → HF 반출 → Pai forward_sanity · 서빙 1건(finish=stop) · eos [3,0] | 1노드 | 대기 |
-| G7 | Muon 저장 → 재개 → 다음 스텝 loss 비교 | 1노드 | 대기 |
+| G0 | `student_rlvr1_alpha.yaml` 골격 · `tools/check_alpha_recipe.py` · R4 하네스 수정 | CPU | **완료** — 골격 검사 ERROR 0 / WARN 2, Ultra 함정 5개 주입 시 전부 ERROR |
+| G1 | packing 상태 누출 판별 (`tools/verify_packing_isolation.py`) | 1노드 | **PASS** — fla·FlashQLA 모두 4개 길이 쌍에서 B logprob 비트 동일 |
+| G2 | packing+CP 경로 정합: CP8+packing 으로 R1 (KL < 0.002, 위치 구간 평탄) + R3 trace 검증 (`NRL_R3_TRACE`·`tools/check_r3_trace.py`). 긴 생성 길이에서 위치별 KL | 1노드 | 다음 |
+| G3 | Gym 경로: 서버 파서 스모크(도구 호출 파싱·추론 분리·invalid 판정률) → `strict` 유지 구현(결정 13) → R3 P6 실경로 | 1노드 | 대기 |
+| G5 | 실레시피 2노드 스모크: async + in-flight + Gym + 분리 토폴로지. refit 시간·KL·R3 누락 0·타이밍 지표 | 2노드 | D1 필요 |
+| G6·G7 | G5 체크포인트로 HF 반출 → Pai forward_sanity·서빙 1건 · Muon 저장→재개 다음 스텝 비교 | 1노드 | G5 뒤 |
+
+**2단계 — 첫 RLVR 런 (정확성 확인 + 병목 측정)**
+- 결정 D1~D7 반영 레시피로 실행한다. 정확성 지표: rollout↔train KL(`seq_logprob_error`·위치별), R3 경고 0, 보상·잘림 비율, invalid tool call·malformed think 비율.
+- 병목 지표 (async GRPO 타이밍): `timing/train/exposed_generation`(학습이 롤아웃을 기다린 시간) · `policy_training` · `policy_and_reference_logprobs` · `weight_sync`, vLLM 지표(진행 중 배치·대기 샘플), 두 노드 GPU 사용률.
+  `exposed_generation` 이 크면 롤아웃 병목, 0 에 가깝고 버퍼가 차 있으면 학습 병목이다.
+- 초기 체크포인트를 Pai 벤치로 평가해 비하락을 확인한다.
+
+**3단계 — 속도 최적화 (병목 쪽만)**: §5 의 연기 항목. 학습 병목이면 R5 후속, 롤아웃 병목이면 vLLM 레버 (M2·M4·D2 포함, 바꿀 때마다 R1).
 
 ## 7. 결정이 필요한 것
 
 | # | 결정 | 선택지 |
 |---|---|---|
-| D1 | judge·sandbox 의존 행 23.4% + nvarc 4.2% | 블렌드에서 제외 / node1 일부를 judge 로 / 외부 API |
+| D1 | judge·sandbox 의존 행 23.4% + nvarc 4.2% — **G5 와 첫 런을 막는다** | 블렌드에서 제외 / node1 일부를 judge 로 / 외부 API |
 | D2 | prefix caching | 끈다(upstream R3 레시피) / 켜고 R3 를 따로 검증 |
 | D3 | 부하 균형 | bias 갱신 0 유지 / 1e-3 (Ultra) |
 | D4 | KL | 0 + `seq_logprob_error_threshold: 2` (Ultra, KL 정합 지표 유지) / 0.01 (상속) |
