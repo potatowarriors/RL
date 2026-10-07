@@ -5,6 +5,35 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## Gym 도구 환경의 롤아웃이 off-policy 다 — vLLM 이 `strict: true` 도구에 제약 디코딩을 건다 (2026-10-07 ✅ `VLLM_ENFORCE_STRICT_TOOL_CALLING=0`)
+
+**발견 경위**: G3(Gym 1노드 스모크, judge 불필요 10개 환경 138행)의 Generation KL 이 0.0043·0.0045 로 기준 0.002 의 2배를 넘었다.
+같은 모델의 네이티브 경로(R1·G2)는 0.0015 였다. `seq_logprob_error_threshold 2` 가 64개 중 17~21개 시퀀스를 마스킹했다.
+
+**진단** (`tools/analyze_gym_logprob_gap.py`, 토큰 덤프 = `env.should_log_nemo_gym_responses=false`):
+
+| 환경 | 시퀀스 | mult_prob_error > 2 | 중앙값 (강제 켬 → 끔) |
+|---|---|---|---|
+| toolcall_schema 단일 스텝 도구 | 20 | 14 → 0 | 6.53 → 1.015 |
+| swe_pivot | 8 | 2 → 0 | 1.24 → 1.007 |
+| single_step_tool_use | 8 | 1 → 0 | 1.11 → 1.022 |
+| 도구 없는 6개 환경 | 28 | 0 → 0 | 1.02~1.03 (변화 없음) |
+
+- 어긋남은 도구를 선언한 행에만 있었고, 특수 토큰이 아니라 추론 텍스트 중간에서 시작했다.
+- R3 는 원인이 아니다 — forward 검증 3,840건 불일치 0, CP 토큰 일치 256,662행.
+- 로그에 xgrammar 마스크 커널(`apply_token_bitmask_inplace_kernel`) 컴파일이 있었다 (강제 끔 런에서는 0회).
+
+**원인**: vLLM 0.25.1 `tool_parsers/structural_tag_registry.py::get_model_structural_tag` 는 `tool_choice` 가 auto 여도 도구 하나라도
+`strict: true` 면 구조 태그(xgrammar)를 만든다. 환경변수 `VLLM_ENFORCE_STRICT_TOOL_CALLING` 기본값이 True 다 (`vllm/envs.py`).
+결정 13 으로 남긴 `strict: true`(RL 블렌드 도구 행 전부)가 롤아웃을 제약된 분포에서 샘플링하게 만들었고, vLLM 이 돌려준 logprob 도 그 분포 기준이었다.
+학습측은 제약 없는 분포로 계산하므로 importance ratio 가 틀리고, threshold 마스킹이 도구 샘플을 대량으로 버린다.
+
+**대응**: `policy.generation.vllm_cfg.env_vars.VLLM_ENFORCE_STRICT_TOOL_CALLING: "0"` (레시피 기본값). `strict` 는 프롬프트 렌더에 그대로 남는다 —
+도구 행 프롬프트 36/36 에 `<strict>True</strict>` 확인. 결과 KL 0.0017, 마스킹 0, 도구 환경 k3 0.0006~0.0011. `check_alpha_recipe.py` 가 누락을 ERROR 로 막는다.
+
+**교훈**: ① 서빙 계층의 "편의 기능"(구조 태그·제약 디코딩·파서)이 RL 에서는 샘플링 분포를 바꾼다. 롤아웃 경로를 바꾸면 R1 식 KL 을 그 경로에서 다시 잰다.
+② KL 평균만 보지 말고 시퀀스·환경별로 쪼갠다 — 이번 결함은 전체의 1/3 인 도구 시퀀스에만 있었다.
+
 ## vLLM 엔진이 `max_num_batched_tokens (16384) is smaller than max_model_len` 으로 기동하지 못한다 — chunked prefill 을 끈 레시피 (2026-10-07 ✅ 레시피 수정)
 
 **발견 경위**: G3 를 32K 로 올리자 vLLM async 워커가 `SchedulerConfig` 검증에서 죽었다.
@@ -16,7 +45,9 @@ vLLM 은 프롬프트 하나를 한 스텝에 넣어야 하므로 `max_num_batch
 
 **발견 경위**: G3 를 8K 로 돌렸더니 프롬프트가 8K 를 넘는 행(스모크 144행 중 15행)에서 vLLM 이 400 을 돌려줬다. NeMo-RL 은
 `ValueError: NeMo Gym returned a result with no generation data ... the prompt for the first turn already exceeds the vLLM max_model_len` 로 런 전체를 멈췄다 (`nemo_rl/environments/nemo_gym.py:826`).
-**함의**: 블렌드의 렌더 프롬프트 길이를 런 전에 잰다. `rlvr1_alpha_judgefree.jsonl` 은 최대 22,503 토큰(중앙값 3,081, p99 13,096, 32K 초과 0행)이라 128K 첫 런에는 해당하지 않는다.
+**함의**: 블렌드의 렌더 프롬프트 길이를 런 전에 잰다. `rlvr1_alpha_judgefree.jsonl` 은 최대 39,266 토큰(중앙값 3,381, p99 33,972, 32K 초과 1,144행 — 전부 SWE 피벗, 64K 초과 0행)이라 128K 첫 런에는 해당하지 않는다.
+측정 함정: Responses API 입력의 `function_call_output` 본문은 `output` 필드, 이전 추론은 `reasoning.summary` 다. 첫 측정은 이 둘을 빠뜨려 최대 22,503 으로 과소 측정했다.
+도구 호출 `arguments` 는 JSON 문자열을 dict 로 바꿔야 alpha 템플릿이 렌더된다 (`tools/measure_blend_prompt_lengths.py`).
 멀티턴 환경은 턴이 쌓이며 넘을 수 있으므로 환경을 추가할 때 다시 본다.
 
 ## colocated refit 이 `pidfd_getfd: Operation not permitted` 로 실패한다 — `expandable_segments` 메모리의 CUDA IPC 를 컨테이너가 막는다 (2026-10-07 ✅ colocated 에서는 ES 끔)

@@ -30,6 +30,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - CP>1 은 sequence packing 필수, `use_fused_linear_logprobs` 와 비호환이다 → `logprob_chunk_size` + `fuse_loss` (+ `defer_fp32_logits: true`).
   packing 의 시퀀스 간 상태 격리는 G1 PASS(비트 동일). CP>1 경로의 수치는 미검증이다 — 장문맥 레시피 전에 R1 을 그 경로로 돌린다 (G2).
 - **R3 를 켠 레시피에서 `moe_router_fusion` 금지.** mcore fused top-k 는 replay 전에 반환해 R3 가 에러 없이 꺼진다. Pai SFT 는 켰다 — 복사하지 않는다.
+- **Gym 레시피는 `vllm_cfg.env_vars.VLLM_ENFORCE_STRICT_TOOL_CALLING: "0"` 필수.** 기본값이면 vLLM 이 `strict:true` 도구에 제약 디코딩을 걸어 롤아웃이 off-policy 가 된다 (G3).
 - Ultra 의 `reward_penalties.token_ids`(2·12·13)는 Nemotron id 다 — alpha 에서는 `<|im_start|>`·`<tool_response>`·`</tool_response>`. alpha think 는 14·15.
 - **레시피를 돌리기 전에 `tools/check_alpha_recipe.py <recipe>` 가 ERROR 0 이어야 한다** (H1·H3·H5·GBS·CP 패딩·eos 등 자동 검사).
 - Pai·Ultra 노브를 옮길 때는 NeMo-RL 이 실제로 읽는지 확인한다. `megatron_cfg` 최상위의 모르는 키와 Ultra 의 loss 정규화 키 4개는 조용히 무시된다.
@@ -59,7 +60,8 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
-| 10-07 | vLLM 기동 실패 `max_num_batched_tokens ... smaller than max_model_len` · 첫 턴 프롬프트 > max_model_len 이면 런 중단 | chunked prefill 끔이면 batched tokens = 최대 길이 · 블렌드 프롬프트 길이 사전 측정(첫 런 최대 22.5K) |
+| 10-07 | Gym 도구 환경 KL 0.0045, 도구 시퀀스 1/3 이 mult_prob_error > 2 (G3) | vLLM 이 `strict:true` 도구에 xgrammar 제약 디코딩 → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` (strict 렌더는 유지) → KL 0.0017 |
+| 10-07 | vLLM 기동 실패 `max_num_batched_tokens ... smaller than max_model_len` · 첫 턴 프롬프트 > max_model_len 이면 런 중단 | chunked prefill 끔이면 batched tokens = 최대 길이 · 블렌드 프롬프트 길이 사전 측정(첫 런 최대 39.3K, 32K 초과 1,144행) |
 | 10-07 | colocated refit `pidfd_getfd: Operation not permitted` (G3) | ES 메모리의 CUDA IPC 를 컨테이너(ptrace_scope 1·CAP_SYS_PTRACE 없음)가 막음 → colocated 런은 ES 끔, 128K 는 2노드 분리(NCCL refit) |
 | 10-07 | R4 결과 JSON 의 loss 가 전부 NaN · 128K 처리량 "15K tok/s" | 하네스가 `loss` 키를 읽음(반환은 `global_loss`) · 워밍업 스텝을 잼 → 수정, 정상 상태 33.4K tok/s (R5) |
 | 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK, 기본값은 결정 대기 |
