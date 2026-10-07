@@ -2054,6 +2054,61 @@ def test_postprocess_nemo_gym_group_returns_task_index(log_full_result_tables):
     ) is log_full_result_tables
 
 
+def test_postprocess_nemo_gym_group_counts_output_cap_truncation():
+    # Sample 0 stops at the per-call output cap (4), sample 1 ends naturally,
+    # sample 2 fills max_model_len (8). Both 0 and 2 are truncated.
+    rows = [
+        {
+            "agent_ref": {"name": "agent"},
+            "responses_create_params": {"max_output_tokens": 4},
+        }
+        for _ in range(3)
+    ]
+    results = []
+    for prompt_len, gen_len in ((1, 4), (1, 2), (5, 3)):
+        input_message = {
+            "role": "user",
+            "content": "prompt",
+            "token_ids": torch.ones(prompt_len, dtype=torch.long),
+        }
+        results.append(
+            {
+                "input_message_log": [input_message],
+                "message_log": [
+                    input_message,
+                    {
+                        "role": "assistant",
+                        "content": "answer",
+                        "token_ids": torch.full((gen_len,), 2),
+                        "generation_logprobs": torch.zeros(gen_len),
+                    },
+                ],
+                "full_result": {"reward": 0.0},
+            }
+        )
+
+    rollout_result = rollouts_mod._postprocess_single_nemo_gym_group(
+        nemo_gym_rows=rows,
+        results=results,
+        timer=rollouts_mod.Timer(),
+        timer_prefix="timing/rollout",
+        policy_generation=type(
+            "_PolicyGeneration",
+            (),
+            {"cfg": {"vllm_cfg": {"max_model_len": 8}}},
+        )(),
+        input_batch=BatchedDataDict({"loss_multiplier": torch.ones(3)}),
+        tokenizer=type("_Tokenizer", (), {"pad_token_id": 0})(),
+        log_full_result_tables=False,
+    )
+
+    assert rollout_result.final_batch["truncated"].tolist() == [True, False, True]
+    assert rollout_result.rollout_metrics["truncation_rate"] == pytest.approx(2 / 3)
+    assert rollout_result.rollout_metrics["natural_termination_rate"] == pytest.approx(
+        1 / 3
+    )
+
+
 def test_run_nemo_gym_rollout_sync_drains_entire_batch(monkeypatch):
     input_batch = BatchedDataDict({"loss_multiplier": torch.ones(3)})
     expected = rollouts_mod.NemoGymRolloutResult(
