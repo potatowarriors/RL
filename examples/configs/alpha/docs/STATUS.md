@@ -22,13 +22,10 @@ _마지막 갱신: 2026-10-07 (계획 재편 — 정확한 RLVR 런이 첫 목�
 
 | 결정 | 선택지 · 권고 | 정본 |
 |---|---|---|
+| ~~D1·D2·D3·D4·D5·D7~~ | **결정됨 2026-10-07** — 첫 RLVR 런: judge 불필요 10개 환경 71,730행 · prefix caching 끔 · bias 갱신 0 · KL 0 + threshold 2 · lr 1e-6 warmup 10 · 128K | `RL_PLAN.md` 결정 15 |
 | Megatron-Bridge 포인터를 fork(`bcc4e415`)로 고정할지 | 현재 superproject 기록은 upstream `0c565c9a` — 새 클론은 AlphaBridge 가 없다 | `.claude/rules/alpha-submodules.md` |
 | 셋업 재구성 제안 | 로컬 venv 스냅샷 · 인터프리터 로컬 · 바이트코드 사전 컴파일 · JIT 캐시 로컬 (2026-10-06 제안, 승인 대기) | `SETUP.md` §1 |
-| RL 학습 워커에 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 를 기본값으로 둘지 (D6) | 권고: 정책 워커에만 켠다. Pai SFT 는 항상 켰고 "refit 5배" 근거는 측정 없는 FP8 docstring 이다. G5 에서 refit 시간을 확인한다. 끄면 1노드 상한은 rank 당 12K 토큰(96K/CP8)이다 | `KNOWN_ISSUES.md` 2026-10-07 메모리 항목 |
-| RLVR1 블렌드의 judge·sandbox 의존 행 23.4% + nvarc 4.2% (D1) | 블렌드에서 제외 / node1 일부를 judge 로 / 외부 API. identity 689행도 GenRM 채점 | `RLVR_READINESS.md` H4 |
-| vLLM prefix caching (D2) | 끈다(upstream R3 레시피) / 켜고 R3 route 누락을 따로 검증. NeMo-RL 은 키가 없으면 켠다 | `RLVR_READINESS.md` M1 |
-| RL 부하 균형 (D3) · KL 계수 (D4) · 길이 단계 (D7) | bias 갱신 0 유지 vs 1e-3(Ultra) · KL 0 + `seq_logprob_error_threshold: 2`(Ultra) vs 0.01(상속) · 128K 바로 vs 단계 상향 | `RLVR_READINESS.md` §7 |
-| 본 RL 레시피의 lr·warmup·라우터 동결 유지 (D5) | 스모크 레시피 값은 KL 게이트용이다. clip 은 결정됨에 가깝다: SFT 8.0@CP8 = NeMo-RL 1.0 (Pai grad norm 은 CP 배수, NeMo-RL 은 CP 무관 — `RLVR_READINESS.md` §2). 스케줄 단위는 GRPO step | `grpo_alpha_smoke_muon.yaml` 헤더, `RL_PLAN.md` §2 승계 범위 |
+| RL 학습 워커에 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 를 기본값으로 둘지 (D6) — **첫 런은 권고값(켬)으로 간다 (사용자 2026-10-07)** | 권고: 정책 워커에만 켠다. Pai SFT 는 항상 켰고 "refit 5배" 근거는 측정 없는 FP8 docstring 이다. G5 에서 refit 시간을 확인한다. 끄면 1노드 상한은 rank 당 12K 토큰(96K/CP8)이다 | `KNOWN_ISSUES.md` 2026-10-07 메모리 항목 |
 | MOPD 재현 범위 · 장문 컨텍스트 캡 | 교사 슬롯 2~3 vs 5 · SWE 교사·MOPD 192k → 128k 캡 또는 SWE 슬롯 축소 · NeMo RL/Gym 스택 포팅 vs 자체 구현(verl/ChatLearn 백엔드 검토) | `RL_PLAN.md` §4 |
 | ARC-AGI-v1 사용 | 라이선스 `pending-legal-review` — 블렌드 내 nvarc 행(각 ~2%) 사용 전 법무 확인 | `RL_DATA.md` §3 |
 

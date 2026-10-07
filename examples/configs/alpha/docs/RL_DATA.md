@@ -43,6 +43,7 @@ Ultra RL 블렌드는 **이미 NeMo Gym 실행 형식**(행별 `agent_ref` 라�
 | `ultra_restored/*.jsonl` (7종) | 마스킹 수학 행 복원본 | `fill_placeholders.py`로 rlvr1/rlvr2/mopd 각 6,181행 복원 (DAPO/Skywork 소스) |
 | `rlvr1_alpha.jsonl` | 99,113행 | 복원본 + **identity 689행(0.70%)** 주입, 시드 20260813 |
 | `rlvr2_alpha.jsonl` | 99,810행 | 복원본 + identity 694행(0.70%), 시드 20260814 |
+| `rlvr1_alpha_judgefree.jsonl` (2026-10-07) | 71,730행 | 첫 RLVR 런용 (결정 D1). `rlvr1_alpha` 에서 GenRM·LLM judge·안전 judge·sandbox·nvarc 환경 제외 — `tools/filter_rl_blend.py --preset judge_free`, 통계 `.stats.json`, D1 구조 게이트 OK. identity 행은 GenRM 채점이라 빠진다 |
 
 - 도구: `tools/inject_identity_blend.py`(비율 0.3~1.0% 강제, 시드 고정), `tools/verify_rl_blend.py`(전행 JSON/키/잔여 마스킹 검사 + agent 분포) — 두 블렌드 모두 **구조 검증 통과** (`GATES.md` D1)
 - identity 데이터 생성 정본은 Pai `examples/alpha/sdg/identity/README.md` (identity_card 단일 진실 원천).

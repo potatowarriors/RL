@@ -182,14 +182,14 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 
 **3단계 — 속도 최적화 (병목 쪽만)**: §5 의 연기 항목. 학습 병목이면 R5 후속, 롤아웃 병목이면 vLLM 레버 (M2·M4·D2 포함, 바꿀 때마다 R1).
 
-## 7. 결정이 필요한 것
+## 7. 결정 (2026-10-07 사용자 결정 — `RL_PLAN.md` 결정 15)
 
-| # | 결정 | 선택지 |
+| # | 결정 | 결과 |
 |---|---|---|
-| D1 | judge·sandbox 의존 행 23.4% + nvarc 4.2% — **G5 와 첫 런을 막는다** | 블렌드에서 제외 / node1 일부를 judge 로 / 외부 API |
-| D2 | prefix caching | 끈다(upstream R3 레시피) / 켜고 R3 를 따로 검증 |
-| D3 | 부하 균형 | bias 갱신 0 유지 / 1e-3 (Ultra) |
-| D4 | KL | 0 + `seq_logprob_error_threshold: 2` (Ultra, KL 정합 지표 유지) / 0.01 (상속) |
-| D5 | lr·warmup | 옵티마이저 상태가 새로 시작하므로 짧은 warmup 권고 |
-| D6 | ES 기본값 | 정책 워커에 켜기 권고 — Pai SFT 는 항상 켰다. G5 에서 refit 시간 확인 |
-| D7 | 길이 단계 | 128K 바로 / Ultra 처럼 단계 상향 (49K→65K) |
+| D1 | judge·sandbox 의존 행 23.4% + nvarc 4.2% | **첫 런은 judge 불필요 10개 환경만** — `rlvr1_alpha_judgefree.jsonl` 71,730행 (D1 구조 게이트 OK). 도구 호출 환경이 52.9% 가 된다. identity·GenRM·judge 환경은 judge 배치 결정 뒤 |
+| D2 | prefix caching | 권고값(끔) 유지 — upstream R3 레시피와 같음 |
+| D3 | 부하 균형 | **expert bias 갱신 0** (R1·G2 검증 조건) |
+| D4 | KL | **0 + `seq_logprob_error_threshold: 2`** (rollout↔train 정합 지표 유지) |
+| D5 | lr·warmup | **Muon lr 1e-6, warmup 10 GRPO step** |
+| D6 | ES 기본값 | 권고값(정책 워커에 켬) 유지 — G5 에서 refit 시간 확인 |
+| D7 | 길이 | **128K 바로** |
