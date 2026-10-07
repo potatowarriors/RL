@@ -149,7 +149,7 @@ def check(cfg: dict) -> None:
         err("colocated(CUDA IPC refit) + expandable_segments: 이 컨테이너에서 refit 이 pidfd_getfd EPERM 으로 실패한다 "
             "(KNOWN_ISSUES 2026-10-07). colocated 런은 env_vars 에서 ES 를 뺀다")
     if vcfg.get("enforce_eager") is False:
-        warn("enforce_eager: false — R1 은 eager 로만 통과했다. CUDA graph 경로에서 R1 을 다시 잰다 (M4)")
+        warn("enforce_eager: false (CUDA graph) — G5 KL 0.0018 로 기준 이내 (eager 0.0016~0.0017). 런에서 KL 을 계속 본다 (M4)")
 
     # H3·H4: Gym
     if use_gym:

@@ -23,7 +23,8 @@ checkpointing:
   enabled: true
   checkpoint_dir: "results/alpha_student_rlvr1"
   metric_name: null                     # 검증 대신 Pai 벤치로 평가 (RL_PLAN.md §5)
-  keep_top_k: 1000000                   # 전부 보존 (Ultra 동일). ckpt 1개 ≈ 150 GB(옵티마이저 포함) — 디스크 계획은 본 런 전에
+  keep_top_k: 3                         # 사용자 결정 2026-10-07: 최근 3개(재개용, 1개 155 GB) + tools/export_watch.sh 가 50스텝마다 HF 반출(평가·롤백용).
+                                        # Ultra 는 전부 보존 — 1에폭 ≈ 17 TB 라 NFS(여유 13 TB, 공용)에 못 둔다
   save_period: 10
   model_save_format: "safetensors"
   save_consolidated: false
@@ -243,11 +244,12 @@ env:
 
 # Ultra 의 token_ids(unwanted [2]·think 12/13)는 Nemotron 토크나이저 id 다 — alpha 에서는 <|im_start|>·<tool_response>·</tool_response> 가 된다.
 # alpha: <think> 14 · </think> 15 · <|im_start|> 2 · <tool_response> 12 · </tool_response> 13 (check_alpha_recipe.py 가 토크나이저와 대조)
-reward_penalties:
-  penalize_duplicated_reasoning: false  # 결정 대기 — Ultra 는 4종 전부 켬
-  penalize_empty_final_answer: false
-  penalize_unwanted_tokens: false
-  penalize_malformed_think_tag: false
+reward_penalties:                       # 사용자 결정 2026-10-07: Ultra 와 같이 4종 켬 (발동 시 보상 0).
+  # G5 롤아웃 384개 오프라인 적용(tools/analyze_reward_penalties.py): 보상 > 0 인 83개 중 깎이는 것 0 — 발동은 이미 보상 0 인 잘림·퇴화 응답
+  penalize_duplicated_reasoning: true
+  penalize_empty_final_answer: true
+  penalize_unwanted_tokens: true
+  penalize_malformed_think_tag: true
   token_ids:
     unwanted: [2, 12, 13]               # 응답 안의 <|im_start|>·<tool_response>·</tool_response>
     think_open: 14
