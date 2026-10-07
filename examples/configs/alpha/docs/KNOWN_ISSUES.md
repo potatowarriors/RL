@@ -5,6 +5,21 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## colocated refit 이 `pidfd_getfd: Operation not permitted` 로 실패한다 — `expandable_segments` 메모리의 CUDA IPC 를 컨테이너가 막는다 (2026-10-07 ✅ colocated 에서는 ES 끔)
+
+**발견 경위**: G3(Gym 1노드 colocated 스모크)가 첫 refit 에서 죽었다. vLLM async 워커(EngineCore)가 학습 워커의 CUDA IPC 핸들을 열다가
+`weight load failed: RuntimeError: pidfd_getfd: Operation not permitted; missing keys (14181)` 를 냈다. 같은 1노드 colocated 인 R1·G2 는 통과했다.
+
+**원인**: 레시피 `student_rlvr1_alpha.yaml` 이 정책 워커에 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`(결정 D6 권고값)를 켠다.
+ES 로 잡은 메모리를 다른 프로세스가 CUDA IPC 로 열려면 수신 측이 `pidfd_getfd` 로 내보낸 쪽의 파일 기술자를 가져와야 한다.
+이 컨테이너는 `kernel.yama.ptrace_scope=1` 이고 `CAP_SYS_PTRACE` 가 없다. vLLM EngineCore 는 학습 워커의 자손이 아니라서 거부된다.
+R1·G2 는 ES 를 켜지 않아 일반 cudaMalloc IPC 를 썼다.
+
+**대응**: colocated(IPC refit) 런에서는 ES 를 끈다 (`policy.megatron_cfg.env_vars=null`). 2노드 분리 토폴로지는 NCCL broadcast 로 refit 하므로 IPC 를 쓰지 않는다 — G5 에서 확인한다.
+`tools/check_alpha_recipe.py` 가 colocated + ES 조합을 ERROR 로 막는다. 128K 학습(R4: ES 없으면 rank 당 12K 토큰 상한)은 분리 토폴로지 전제다.
+
+**교훈**: 할당자 설정은 학습 메모리만이 아니라 프로세스 간 메모리 공유(refit) 경로까지 바꾼다. NeMo-RL 주석의 "ES 는 weight transfer 5배 느림"보다 이 환경에서는 "colocated IPC 불가"가 실제 제약이다.
+
 ## R4 결과 JSON 의 loss 가 전부 NaN 이고 처리량도 과소 측정됐다 — 하네스가 없는 키를 읽고 워밍업 스텝을 쟀다 (2026-10-07 ✅ 수정)
 
 **발견 경위**: 이식 위험 보고(`RLVR_READINESS.md`)를 쓰며 R4 산출물을 다시 읽었다. 5개 조건(16K/CP2 ~ 128K/CP8) 전 rank·전 스텝의 `loss` 가 NaN 이었다.
