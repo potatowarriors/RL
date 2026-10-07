@@ -105,7 +105,7 @@ policy:
     # (moe_router_fusion 은 megatron_cfg 최상위 키가 아니다. model_overrides 에 넣지 말 것 — check_alpha_recipe.py 가 막는다)
     moe_router_bias_update_rate: 0.0    # D3 (Ultra 1e-3). 켜면 바뀐 bias 의 vLLM 반영 게이트가 먼저 필요하다 (M8)
     env_vars:
-      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"   # D6 권고 — 128K/CP8 Triton OOM 회피 (R4). Pai SFT 도 항상 켰다
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"   # D6 — 128K/CP8 Triton OOM 회피 (R4). 2노드 분리 전용: colocated(IPC refit)에서는 pidfd_getfd EPERM (KNOWN_ISSUES 2026-10-07) → env_vars=null
     optimizer:
       lr: 1.0e-6                        # D5 결정 대기
       min_lr: 1.0e-6
@@ -135,7 +135,8 @@ policy:
     vllm_kwargs:
       enable_chunked_prefill: false     # D2 와 함께 (upstream R3 레시피)
       max_num_seqs: 256                 # M2: async 경로 기본값(128)이 작다 — Ultra 값
-      max_num_batched_tokens: 16384     # M2: async 경로 기본값(2048)이면 128K prefill 이 약 124 스텝
+      # M2·G3: chunked prefill 을 끄면 vLLM 은 max_num_batched_tokens >= max_model_len 을 요구한다 (아니면 엔진 기동 실패, G3 2026-10-07)
+      max_num_batched_tokens: ${policy.max_total_sequence_length}
     colocated:
       enabled: false
       resources:

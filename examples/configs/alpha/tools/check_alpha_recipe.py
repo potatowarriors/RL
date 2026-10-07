@@ -116,12 +116,19 @@ def check(cfg: dict) -> None:
         warn("vllm_cfg.enable_prefix_caching 미지정 — NeMo-RL 이 sm≥8 에서 켠다 (vLLM 은 하이브리드에 기본 끔). 명시해 결정을 남긴다 (M1, D2)")
     elif vcfg.get("enable_prefix_caching") and r3:
         warn("prefix caching + R3: chunked prefill 이 강제되고 route 행이 드물게 누락된다 — NRL_ROUTER_REPLAY_VALIDATE=1 로 게이트 (M1)")
+    if vkw.get("enable_chunked_prefill") is False and vkw.get("max_num_batched_tokens", 0) < vcfg["max_model_len"]:
+        err(f"chunked prefill 끔 + max_num_batched_tokens({vkw.get('max_num_batched_tokens')}) < max_model_len({vcfg['max_model_len']}) — "
+            "vLLM 엔진이 기동하지 못한다 (G3 2026-10-07)")
     if async_on:
         for k in ("max_num_batched_tokens", "max_num_seqs"):
             if k not in vkw:
                 warn(f"async vLLM 인데 vllm_kwargs.{k} 미지정 — usage_context 없는 기본값(2048·128)이 된다 (M2)")
         if vcfg.get("expert_parallel_size", 1) not in (1, vcfg.get("tensor_parallel_size", 1)):
             err("async vLLM 은 EP≠TP 를 쓸 수 없다 (vllm_generation.py)")
+    alloc = str(((mcfg.get("env_vars") or {}).get("PYTORCH_CUDA_ALLOC_CONF")) or "")
+    if gen["colocated"]["enabled"] and "expandable_segments:True" in alloc:
+        err("colocated(CUDA IPC refit) + expandable_segments: 이 컨테이너에서 refit 이 pidfd_getfd EPERM 으로 실패한다 "
+            "(KNOWN_ISSUES 2026-10-07). colocated 런은 env_vars 에서 ES 를 뺀다")
     if vcfg.get("enforce_eager") is False:
         warn("enforce_eager: false — R1 은 eager 로만 통과했다. CUDA graph 경로에서 R1 을 다시 잰다 (M4)")
 
