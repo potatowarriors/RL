@@ -4,7 +4,8 @@
 # (GDN 상태 fp32 · R3 · turn_end 3 · Muon SFT 동역학).
 #
 # ⚠ 아직 실행 레시피가 아니다. 아래 "결정 대기" 값은 현재 권고·보수값이며 사용자 결정 D1~D7 뒤 확정한다.
-#   D1 judge·sandbox 의존 환경 → env.nemo_gym.config_paths 에서 주석 처리돼 있다. 블렌드에는 그 행이 남아 있어 이대로는 Gym 이 실패한다.
+#   D1·D3·D4·D5·D7 은 사용자 결정 2026-10-07 로 확정 (judge 불필요 환경만 · bias 갱신 0 · KL 0 + threshold 2 · lr 1e-6 warmup 10 · 128K).
+#   첫 런 데이터는 judge 불필요 블렌드(rlvr1_alpha_judgefree.jsonl)다. judge·sandbox 환경은 config_paths 에서 주석 처리돼 있다.
 #   G2(packing+CP R1)·G3(Gym 파서)·R5(recompute·offload) 결과로 표시된 값을 바꾼다.
 #
 # 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/student_rlvr1_alpha.yaml
@@ -148,7 +149,7 @@ data:
   num_workers: 1
   use_multiple_dataloader: false
   train:
-    data_path: null                     # <rlvr1_alpha.jsonl> (RL_DATA.md §2) — D1 결정 전에는 judge·sandbox 행이 섞여 있다
+    data_path: null                     # 첫 런 = rlvr1_alpha_judgefree.jsonl (D1 사용자 결정 2026-10-07: judge·sandbox·nvarc 제외 71,730행, RL_DATA.md §2)
   validation:
     data_path: null
   default:
@@ -175,7 +176,8 @@ env:
     invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
     thinking_tags: ["<think>", "</think>"]
     config_paths:
-      - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+      # strict 유지 서버 (결정 13). NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins 가 필요하다 — G3 에서 실경로 검증
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
       # judge·sandbox 불필요 (블렌드 76.6%)
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
       - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
@@ -202,14 +204,14 @@ env:
       # - resources_servers/nvarc/configs/transductive.yaml
     policy_model:
       responses_api_models:
-        vllm_model:
+        alpha_vllm_model:
           num_workers: 8
           num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
           chat_template_kwargs: null
     policy_model_reasoning_off:
       _copy: policy_model
       responses_api_models:
-        vllm_model:
+        alpha_vllm_model:
           num_workers: 2
           num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
           chat_template_kwargs:

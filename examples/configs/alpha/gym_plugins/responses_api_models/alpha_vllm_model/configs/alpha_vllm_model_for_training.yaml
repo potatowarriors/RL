@@ -1,0 +1,12 @@
+# alpha 학습용 정책 모델 서버 — Gym responses_api_models/vllm_model/configs/vllm_model_for_training.yaml 과 같고 서버만 alpha_vllm_model.
+# 사용: NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins 를 설정하고 env.nemo_gym.config_paths 의 첫 줄을 이 파일로 바꾼다.
+policy_model:
+  responses_api_models:
+    alpha_vllm_model:
+      entrypoint: app.py
+      base_url: ${policy_base_url}
+      api_key: ${policy_api_key}
+      model: ${policy_model_name}
+      return_token_id_information: true
+      request_prompt_and_generation_token_ids: false
+      uses_reasoning_parser: true

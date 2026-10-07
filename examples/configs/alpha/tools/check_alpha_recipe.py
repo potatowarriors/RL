@@ -127,14 +127,17 @@ def check(cfg: dict) -> None:
 
     # H3·H4: Gym
     if use_gym:
-        if not async_on or not vcfg.get("async_engine") or not vcfg.get("expose_http_server"):
-            err("Gym 은 async GRPO + async_engine + expose_http_server 가 필요하다")
+        # Gym 은 async vLLM 엔진 + HTTP 서버를 요구한다. async GRPO 는 요구하지 않는다 (grpo.py _should_use_nemo_gym)
+        if not vcfg.get("async_engine") or not vcfg.get("expose_http_server"):
+            err("Gym 은 vllm_cfg.async_engine + expose_http_server 가 필요하다")
         sk = vcfg.get("http_server_serving_chat_kwargs") or {}
         if not sk.get("tool_parser") or not sk.get("reasoning_parser"):
             err("Gym 레시피에 vllm_cfg.http_server_serving_chat_kwargs.tool_parser·reasoning_parser 가 없다 — "
                 "alpha 도구 호출·추론 분리가 안 된다 (H3)")
-        elif sk.get("tool_parser") in ("qwen3_coder", "hermes") or sk.get("reasoning_parser") == "nano_v3":
-            warn(f"파서 {sk.get('tool_parser')}/{sk.get('reasoning_parser')} 는 Ultra·타 모델 값이다. alpha 는 Pai fleet 의 qwen3_xml/nemotron_v3 (G3)")
+        # vLLM 0.25.1 에서 qwen3_xml 과 qwen3_coder 는 같은 Qwen3EngineToolParser 다 (vllm/tool_parsers/__init__.py)
+        elif sk.get("tool_parser") not in ("qwen3_xml", "qwen3_coder") or sk.get("reasoning_parser") != "nemotron_v3":
+            warn(f"파서 {sk.get('tool_parser')}/{sk.get('reasoning_parser')} 는 G3 에서 검증한 조합이 아니다 "
+                 "(Pai fleet 의 alpha 조합은 qwen3_xml/nemotron_v3)")
         if grpo.get("invalid_tool_call_advantage") is not None:
             warn("invalid_tool_call_advantage 가 켜져 있다 — G3(파서 스모크) 통과 전에는 정상 호출이 벌점을 받을 수 있다 (H3)")
         ng = env.get("nemo_gym") or {}

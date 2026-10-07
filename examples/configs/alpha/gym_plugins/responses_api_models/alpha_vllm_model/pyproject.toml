@@ -1,0 +1,20 @@
+# alpha Gym 플러그인 — responses_api_models/alpha_vllm_model (Gym 0.6.0 vllm_model 서브클래스).
+# 서버 venv 는 Gym 내장 vllm_model 과 같은 의존성(nemo-gym[dev])을 쓴다. 경로는 이 디렉토리 기준 NeMo-RL 의 Gym 서브모듈.
+[project]
+name = "alpha-vllm-model"
+version = "0.1.0"
+requires-python = ">=3.13.14"
+dependencies = [
+    "nemo-gym[dev]",
+]
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61", "setuptools-scm"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["alpha_vllm_model"]
+
+[tool.uv.sources]
+nemo-gym = { path = "../../../../../../3rdparty/Gym-workspace/Gym", editable = true }
