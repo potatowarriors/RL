@@ -23,8 +23,9 @@ checkpointing:
   enabled: true
   checkpoint_dir: "results/alpha_student_rlvr1"
   metric_name: null                     # 검증 대신 Pai 벤치로 평가 (RL_PLAN.md §5)
-  keep_top_k: 3                         # 사용자 결정 2026-10-07: 최근 3개(재개용, 1개 155 GB) + tools/export_watch.sh 가 50스텝마다 HF 반출(평가·롤백용).
-                                        # Ultra 는 전부 보존 — 1에폭 ≈ 17 TB 라 NFS(여유 13 TB, 공용)에 못 둔다
+  keep_top_k: 2                         # 사용자 결정 2026-10-07: 최근 2개(재개용, 1개 155 GB — 평소 310 GB, 저장 중 465 GB)
+                                        # + tools/export_watch.sh 가 100스텝마다 HF 반출(평가·롤백용, 1개 30 GB, 모두 보존).
+                                        # Ultra 는 전부 보존 — 1에폭 ≈ 17 TB 라 NFS(공용)에 못 둔다
   save_period: 10
   model_save_format: "safetensors"
   save_consolidated: false

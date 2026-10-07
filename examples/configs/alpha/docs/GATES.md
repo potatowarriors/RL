@@ -52,7 +52,7 @@ MoE·bf16 에서는 같은 엔진끼리도 gradient cos 가 0.98 근처에서 �
 
 M5 의 KL 은 고정 배치 teacher-forced 값이고 R1 의 KL 은 모델 자신의 롤아웃 샘플 값이다. 측정 분포가 달라 두 수치를 직접 비교하지 않는다.
 미검증 범위: 시퀀스 2048·CP1 만 봤다. packing·CP 경로의 수치 동등성은 열려 있다 (`STATUS.md`).
-산출물·실행 스크립트: `$NRL_ROOT/gates/engine_parity_iter2400/` (`run_{pai,nemorl,hf}_sub1.sh`, `report.json`, 섭동 기준선 `report_pai_vs_pai_router_bf16.json`).
+산출물·실행 스크립트: `$NRL_ROOT/gates/engine_parity_iter2400/` (`run_{pai,nemorl,hf}_sub1.sh`, `report.json`, 섭동 기준선 `report_pai_vs_pai_router_bf16.json`). 랭크별 로짓 덤프(9.4 GB)는 2026-10-07 판정 기록 뒤 삭제했다 (`report*.json`·로그·스크립트는 남김).
 
 ```bash
 # 공존 환경(SETUP.md §1)에서는 앞에 $NRL_ROOT/clean_run.sh, uv 는 $NRL_ROOT/bin/uv, 끝에 </dev/null
@@ -187,7 +187,7 @@ Pai forward (`compare_hf_forward.py --control-sigmas 0,1e-7,1e-6`, transformers 
 Pai 서빙 (`serve_alpha.sh` TOOLS=1 · `nemotron_v3`, temperature 0, 시작점·반출을 GPU 1장씩): 6/6 요청의 finish 가 같다 (stop 5 · tool_calls 1).
 6/6 이 `<|im_end|>`(3)에서 멈췄고, 도구 호출 `get_weather(city=Seoul)` 가 파싱됐다. 4/6 은 토큰까지 같다. fact_on 은 52/101, math_on 은 135/341 토큰에서 갈라졌다 (위 잡음 바닥).
 Pai `forward_sanity.py` 는 ppl 6.48 로 PASS 다 (기준 100). 반출은 CPU 에서 2분 17초, 대조는 1분 11초 걸렸다.
-산출물: `$NRL_ROOT/gates/export_resume/` (`hf_g5_step3_v2`·`.compare.json`, `g6_pai_forward_control.json`, `g6_serve.json`, 변환기 원본 `hf_g5_step3`).
+산출물: `$NRL_ROOT/gates/export_resume/` (`hf_g5_step3_v2.compare.json`, `g6_pai_forward_control.json`, `g6_serve.json`, 로그). HF 반출본 3개(90 GB)는 2026-10-07 판정 기록 뒤 삭제.
 
 **G5 상세 (2026-10-07)**: 위치별 k3 — step 1 [0,256) 0.00130 → [4K,8K) 0.00197 → [8K,16K) 0.00178. 환경별 마스킹 0 (도구 환경 k3 0.0008~0.0016).
 KL 이 스텝마다 조금 오른다(0.00178 → 0.00191) — async 에서 궤적 일부가 한 스텝 전 가중치로 생성되고 3스텝은 생성 토큰이 80만으로 많다. 본 런에서 계속 본다.
