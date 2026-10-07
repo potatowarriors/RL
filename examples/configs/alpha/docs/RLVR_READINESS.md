@@ -173,7 +173,7 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 | G1 | packing 상태 누출 판별 (`tools/verify_packing_isolation.py`) | 1노드 | **PASS** — fla·FlashQLA 모두 4개 길이 쌍에서 B logprob 비트 동일 |
 | G2 | packing+CP 경로 정합: CP8+packing 으로 R1 (KL < 0.002, 위치 구간 평탄) + R3 trace 검증 (`NRL_R3_TRACE`·`tools/check_r3_trace.py`). 긴 생성 길이에서 위치별 KL | 1노드 | **PASS** — 4K CP8+packing 0.0015/0.0013/0.0014, R3 forward 검증 불일치 0 · 32K 생성 0.0016, 위치 16–32K 0.00166 (평탄) |
 | G3 | Gym 경로: 서버 파서 스모크(도구 호출 파싱·추론 분리·invalid 판정률) → `strict` 유지 구현(결정 13) → R3 P6 실경로 | 1노드 | **PASS (수정 뒤)** — KL 0.0017/0.0016, invalid·malformed 0/64, strict 렌더 36/36. 결함 5건 수정 — 그중 vLLM strict 도구 제약 디코딩(H3 의 새 형태)이 가장 중대 |
-| G5 | 실레시피 2노드 스모크: async + in-flight + Gym + 분리 토폴로지. refit 시간·KL·R3 누락 0·타이밍 지표 | 2노드 | D1 필요 |
+| G5 | 실레시피 2노드 스모크: async + in-flight + Gym + 분리 토폴로지. refit 시간·KL·R3 누락 0·타이밍 지표 | 2노드 | **PASS (수정 뒤)** — KL 0.0018/0.0018/0.0019, refit 28.4 s, route 누락 0. 비동기 저장 불가(ES) → 동기 저장 |
 | G6·G7 | G5 체크포인트로 HF 반출 → Pai forward_sanity·서빙 1건 · Muon 저장→재개 다음 스텝 비교 | 1노드 | G5 뒤 |
 
 **2단계 — 첫 RLVR 런 (정확성 확인 + 병목 측정)**
