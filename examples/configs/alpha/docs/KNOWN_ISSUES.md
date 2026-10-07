@@ -5,6 +5,22 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 런을 연장해 재개하면 Megatron 스케줄러 assert 로 멈춘다 — 스케줄 길이가 max_num_steps 를 따라간다 (2026-10-07 ✅ `scheduler.max_steps`)
+
+**발견 경위**: G7(저장 → 재개) 첫 시도에서 G5 의 step_3 를 `grpo.max_num_steps` 3 → 5 로 재개했다 (런 연장 시나리오).
+MegatronPolicyWorker 8개가 초기화에서 `AssertionError: OptimizerParamScheduler: class input value 640 and checkpointvalue 384 for total number of weight decay iterations do not match` 로 죽었다.
+
+**원인**: GRPO 는 `megatron_cfg.train_iters = min(max_num_steps, max_num_epochs × 에폭당 스텝)` 을 넣는다 (`nemo_rl/algorithms/grpo.py:1055`).
+`scheduler.max_steps` 가 없으면 Bridge 는 `wd_incr_steps = train_iters × GBS` 로 계산한다 (`megatron/bridge/training/config.py` `_calculate_scheduler_steps`).
+mcore `OptimizerParamScheduler.load_state_dict` 는 기본값(`override_opt_param_scheduler`·`use_checkpoint_opt_param_scheduler` 모두 false)에서 체크포인트 값과 다르면 assert 한다.
+384 = 3 × 128, 640 = 5 × 128 이다. 스텝 수·에폭·블렌드 크기 중 하나라도 바꾸고 재개하면 같은 assert 가 난다.
+
+**대응**: 레시피에 `policy.megatron_cfg.scheduler.max_steps: 100000` 을 둔다. Bridge 는 이 값으로 wd 증가·lr 감쇠 길이를 정해 train_iters 와 떼어 놓는다 (≥ train_iters 여야 한다).
+lr·wd 가 상수(lr = min_lr = 1e-6, wd 상수)라 수치는 같다. lr·warmup·wd 값을 바꾸고 재개하면 여전히 assert 한다 — 의도된 보호다.
+`check_alpha_recipe.py` 는 미설정을 WARN 으로, 실효 train_iters 보다 작은 값을 ERROR 로 막는다. 이 수정 전에 저장한 스모크 체크포인트(G5)는 감쇠 길이가 달라 이 레시피로 재개할 수 없다.
+
+**교훈**: 저장 → 재개 게이트는 같은 설정 재개만이 아니라 런 연장 시나리오로 돌린다.
+
 ## RL 체크포인트를 HF 로 반출하면 Pai 가 토크나이저를 못 읽는다 — 변환기가 메타데이터를 transformers 5 형식으로 다시 쓴다 (2026-10-07 ✅ `tools/export_rl_hf.sh`)
 
 **발견 경위**: G6(RL 체크포인트 → HF → Pai)에서 G5 step_3 를 NeMo-RL 변환기(`examples/converters/convert_megatron_to_hf.py`)로 반출했다.

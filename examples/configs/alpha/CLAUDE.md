@@ -41,6 +41,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - GPU 장수는 `cluster.gpus_per_node`·Ray 리소스로 제한한다. **`CUDA_VISIBLE_DEVICES` 금지** (원장 #19).
 - 모델 입력은 Pai `evaluate.sh` 경로로 변환·검증된 HF 체크포인트(`hfmodel_*`)다. 새 ckpt 는 `GATES.md` 재실행 조건을 따른다.
 - **RL 체크포인트 반출은 `tools/export_rl_hf.sh` 로만 한다.** 변환기 출력 그대로는 Pai(transformers 4.57)가 토크나이저를 못 읽는다 (G6).
+- 저장하는 레시피는 `megatron_cfg.scheduler.max_steps` 를 둔다 (≥ 실효 train_iters). 없으면 스텝 수를 바꿔 재개할 때 스케줄러 assert 로 멈춘다 (G7).
 - Muon(`dist_muon`): 필드명·기본값이 Pai SFT 와 다르다 — `muon_nesterov`(기본 False), `muon_extra_scale_factor`(기본 1.0 = SFT 의 5배)를
   명시한다. "필수 off" 4개를 끄지 않으면 셋업이 실패한다 (`grpo_alpha_smoke_muon.yaml` 헤더).
 
@@ -61,6 +62,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | 런 연장 재개에서 `OptimizerParamScheduler ... total number of weight decay iterations do not match` (G7) | 스케줄 길이가 train_iters(= max_num_steps)를 따라감 → 레시피 `scheduler.max_steps: 100000` |
 | 10-07 | RL 반출 HF 를 Pai 가 못 읽음 `Tokenizer class TokenizersBackend does not exist` (G6) | 변환기가 transformers 5.8 로 메타데이터를 다시 씀 → `tools/export_rl_hf.sh` 로만 반출 (메타데이터는 시작점 복사, 가중치 대조) |
 | 10-07 | 2노드 학습이 2스텝째 저장에서 멈춤 (`pidfd_getfd` · writer 사망, G5) | ES 메모리의 CUDA IPC 를 비동기 writer 가 못 받음 → `megatron_cfg.checkpoint.async_save: false` |
 | 10-07 | Gym 도구 환경 KL 0.0045, 도구 시퀀스 1/3 이 mult_prob_error > 2 (G3) | vLLM 이 `strict:true` 도구에 xgrammar 제약 디코딩 → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` (strict 렌더는 유지) → KL 0.0017 |

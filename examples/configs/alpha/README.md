@@ -16,7 +16,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 |---|---|---|
 | `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`) + 멀티턴 경계 `<\|im_end\|>`(`generation.vllm_cfg.turn_end_token_id: 3`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1·R3 |
 | `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 게이트 결과 R1·R2 |
-| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7 반영. 게이트 G1~G3·G5·G6 PASS, **G7(재개) 진행 중** (`docs/RLVR_READINESS.md` §6) |
+| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7 반영. 게이트 G1~G3·G5~G7 PASS — **첫 런 대기** (reward_penalties·체크포인트 보존 결정, `docs/STATUS.md`) |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
 | `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | 미작성 |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
@@ -26,7 +26,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | 경로 | 내용 |
 |---|---|
 | `vllm_alpha_plugin/` | vLLM 플러그인 패키지 (커밋 `599b58ac3`, pyproject 의 vllm extra + uv source 로 연결). `vllm.general_plugins` 엔트리포인트로 stock 0.25.1 휠에 `AlphaForCausalLM` 등록. qwen3_next 서브클래스 + 표준 RMSNorm 전면 교체(융합 QK-norm 커널은 zero-centered +1.0 하드코딩이라 비활성화) + FusedMoE DSV3 인자(`apply_routed_scale_to_output=False` 의도적) |
-| `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1·G1). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3), `verify_packing_isolation.py` 는 packing 상태 누출(G1) |
+| `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1·G1·G7). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3), `verify_packing_isolation.py` 는 packing 상태 누출(G1), `verify_optimizer_resume.py` 는 재개 전후 옵티마이저 상태 연속성(G7, CPU) |
 | `tools/check_alpha_recipe.py` | 레시피 실행 전 검사 (CPU) — R3+router fusion·파서·Ultra token id·GBS 나눗셈·CP 패딩·eos 등 |
 | `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
 | `tools/measure_train_memory.py` | 학습 스텝 메모리·처리량 실측 (R4·R5) — Ray 없이 torchrun 으로 `MegatronPolicyWorkerImpl` 을 직접 만든다. recompute 변형·합성 R3 route·스텝당 마이크로배치 수 |
@@ -36,6 +36,8 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/filter_rl_blend.py` · `tools/measure_blend_prompt_lengths.py` | RL 블렌드 환경 필터(`--preset judge_free`, D1) · 첫 턴 프롬프트 길이 데이터 게이트 (`max_model_len` 초과 행은 런을 멈춘다) |
 | `tools/export_rl_hf.sh` | **RL 체크포인트 → Pai 호환 HF 반출은 이것으로만** (G6). 변환 → 메타데이터 시작점 복사 → `compare_hf_weights.py` 대조. 변환기 출력 그대로는 Pai 가 토크나이저를 못 읽는다 |
 | `tools/compare_hf_weights.py` · `tools/compare_hf_forward.py` | 반출 HF ↔ 시작점 대조: 텐서·동결·dtype (CPU) · Pai 환경 config·토크나이저·forward + 잡음 바닥 통제 (G6) |
+| `tools/export_watch.sh` | 본 런 체크포인트를 N 스텝마다 `export_rl_hf.sh` 로 반출하는 감시 루프 (keep_top_k 가 지우기 전에) |
+| `tools/analyze_reward_penalties.py` | Ultra reward_penalties 4종을 롤아웃에 오프라인으로 적용해 발동률·오탐(보상 > 0 이 0 으로 깎이는 수)을 잰다 (CPU) |
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |
 | `tools/inject_identity_blend.py` | RL 블렌드 identity 주입 (`docs/RL_DATA.md` §2) |
 | `gym_plugins/responses_api_models/alpha_vllm_model/` | Gym 정책 서버 플러그인 — 도구 정의의 `strict` 를 유지한다 (결정 13). `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |

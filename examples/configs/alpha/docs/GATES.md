@@ -147,6 +147,29 @@ GPU 게이트 런처는 기동 직전에 GPU 점유를 검사한다. 한 장이�
 | G3 | Gym 경로 정합: Gym HTTP + 도구·추론 파서(`qwen3_xml`·`nemotron_v3`) + `strict` 유지 플러그인 서버 + R3, 1노드 colocated 동기 GRPO, judge 불필요 10개 환경 스모크 138행(도구 72행) | `$NRL_ROOT/gates/gym_smoke/run_g3.sh`, `tools/analyze_gym_logprob_gap.py` | Generation KL < 0.002 · seq mult_prob_error>2 마스킹 0 · invalid tool call·malformed think 0 · 도구 프롬프트에 `<strict>True</strict>` | 2026-10-07 iter2400 **PASS (수정 뒤)** — 첫 판정 KL 0.0043·0.0045, 도구 시퀀스 1/3 마스킹 FAIL → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` 뒤 **KL 0.0017/0.0016**, 마스킹 0, invalid 0/64, malformed 0/64, strict 렌더 36/36 |
 | G5 | 실레시피(`student_rlvr1_alpha.yaml`) 2노드 스모크: async + in-flight + Gym + 분리 토폴로지(롤아웃 sub1 · 학습 main1, NCCL refit over TCP), 128K·CP8·packing·ES·CUDA graph, judge 불필요 블렌드, 16 프롬프트 × 8, 생성 최대 16K, 3 스텝, step 2·3 저장 | `$NRL_ROOT/gates/two_node/{ray_node.sh,run_g5.sh}` | Generation KL < 0.002 · 마스킹 0 · R3 route 누락 경고 0 · 저장 성공 | 2026-10-07 iter2400 **PASS (수정 뒤)** — 첫 실행은 2스텝 비동기 저장에서 멈춤(ES + CUDA IPC) → `async_save: false` 뒤 **KL 0.0018/0.0018/0.0019**, 마스킹 0, route 누락 0, step_2·step_3 저장(각 155 GB) |
 | G6 | RL 체크포인트 → HF 반출 → Pai 소비 경로: G5 step_3 를 반출해 시작점 iter2400 과 가중치·메타데이터·Pai forward·Pai 서빙을 대조 | `tools/export_rl_hf.sh` (반출·메타데이터 복원·`compare_hf_weights.py`), `tools/compare_hf_forward.py` (Pai 환경), Pai `forward_sanity.py`, `$NRL_ROOT/gates/export_resume/g6_serve_compare.sh` | 텐서 이름·shape 일치 · 동결 텐서 비트 동일 · dtype 변경 무손실 · 비가중치 파일이 시작점과 같음 · Pai 의 토크나이저·config 해석 동일 · forward 차이가 잡음 바닥 이내 · 서빙 finish 가 stop/tool_calls 이고 `<\|im_end\|>` 에서 정지 | 2026-10-07 G5 step_3 **PASS (수정 뒤)** — 변환기 원본은 Pai 가 토크나이저를 못 읽는다(`TokenizersBackend`) → `export_rl_hf.sh` 가 메타데이터를 복원. 텐서 14,181개 오류 0, 라우터 24/24·expert bias 24/24 비트 동일, `A_log` fp32→bf16 18/18 무손실, forward_sanity ppl 6.48, 서빙 6/6 |
+| G7 | 저장 → 재개 (런 연장): 실레시피 2노드로 3스텝(step_2·step_3 저장) → step_3 에서 `max_num_steps` 5 로 재개(step_4·step_5 저장). 옵티마이저 상태 연속성은 연속 구간(2→3·4→5)과 재개 구간(3→4)을 비교 | `$NRL_ROOT/gates/two_node/run_g7.sh`, `tools/verify_optimizer_resume.py` (CPU) | 재개 기동 성공 · 스텝·데이터·replay buffer·lr 이어짐 · KL < 0.002 · 마스킹 0 · 옵티마이저 상태에 초기화·master 재생성·다른 상태 신호 0 · 음성 대조(다른 런 체크포인트) FAIL | 2026-10-07 iter2400 **PASS (수정 뒤)** — 첫 시도는 재개에서 스케줄러 assert (`wd_incr_steps` 640 vs 384) → 레시피 `scheduler.max_steps` 고정 뒤 재개 성공. step 4·5 KL 0.0019/0.0018 (연속 0.0016/0.0018/0.0019), 마스킹 0, lr 3.7e-7·4.6e-7 (warmup 직선), 옵티마이저 상태 초기화 신호 0/62 · 음성 대조 50/62 |
+
+**G7 상세 (2026-10-07, 16 프롬프트 × 8, 생성 최대 16K)**: 재개한 런이 이어받은 것은 다음과 같다.
+step 카운터(Step 4/5), `consumed_samples` 48 → 80, Gym 작업 인덱스(G7a 마지막 79 → G7b 새 롤아웃 80부터, 중복 없음), lr warmup(3.7e-7·4.6e-7).
+replay buffer 32 궤적도 이어받았다. 저장 전에 생성된 궤적을 step 4 학습에 썼고(평균 나이 1.00), R3 route 재생이 그 궤적에 적용됐다 (prev-logprob·train 재생 1,920건씩).
+그 궤적의 KL 0.0019 는 저장 전 step 3 과 같다 — 재개한 가중치가 저장 시점 가중치와 같다는 뜻이다.
+옵티마이저 상태는 `verify_optimizer_resume.py` 로 봤다 (GDN 층 0·attention 층 3·임베딩·출력·최종 norm 의 83개 키 중 62개 판정).
+상태는 0 에서 시작해 lerp 로 갱신된다 (Muon `momentum_buffer.lerp_(g, 0.05)`, Adam β1 0.9·β2 0.95). 그래서 초기화는 "0 에서 한 스텝" 이 되고 아래 기대값이 나온다.
+
+| 상태 (판정 키) | 연속 2→3 | 재개 3→4 | 연속 4→5 | 판정 기준 · 초기화됐을 때 |
+|---|---|---|---|---|
+| fp32 master 누적량 R 비율 (28) — bf16 아래 갱신의 누적 | 1.60~2.12 | 1.41~1.64 | 1.32~1.50 | ≥ 1 · 한 스텝 크기로 떨어져 < 1 |
+| Muon momentum cos (19) | 0.95~0.99 | 0.86~0.95 | 0.94~0.98 | ≥ 0.5 · 다른 상태면 ≈ 0 |
+| Muon momentum norm 비율 (19) | 0.95~1.01 | 0.99~1.22 | 0.89~1.04 | ≥ 0.7 · 0.4~0.6 |
+| Adam exp_avg_sq 합 비율 (15) | 0.96~1.10 | 0.99~2.03 | 0.95~1.10 | ≥ β2 0.95 (정확한 하한) · ≈ 0.35 |
+
+재개 구간의 Muon cos 가 낮은 것은 step 4 의 gradient 가 컸기 때문이다 (grad norm 0.045 → 0.073, 1.62배).
+EMA momentum 에 1.6배 크기의 직교 gradient 가 들어오면 cos 는 0.857 로 계산된다. 실측 최소는 0.862 다.
+첫 판정 기준(연속 구간과의 유사도)은 3/77 을 BAD 로 냈다. 두 norm 텐서의 exp_avg_sq 가 ×2.03 으로 **늘었는데**, 이는 초기화와 반대 방향이다.
+그래서 판정을 실패 양상별 신호(0 초기화·master 재생성·다른 상태)로 바꿨다. 유사도는 참고(UNUSUAL 3)로 남겼고, Adam exp_avg 는 정상·초기화 범위가 겹쳐 참고만 한다.
+음성 대조: 다른 런(G5)의 step_2·step_3 뒤에 G7a 의 step_2 를 이으면 50/62 신호로 FAIL 한다 (momentum 19/19, master 28/28, exp_avg_sq 3/15).
+Pai 의 `NCCL_MAX_NCHANNELS=16`(옵티마이저 상태 재개 OOM 회피) 없이도 재개 OOM 은 없었다.
+타이밍: G7a 22분(3스텝 + 저장 2회), G7b 18.6분(기동 + 2스텝 + 저장 2회). 산출물: `$NRL_ROOT/gates/two_node/` (`g7a_fresh*`·`g7b_resume*`, `g7_optimizer_resume.json`, `g7_optimizer_negative_control.json`).
 
 **G6 상세 (2026-10-07, G5 step_3 = 3스텝, warmup lr 1e-7~3e-7)**: 학습 행렬은 전부 바뀌었다 (비트 동일 0개, 최대 절대 변화 9.5e-7 = 2^-20, 상대 2e-7~1e-6).
 1차원 파라미터(norm·`dt_bias`)는 갱신이 bf16 해상도보다 작아 그대로다. 라우터·expert bias 는 동결(`freeze_moe_router`, bias 갱신 0)대로 비트 동일이다. 같은 크기의 다른 행렬은 전부 바뀌었으니 우연이 아니다.

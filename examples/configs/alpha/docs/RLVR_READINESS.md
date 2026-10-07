@@ -43,7 +43,7 @@ RLVR1 블렌드(`rlvr1_alpha.jsonl`) 99,113행 CPU 집계, R4 산출물 점검. 
 | MoE 융합 | grouped gemm·permute·router fusion | grouped gemm·permute 같음, router fusion 꺼짐 | router fusion 은 켜면 안 됨 → H1 |
 | rope 융합 | 켜짐 | 꺼짐 (사유 기록 없음) | 성능 차이 → §5 |
 | gradient accumulation fusion | 켜짐 | 꺼짐 (`setup.py:1037`) | 영향 낮음 |
-| `NCCL_MAX_NCHANNELS=16` | 옵티마이저 상태 재개 OOM 회피 (Pai 2026-07-15) | 미설정 | 재개 게이트 G7 |
+| `NCCL_MAX_NCHANNELS=16` | 옵티마이저 상태 재개 OOM 회피 (Pai 2026-07-15) | 미설정 | G7 재개(2노드·CP8)에서 OOM 없음 — 미설정 유지 |
 | FlashQLA | 채택 보류 (CP4/32K 는 fla 우세, 128K 형상만 2.2×) | opt-in | packed 다중 시퀀스 미검증 → fla 유지 |
 | effort 마커 | 템플릿이 `\n\n{reasoning effort: efficient}` 부착 | 블렌드 3,429행(3.5%)이 같은 형식. `env.nemo_gym.effort_levels` 미설정 | 형식 일치. 계수는 Ultra 레시피에 공개 (0.1/1/15000) |
 
@@ -125,7 +125,7 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 | M7 | async + in-flight 는 미검증 조건이다 | 진행 중 요청은 이전 가중치의 KV·GDN 상태로 생성을 잇는다. route 에 가중치 버전 표시가 없다. IS 보정은 async 에서 assert 로 강제된다 (`grpo.py:4113`, 상속값 false) | G5 |
 | M8 | bias 갱신을 켜면 vLLM 반영 게이트가 없다 | 매 optimizer step 마다 bias 4,608개가 ±1e-3 움직인다. M3 는 bias 불변 상태에서만 통과했다 | D3 와 함께 |
 | M9 | RL ckpt → HF → Pai 평가 방향은 미검증이다 | 반출은 tokenizer 를 재직렬화하고 `tokenizer_metadata.json` 을 복사하지 않는다. Gym 경로의 `<\|im_end\|>` 정지는 `generation_config.json` eos [3,0] 병합 하나에 기댄다 | G6 **PASS (수정 뒤, 2026-10-07)** — 변환기 원본은 Pai 가 토크나이저를 못 읽는다(`TokenizersBackend`). 반출은 `tools/export_rl_hf.sh` 로만 한다 (메타데이터는 시작점 복사, 서빙 6/6 `<\|im_end\|>` 정지) |
-| M10 | Muon 저장·재개 미검증 | LayerWise 체크포인트는 "fixed DP only" 다 (mcore `megatron/core/optimizer/layer_wise_optimizer.py:935-940`). 같은 CP·DP 로만 재개한다 | G7 |
+| M10 | Muon 저장·재개 미검증 | LayerWise 체크포인트는 "fixed DP only" 다 (mcore `megatron/core/optimizer/layer_wise_optimizer.py:935-940`). 같은 CP·DP 로만 재개한다 | G7 **PASS (수정 뒤, 2026-10-07)** — 런 연장 재개가 스케줄러 assert 로 막혀 레시피 `scheduler.max_steps` 고정. 재개 뒤 momentum·Adam 상태·fp32 master 가 이어짐 (초기화 신호 0/62, 음성 대조 50/62) |
 
 ### 낮음·운영
 - (prompts×gens)/GBS 가 나누어떨어지지 않으면 나머지 샘플이 조용히 빠진다 (`megatron_policy_worker.py:735`).
@@ -175,7 +175,7 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 | G3 | Gym 경로: 서버 파서 스모크(도구 호출 파싱·추론 분리·invalid 판정률) → `strict` 유지 구현(결정 13) → R3 P6 실경로 | 1노드 | **PASS (수정 뒤)** — KL 0.0017/0.0016, invalid·malformed 0/64, strict 렌더 36/36. 결함 5건 수정 — 그중 vLLM strict 도구 제약 디코딩(H3 의 새 형태)이 가장 중대 |
 | G5 | 실레시피 2노드 스모크: async + in-flight + Gym + 분리 토폴로지. refit 시간·KL·R3 누락 0·타이밍 지표 | 2노드 | **PASS (수정 뒤)** — KL 0.0018/0.0018/0.0019, refit 28.4 s, route 누락 0. 비동기 저장 불가(ES) → 동기 저장 |
 | G6 | G5 체크포인트로 HF 반출 → Pai forward_sanity·서빙 | 1노드 | **PASS (수정 뒤)** — 변환기 원본은 Pai 가 토크나이저를 못 읽는다 → `tools/export_rl_hf.sh` (메타데이터 시작점 복사). 가중치 오류 0·동결 텐서 비트 동일, forward 차이는 잡음 바닥, 서빙 6/6 |
-| G7 | Muon 저장 → 재개 (런 연장: max_num_steps 3→5) · 옵티마이저 상태 연속성 (`tools/verify_optimizer_resume.py`) | 2노드 | 진행 중 — 첫 시도는 재개에서 스케줄러 assert 로 실패 → 레시피 `scheduler.max_steps` 고정 뒤 재실행 |
+| G7 | Muon 저장 → 재개 (런 연장: max_num_steps 3→5) · 옵티마이저 상태 연속성 (`tools/verify_optimizer_resume.py`) | 2노드 | **PASS (수정 뒤)** — 첫 시도는 재개에서 스케줄러 assert → `scheduler.max_steps` 고정. step·데이터·replay buffer·lr 이어짐, KL 0.0019/0.0018, 옵티마이저 상태 초기화 신호 0/62 |
 
 **2단계 — 첫 RLVR 런 (정확성 확인 + 병목 측정)**
 - 결정 D1~D7 반영 레시피로 실행한다. 정확성 지표: rollout↔train KL(`seq_logprob_error`·위치별), R3 경고 0, 보상·잘림 비율, invalid tool call·malformed think 비율.
