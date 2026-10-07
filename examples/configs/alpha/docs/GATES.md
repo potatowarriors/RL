@@ -144,6 +144,13 @@ GPU 게이트 런처는 기동 직전에 GPU 점유를 검사한다. 한 장이�
 |---|---|---|---|---|
 | G1 | packing 상태 누출 — 같은 길이의 다른 앞 시퀀스 A·A' 뒤에 같은 B 를 묶어 B logprob 비교 (CP1·EP8, `make_sequence_length_divisible_by 16`, 입력 순서 유지 packer) | `tools/verify_packing_isolation.py` | B logprob 이 A 내용과 무관 (비트 동일 또는 잡음 기준선 이내, 앞 64 토큰 집중 없음) | 2026-10-07 iter2400 **PASS** — fla·FlashQLA 모두 4쌍 (A,B) = (4097,2048)·(16,777)·(8191,3001)·(1000,1000) 에서 **비트 동일** |
 | G2 | packing+CP 학습 경로의 rollout↔학습 정합 — R1 과 같은 레시피·시드(롤아웃 동일)에서 학습 배치 경로만 바꾼다. R3 route 추적·검증 켬 (`NRL_R3_TRACE*`, `NRL_ROUTER_REPLAY_VALIDATE=1`) | `grpo_alpha_smoke_muon.yaml` + override, `$NRL_ROOT/gates/packing_cp_r1/run_g2.sh`, `tools/analyze_rollout_logprob_gap.py`, `tools/check_r3_trace.py` | step 1·2·3 Generation KL < 0.002 · 위치 구간 평탄 · R3 forward 검증 불일치 0 · CP 토큰 일치 | 2026-10-07 iter2400 4K: **CP1+packing 0.0015/0.0013/0.0013 · CP8+packing 0.0015/0.0013/0.0014 PASS** (R1 Muon 0.0015/0.0013/0.0013). **32K 생성 CP8+packing step 1 0.0016 PASS** — 위치 [2K,4K) 0.00158 → [16K,32K) 0.00166 (+5%) |
+| G3 | Gym 경로 정합: Gym HTTP + 도구·추론 파서(`qwen3_xml`·`nemotron_v3`) + `strict` 유지 플러그인 서버 + R3, 1노드 colocated 동기 GRPO, judge 불필요 10개 환경 스모크 138행(도구 72행) | `$NRL_ROOT/gates/gym_smoke/run_g3.sh`, `tools/analyze_gym_logprob_gap.py` | Generation KL < 0.002 · seq mult_prob_error>2 마스킹 0 · invalid tool call·malformed think 0 · 도구 프롬프트에 `<strict>True</strict>` | 2026-10-07 iter2400 **PASS (수정 뒤)** — 첫 판정 KL 0.0043·0.0045, 도구 시퀀스 1/3 마스킹 FAIL → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` 뒤 **KL 0.0017/0.0016**, 마스킹 0, invalid 0/64, malformed 0/64, strict 렌더 36/36 |
+
+**G3 상세 (2026-10-07, main1·sub1, 32K·CP4·생성 최대 8K, 16 프롬프트 × 4)**: 스모크에서 레시피·코드 결함 5건을 찾아 고쳤다 (`KNOWN_ISSUES.md` 2026-10-07).
+① ES + colocated IPC refit 불가 ② 첫 턴 길이 초과 시 런 중단 ③ chunked prefill 끔 + batched tokens < max_model_len 기동 실패
+④ NeMo-RL 의 None content `TypeError` (upstream 수정 이식 `12e4b78df`) ⑤ vLLM 의 strict 도구 제약 디코딩 (도구 환경 KL 0.0045).
+환경별 보상: toolcall_schema 0.35~0.46 · swe_pivot 0.25~0.30 · mcqa 0.75 — 도구 호출이 파싱돼 채점까지 간다. math·code_gen 은 생성이 전부 8K 상한에서 `</think>` 전에 잘려 0 이다 (스모크 상한 탓).
+R3 forward 검증 3,840건 불일치 0. 산출물: `$NRL_ROOT/gates/gym_smoke/` (`g3_dump*`·`g3_final`·`g3_rates`).
 
 **G2 상세 (2026-10-07, 4K, step 1 = 같은 롤아웃 128 샘플·생성 토큰 444,238)**
 

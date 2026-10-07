@@ -89,6 +89,8 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 - `<think>`·`</think>` 는 alpha 토크나이저의 special token 이다. 추론 파서 없이 디토크나이즈하면 태그가 사라지고 추론이 답변에 섞인다 (Pai 08-30 사고 계열).
 - R3 렌더 게이트는 vLLM 서버를 띄우지 않았다.
 - 조치: G3.
+- **G3 결과 (2026-10-07)**: 파서는 맞았다(invalid 0/64). 대신 다른 형태로 터졌다 — vLLM 0.25.1 이 `strict: true` 도구에 xgrammar 제약 디코딩을 걸어
+  도구 롤아웃이 off-policy 가 됐다(KL 0.0045, 도구 시퀀스 1/3 마스킹). `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` 으로 해결(KL 0.0017).
 
 **H4. RLVR1 블렌드의 23.4% 는 현재 토폴로지에서 보상을 낼 수 없다.**
 
@@ -170,7 +172,7 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 | G0 | `student_rlvr1_alpha.yaml` 골격 · `tools/check_alpha_recipe.py` · R4 하네스 수정 | CPU | **완료** — 골격 검사 ERROR 0 / WARN 2, Ultra 함정 5개 주입 시 전부 ERROR |
 | G1 | packing 상태 누출 판별 (`tools/verify_packing_isolation.py`) | 1노드 | **PASS** — fla·FlashQLA 모두 4개 길이 쌍에서 B logprob 비트 동일 |
 | G2 | packing+CP 경로 정합: CP8+packing 으로 R1 (KL < 0.002, 위치 구간 평탄) + R3 trace 검증 (`NRL_R3_TRACE`·`tools/check_r3_trace.py`). 긴 생성 길이에서 위치별 KL | 1노드 | **PASS** — 4K CP8+packing 0.0015/0.0013/0.0014, R3 forward 검증 불일치 0 · 32K 생성 0.0016, 위치 16–32K 0.00166 (평탄) |
-| G3 | Gym 경로: 서버 파서 스모크(도구 호출 파싱·추론 분리·invalid 판정률) → `strict` 유지 구현(결정 13) → R3 P6 실경로 | 1노드 | 진행 중 — `strict` 유지 플러그인 서버 단위 테스트 3/3. 스모크에서 레시피 결함 2건 발견·수정(ES+colocated IPC refit 불가, chunked prefill 끔 + batched tokens) |
+| G3 | Gym 경로: 서버 파서 스모크(도구 호출 파싱·추론 분리·invalid 판정률) → `strict` 유지 구현(결정 13) → R3 P6 실경로 | 1노드 | **PASS (수정 뒤)** — KL 0.0017/0.0016, invalid·malformed 0/64, strict 렌더 36/36. 결함 5건 수정 — 그중 vLLM strict 도구 제약 디코딩(H3 의 새 형태)이 가장 중대 |
 | G5 | 실레시피 2노드 스모크: async + in-flight + Gym + 분리 토폴로지. refit 시간·KL·R3 누락 0·타이밍 지표 | 2노드 | D1 필요 |
 | G6·G7 | G5 체크포인트로 HF 반출 → Pai forward_sanity·서빙 1건 · Muon 저장→재개 다음 스텝 비교 | 1노드 | G5 뒤 |
 
