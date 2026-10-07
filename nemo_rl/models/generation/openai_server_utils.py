@@ -22,7 +22,7 @@ token-in/token-out via ``generate(input_ids)`` and never re-templates messages,
 so it has no retokenization drift to correct.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 
 def replace_prefix_tokens(
@@ -30,6 +30,7 @@ def replace_prefix_tokens(
     model_prefix_token_ids: list[int],
     template_prefix_token_ids: list[int],
     template_token_ids: list[int],
+    turn_end_token_id: Optional[int] = None,
 ) -> list[int]:
     """This is a subroutine used inside the OpenAI-compatible Chat Completion server.
 
@@ -88,12 +89,19 @@ def replace_prefix_tokens(
         replace_prefix_tokens keeps the exact prior model tokens up to EOS and
         resumes from the template after that EOS:
             output => [11,12,13,40,41,220,17,2,21,22,40,41]
+
+    ``turn_end_token_id`` overrides the boundary token. By default it is
+    ``tokenizer.eos_token_id``, which is right when the chat template ends every
+    message with EOS (e.g. Qwen's ``<|im_end|>`` is its EOS). Models whose EOS is
+    a separate pre-training document token (alpha: EOS ``<|endoftext|>`` = 0,
+    message end ``<|im_end|>`` = 3) must pass the message-end token, otherwise
+    no boundary is found in multi-turn history.
     """
     if not model_prefix_token_ids:
         return template_token_ids
 
-    eos_token_id = tokenizer.eos_token_id
-    assert eos_token_id is not None, "Tokenizer must have an EOS token ID"
+    eos_token_id = turn_end_token_id if turn_end_token_id is not None else tokenizer.eos_token_id
+    assert eos_token_id is not None, "Tokenizer must have an EOS token ID (or pass turn_end_token_id)"
 
     # The model isn't guaranteed to end on EOS (e.g. it hit max_tokens); chat
     # templates always add one, so cut the model input to just before its EOS.

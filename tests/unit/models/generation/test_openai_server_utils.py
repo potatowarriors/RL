@@ -121,3 +121,42 @@ def test_replace_prefix_tokens_qwen3_think_shift_picks_assistant_eos_not_user_eo
 
     assert result == [11, 12, 99, 99, 99, 55, 2, 70, 71, 2, 40, 41]
     assert 70 in result and 71 in result
+
+
+class _SeparateEosTokenizer:
+    """alpha-style tokenizer: EOS is a pre-training document token (0) that chat
+    messages never contain; every message ends with <|im_end|> (3)."""
+
+    eos_token_id = 0
+
+    def decode(self, *args, **kwargs):
+        return ""
+
+
+def test_replace_prefix_tokens_separate_eos_without_turn_end_raises():
+    """With EOS != message end, counting EOS finds no boundary in multi-turn history."""
+    model_prefix_token_ids = [2, 50, 51, 3]  # prior prompt + model output ending in <|im_end|>
+    template_prefix_token_ids = [2, 50, 52, 3]  # template re-tokenized the prior turn
+    template_token_ids = [2, 50, 52, 3, 60, 61]
+    with pytest.raises(AssertionError):
+        replace_prefix_tokens(
+            tokenizer=_SeparateEosTokenizer(),
+            model_prefix_token_ids=model_prefix_token_ids,
+            template_prefix_token_ids=template_prefix_token_ids,
+            template_token_ids=template_token_ids,
+        )
+
+
+def test_replace_prefix_tokens_turn_end_token_id_override_splices_at_message_end():
+    """Passing the message-end token keeps the exact model tokens and resumes after <|im_end|>."""
+    model_prefix_token_ids = [2, 50, 51, 3]
+    template_prefix_token_ids = [2, 50, 52, 3]
+    template_token_ids = [2, 50, 52, 3, 60, 61]
+    result = replace_prefix_tokens(
+        tokenizer=_SeparateEosTokenizer(),
+        model_prefix_token_ids=model_prefix_token_ids,
+        template_prefix_token_ids=template_prefix_token_ids,
+        template_token_ids=template_token_ids,
+        turn_end_token_id=3,
+    )
+    assert result == [2, 50, 51, 3, 60, 61]

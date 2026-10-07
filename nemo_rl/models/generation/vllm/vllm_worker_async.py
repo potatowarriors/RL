@@ -406,6 +406,9 @@ class VllmAsyncGenerationWorkerImpl(
         )
         openai_serving_models = OpenAIServingModels(**openai_serving_models_kwargs)
 
+        # Message-end token for multi-turn prefix replacement (None -> tokenizer EOS).
+        turn_end_token_id = self.cfg["vllm_cfg"].get("turn_end_token_id")
+
         class NeMoRLOpenAIChatRequestMixin:
             def model_post_init(self, context):
                 # NeMo-Gym specific processing. This is just how NeMo-Gym returns the extra token information.
@@ -558,6 +561,7 @@ class VllmAsyncGenerationWorkerImpl(
                     model_prefix_token_ids=request.required_prefix_token_ids,
                     template_prefix_token_ids=actual_corresponding_token_ids,
                     template_token_ids=engine_prompt["prompt_token_ids"],
+                    turn_end_token_id=turn_end_token_id,
                 )
 
                 engine_prompt["prompt_token_ids"] = final_prompt_token_ids

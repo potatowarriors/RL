@@ -54,6 +54,10 @@ class VllmSpecificArgs(TypedDict):
     # Exposing vLLM as a server is useful in instances where the multi-turn rollout is performed with utilities outside of NeMo RL, but the user still wants to take advantage of the refit logic in NeMo RL that keeps the policy and generation up to date.
     # Currently it will expose the /tokenize and /v1/chat/completions endpoints. Later on we may expose /v1/completions or /v1/responses.
     expose_http_server: NotRequired[bool]
+    # Token that ends each chat message, used to splice the model's own tokens into re-templated
+    # multi-turn history (openai_server_utils.replace_prefix_tokens). Default (None) = tokenizer EOS.
+    # Set it when EOS is a pre-training document token distinct from the message end (alpha: <|im_end|> = 3).
+    turn_end_token_id: NotRequired[int | None]
     # Environment variable containing the internal refit API key.
     http_refit_api_key_env_var: NotRequired[str | None]
     # Fixed internal refit endpoint port for stable Kubernetes targetPorts.
