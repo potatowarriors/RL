@@ -183,6 +183,15 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
   `exposed_generation` 이 크면 롤아웃 병목, 0 에 가깝고 버퍼가 차 있으면 학습 병목이다.
 - 초기 체크포인트를 Pai 벤치로 평가해 비하락을 확인한다.
 
+**2단계 운영 (2026-10-07 21:19 시작, 커밋 `546b2b549`)**: 실행기는 `$NRL_ROOT/runs/rlvr1_alpha/` 에 있다.
+`run_rlvr1.sh <tag> [override]` 는 `gates/two_node/run_g5.sh` 와 같은 2노드 환경으로 기동하고, 기동 전에 GPU 점유를 검사한다(1 GiB).
+`run_first.sh` 는 구간 1 과 구간 2 를 잇는다. 모든 구간이 같은 `ckpt/` 를 쓰므로 다시 실행하면 최신 step 에서 재개한다 (G7).
+- 구간 1 `seg1`: `grpo.max_num_steps=10 env.should_log_nemo_gym_responses=false` — 학습 데이터 덤프(`seg1/exp_*/train_data_step*.jsonl`)와 R3 trace 를 남긴다.
+- 구간 2 `seg2`: 덤프·trace 를 끄고 레시피 기본값(1에폭 ≈ 1,120 스텝)까지 이어 간다. route 검증(`NRL_ROUTER_REPLAY_VALIDATE=1`)은 계속 켠다.
+- HF 반출: `tools/export_watch.sh ckpt hf 50 300` 이 50스텝 체크포인트를 `hf/hf_step_NNNNN` 으로 반출한다 (CPU, 1회 30 GB).
+- 체크포인트 관리: NeMo-RL 은 새 체크포인트를 `tmp_step_N` 에 다 쓰고 이름을 바꾼 뒤 오래된 것을 지운다 (`finalize_checkpoint` → `remove_old_checkpoints`).
+  그래서 저장하는 동안에는 보존 개수 + 1 개가 디스크에 있다. 사용량은 `STATUS.md` 첫 런 행에 둔다.
+
 **3단계 — 속도 최적화 (병목 쪽만)**: §5 의 연기 항목. 학습 병목이면 R5 후속, 롤아웃 병목이면 vLLM 레버 (M2·M4·D2 포함, 바꿀 때마다 R1).
 
 ## 7. 결정 (2026-10-07 사용자 결정 — `RL_PLAN.md` 결정 15)
