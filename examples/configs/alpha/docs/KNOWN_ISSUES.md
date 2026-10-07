@@ -24,14 +24,15 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 **교훈**: fork 가 upstream 에서 두 달 떨어지면 정확성 수정도 함께 놓친다. 큰 런 전에 분기점 이후 upstream 의 `fix(` 커밋을 우리 경로(async·Gym·Megatron) 기준으로 훑는다.
 
-## Ray 를 쓰는 단위 테스트가 실행 중인 운영 클러스터에 붙는다 (2026-10-08)
+## NeMo-RL 단위 테스트가 실행 중인 운영 Ray 클러스터에 붙는다 (2026-10-08)
 
 **발견 경위**: 이식 검증으로 main1 에서 `test_vllm_generation.py` 를 돌렸다. 통합 테스트 하나가 placement group 대기 시간 초과로 실패했는데,
 `ray list placement-groups` 에 그 테스트의 `vllm-test-policy-cluster-separate-node0` 가 운영 클러스터 기록으로 남아 있었다 (REMOVED).
-`RAY_ADDRESS` 를 지워도 `ray.init()` 이 `/tmp/ray/ray_current_cluster` 로 같은 노드의 클러스터를 찾아 붙는다.
-이번에는 GPU 가 모두 런에 잡혀 있어 테스트가 자원을 못 얻고 끝났다. 런이 끝나 GPU 가 비는 순간에 돌았다면 테스트가 GPU 를 가로챌 수 있었다.
+원인은 `tests/unit/conftest.py:403` 의 session autouse fixture `init_ray_cluster`(`init_ray()`)다. Ray 를 쓰지 않는 테스트를 골라 돌려도
+세션마다 같은 노드의 실행 중 클러스터에 연결하고(로그 "Connecting to existing Ray cluster at address: 10.0.37.4:6379"), GPU 모니터(`ray_gpu_monitor`)도 띄운다.
+`RAY_ADDRESS` 를 지워도 같다. 이번에는 GPU 가 모두 런에 잡혀 있어 테스트가 자원을 못 얻고 끝났다. 런이 끝나 GPU 가 비는 순간에 돌았다면 테스트가 GPU 를 가로챌 수 있었다.
 
-**대응**: 클러스터 노드에서 Ray 를 띄우는 테스트는 클러스터가 비어 있을 때만 돌린다. CPU 단위 테스트는 `CUDA_VISIBLE_DEVICES=""` 로 GPU 를 가린다.
+**대응**: 운영 클러스터가 떠 있는 노드에서는 NeMo-RL pytest 를 돌리지 않는다 — 클러스터가 비어 있을 때만 돌린다. CPU 단위 테스트는 `CUDA_VISIBLE_DEVICES=""` 로 GPU 를 가린다.
 운영 런이 쓰는 venv 도 건드리지 않는다 — pytest 는 scratchpad 의 별도 venv 에 드라이버 venv 의 site-packages 를 `.pth` 로 이어 붙여 쓴다.
 
 ## 런을 연장해 재개하면 Megatron 스케줄러 assert 로 멈춘다 — 스케줄 길이가 max_num_steps 를 따라간다 (2026-10-07 ✅ `scheduler.max_steps`)

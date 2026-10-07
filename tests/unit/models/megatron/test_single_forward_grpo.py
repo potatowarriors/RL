@@ -339,7 +339,8 @@ def test_train_normalizes_survivors_before_optimizer_step(
             "global_valid_toks": original_count,
         },
     )
-    monkeypatch.setattr(worker_module, "attach_media_token_validity_mask", Mock())
+    # alpha backport: this branch's worker has no multimodal validity-mask helper
+    monkeypatch.setattr(worker_module, "attach_media_token_validity_mask", Mock(), raising=False)
     monkeypatch.setattr(
         worker_module,
         "get_microbatch_iterator",

@@ -63,7 +63,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
 | 10-08 | 첫 RLVR 런이 레시피와 다른 보상으로 학습 — async 경로에서 effort shaping 누락 등 upstream 결함 4건 | upstream 수정 이식(`alpha/perf-fixes`) 뒤 재시작. 큰 런 전에 분기점 이후 upstream `fix(` 커밋을 훑는다 |
-| 10-08 | 클러스터 노드에서 돌린 Ray 단위 테스트가 운영 클러스터에 붙음 | `RAY_ADDRESS` 를 지워도 자동 연결 → Ray 테스트는 클러스터가 빌 때만, CPU 테스트는 `CUDA_VISIBLE_DEVICES=""` |
+| 10-08 | 클러스터 노드에서 돌린 NeMo-RL 단위 테스트가 운영 클러스터에 붙음 | conftest 의 autouse `init_ray_cluster` 가 세션마다 연결 (`RAY_ADDRESS` 무관) → 클러스터가 빌 때만 pytest, CPU 테스트는 `CUDA_VISIBLE_DEVICES=""` |
 | 10-07 | 런 연장 재개에서 `OptimizerParamScheduler ... total number of weight decay iterations do not match` (G7) | 스케줄 길이가 train_iters(= max_num_steps)를 따라감 → 레시피 `scheduler.max_steps: 100000` |
 | 10-07 | RL 반출 HF 를 Pai 가 못 읽음 `Tokenizer class TokenizersBackend does not exist` (G6) | 변환기가 transformers 5.8 로 메타데이터를 다시 씀 → `tools/export_rl_hf.sh` 로만 반출 (메타데이터는 시작점 복사, 가중치 대조) |
 | 10-07 | 2노드 학습이 2스텝째 저장에서 멈춤 (`pidfd_getfd` · writer 사망, G5) | ES 메모리의 CUDA IPC 를 비동기 writer 가 못 받음 → `megatron_cfg.checkpoint.async_save: false` |
