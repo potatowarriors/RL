@@ -5,6 +5,20 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 2노드 학습이 2스텝째 체크포인트 저장에서 멈춘다 — 비동기 writer 가 ES 메모리의 CUDA IPC 를 받지 못한다 (2026-10-07 ✅ `async_save: false`)
+
+**발견 경위**: G5(실레시피 2노드 스모크) 1스텝은 정상이었다(KL 0.0016). 2스텝째 저장(`save_period 2`)에서 학습 워커 8개의 비동기 writer
+(nvidia-resiliency-ext `PersistentAsyncCaller`)가 `Failed to receive CUDA IPC handle from the training process (pidfd_getfd: Operation not permitted)` 로 죽었다.
+학습 프로세스는 저장 마무리를 기다리며 8분 넘게 GPU 0% 로 멈췄다.
+
+**원인**: colocated refit 사고(아래)와 같다. 상주 writer 는 학습 텐서를 CUDA IPC 로 받는데, 128K 학습에 필요한 `expandable_segments` 메모리는
+`pidfd_getfd` 가 있어야 열린다. 이 컨테이너는 `ptrace_scope=1`·`CAP_SYS_PTRACE` 없음이다. `async_save: true` 는 `grpo_math_1B.yaml` 상속값이었다.
+
+**대응**: 레시피 `policy.megatron_cfg.checkpoint.async_save: false` (동기 저장 — 학습이 저장 동안 멈추지만 IPC 를 쓰지 않는다).
+`check_alpha_recipe.py` 가 ES + 비동기 저장 조합을 ERROR 로 막는다. 대안(호스트에서 `kernel.yama.ptrace_scope=0`)은 컨테이너 밖 권한이라 쓰지 않는다.
+
+**교훈**: ES 를 켜면 같은 노드 안의 프로세스 간 CUDA 메모리 공유 경로(colocated refit, 비동기 저장)가 전부 막힌다. 새 기능을 켤 때 IPC 를 쓰는지 먼저 본다.
+
 ## Gym 도구 환경의 롤아웃이 off-policy 다 — vLLM 이 `strict: true` 도구에 제약 디코딩을 건다 (2026-10-07 ✅ `VLLM_ENFORCE_STRICT_TOOL_CALLING=0`)
 
 **발견 경위**: G3(Gym 1노드 스모크, judge 불필요 10개 환경 138행)의 Generation KL 이 0.0043·0.0045 로 기준 0.002 의 2배를 넘었다.

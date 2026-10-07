@@ -60,6 +60,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | 2노드 학습이 2스텝째 저장에서 멈춤 (`pidfd_getfd` · writer 사망, G5) | ES 메모리의 CUDA IPC 를 비동기 writer 가 못 받음 → `megatron_cfg.checkpoint.async_save: false` |
 | 10-07 | Gym 도구 환경 KL 0.0045, 도구 시퀀스 1/3 이 mult_prob_error > 2 (G3) | vLLM 이 `strict:true` 도구에 xgrammar 제약 디코딩 → `VLLM_ENFORCE_STRICT_TOOL_CALLING=0` (strict 렌더는 유지) → KL 0.0017 |
 | 10-07 | vLLM 기동 실패 `max_num_batched_tokens ... smaller than max_model_len` · 첫 턴 프롬프트 > max_model_len 이면 런 중단 | chunked prefill 끔이면 batched tokens = 최대 길이 · 블렌드 프롬프트 길이 사전 측정(첫 런 최대 39.3K, 32K 초과 1,144행) |
 | 10-07 | colocated refit `pidfd_getfd: Operation not permitted` (G3) | ES 메모리의 CUDA IPC 를 컨테이너(ptrace_scope 1·CAP_SYS_PTRACE 없음)가 막음 → colocated 런은 ES 끔, 128K 는 2노드 분리(NCCL refit) |
