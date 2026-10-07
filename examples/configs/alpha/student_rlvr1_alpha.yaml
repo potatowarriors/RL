@@ -104,6 +104,10 @@ policy:
     # H1: R3 를 켠 레시피에서 router fusion 금지 — mcore fused top-k 가 replay 전에 반환해 R3 가 에러 없이 꺼진다.
     # (moe_router_fusion 은 megatron_cfg 최상위 키가 아니다. model_overrides 에 넣지 말 것 — check_alpha_recipe.py 가 막는다)
     moe_router_bias_update_rate: 0.0    # D3 (Ultra 1e-3). 켜면 바뀐 bias 의 vLLM 반영 게이트가 먼저 필요하다 (M8)
+    checkpoint:
+      # 필수 (G5 2026-10-07): 비동기 저장의 상주 writer 프로세스는 학습 텐서를 CUDA IPC 로 받는다. ES 메모리면 pidfd_getfd EPERM 으로
+      # writer 가 죽고 학습이 저장 마무리에서 멈춘다 (KNOWN_ISSUES 2026-10-07). 동기 저장은 IPC 를 쓰지 않는다
+      async_save: false
     env_vars:
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"   # D6 — 128K/CP8 Triton OOM 회피 (R4). 2노드 분리 전용: colocated(IPC refit)에서는 pidfd_getfd EPERM (KNOWN_ISSUES 2026-10-07) → env_vars=null
     optimizer:

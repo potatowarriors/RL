@@ -126,6 +126,10 @@ def check(cfg: dict) -> None:
         if vcfg.get("expert_parallel_size", 1) not in (1, vcfg.get("tensor_parallel_size", 1)):
             err("async vLLM 은 EP≠TP 를 쓸 수 없다 (vllm_generation.py)")
     alloc = str(((mcfg.get("env_vars") or {}).get("PYTORCH_CUDA_ALLOC_CONF")) or "")
+    if "expandable_segments:True" in alloc and (mcfg.get("checkpoint") or {}).get("async_save") \
+            and cfg["checkpointing"]["enabled"]:
+        err("expandable_segments + checkpoint.async_save: 비동기 writer 가 CUDA IPC 를 pidfd_getfd EPERM 으로 못 받아 저장에서 멈춘다 "
+            "(G5 2026-10-07) — megatron_cfg.checkpoint.async_save: false")
     if gen["colocated"]["enabled"] and "expandable_segments:True" in alloc:
         err("colocated(CUDA IPC refit) + expandable_segments: 이 컨테이너에서 refit 이 pidfd_getfd EPERM 으로 실패한다 "
             "(KNOWN_ISSUES 2026-10-07). colocated 런은 env_vars 에서 ES 를 뺀다")
