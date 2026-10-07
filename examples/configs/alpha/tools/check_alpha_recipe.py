@@ -147,6 +147,10 @@ def check(cfg: dict) -> None:
                  "(Pai fleet 의 alpha 조합은 qwen3_xml/nemotron_v3)")
         if grpo.get("invalid_tool_call_advantage") is not None:
             warn("invalid_tool_call_advantage 가 켜져 있다 — G3(파서 스모크) 통과 전에는 정상 호출이 벌점을 받을 수 있다 (H3)")
+        venv = vcfg.get("env_vars") or {}
+        if str(venv.get("VLLM_ENFORCE_STRICT_TOOL_CALLING", "1")).lower() not in ("0", "false"):
+            err("Gym 레시피에 vllm_cfg.env_vars.VLLM_ENFORCE_STRICT_TOOL_CALLING: \"0\" 이 없다 — strict:true 도구에서 vLLM 이 "
+                "제약 디코딩을 걸어 롤아웃이 off-policy 가 된다 (G3 2026-10-07: KL 0.0045, 도구 시퀀스 33% 마스킹)")
         ng = env.get("nemo_gym") or {}
         paths = ng.get("config_paths") or []
         for p in paths:

@@ -128,6 +128,11 @@ policy:
       max_model_len: ${policy.max_total_sequence_length}
       enforce_eager: false              # M4: 스모크(eager)와 롤아웃 수치가 다르다 — G2/G5 에서 R1 재확인
       enable_prefix_caching: false      # D2 권고값 (upstream R3 레시피). 켜면 chunked prefill 강제 + R3 route 누락 위험 (M1)
+      env_vars:
+        # 필수 (G3 2026-10-07): vLLM 0.25.1 은 strict:true 도구가 하나라도 있으면 tool_choice auto 에서도 xgrammar 구조 태그로 제약 디코딩을 건다.
+        # 롤아웃이 모델 자체 분포가 아니게 되고 logprob 도 제약 분포 기준이 된다 → 도구 환경 KL 0.0045·시퀀스 33% 마스킹.
+        # 0 이면 strict 는 렌더에만 남고(결정 13) 제약은 없다 → KL 0.0017·마스킹 0.
+        VLLM_ENFORCE_STRICT_TOOL_CALLING: "0"
       http_server_serving_chat_kwargs:
         enable_auto_tools: true
         tool_parser: qwen3_xml          # H3: Pai 벤치 fleet 이 alpha 에 쓰는 파서 — G3 에서 실경로 검증
