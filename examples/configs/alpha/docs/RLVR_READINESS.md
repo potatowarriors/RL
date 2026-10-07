@@ -181,6 +181,11 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 - 결정 D1~D7 반영 레시피로 실행한다. 정확성 지표: rollout↔train KL(`seq_logprob_error`·위치별), R3 경고 0, 보상·잘림 비율, invalid tool call·malformed think 비율.
 - 병목 지표 (async GRPO 타이밍): `timing/train/exposed_generation`(학습이 롤아웃을 기다린 시간) · `policy_training` · `policy_and_reference_logprobs` · `weight_sync`, vLLM 지표(진행 중 배치·대기 샘플), 두 노드 GPU 사용률.
   `exposed_generation` 이 크면 롤아웃 병목, 0 에 가깝고 버퍼가 차 있으면 학습 병목이다.
+- async 겹침 해석 (`nemo_rl/algorithms/async_utils/trajectory_collector.py`, 2026-10-07 확인): 시작할 때 1·2스텝용 배치를 함께 생성한다 (`max_trajectory_age_steps 1`).
+  그 뒤에는 스텝 N 을 학습하는 동안 직전 가중치로 다음 배치를 만든다. 동시에 진행되는 배치는 최대 2개이고, 가중치 동기화는 진행 중인 생성을 기다리지 않는다 (in-flight).
+  GRPO 는 그룹 16개 응답이 다 끝나야 학습하므로 배치 완료는 가장 긴 응답이 정한다. 1스텝은 겹칠 대상이 없는 첫 배치 대기라 병목 판정에서 뺀다.
+  생성이 학습보다 길면 스텝 간격 ≈ (배치 생성 + 학습 + 동기화) / 2 이고, 짧으면 학습 시간이 간격을 정한다 (수집기 `idle/generation_limit_pause` 증가).
+  `exposed_generation` 은 학습 루프가 replay buffer 에서 배치를 기다린 시간이다.
 - 초기 체크포인트를 Pai 벤치로 평가해 비하락을 확인한다.
 
 **2단계 운영 (2026-10-07 21:19 시작, 커밋 `546b2b549`)**: 실행기는 `$NRL_ROOT/runs/rlvr1_alpha/` 에 있다.
