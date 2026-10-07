@@ -1,0 +1,244 @@
+# student_rlvr1_alpha.yaml — alpha RLVR 1단계 (GRPO + NeMo Gym, 최대 128K) 골격. G0 (2026-10-07, docs/RLVR_READINESS.md §6).
+#
+# 원형: examples/nemo_gym/nemotron-3-ultra/student_rlvr1.yaml. alpha 기본값은 grpo_alpha_smoke_muon.yaml 상속
+# (GDN 상태 fp32 · R3 · turn_end 3 · Muon SFT 동역학).
+#
+# ⚠ 아직 실행 레시피가 아니다. 아래 "결정 대기" 값은 현재 권고·보수값이며 사용자 결정 D1~D7 뒤 확정한다.
+#   D1 judge·sandbox 의존 환경 → env.nemo_gym.config_paths 에서 주석 처리돼 있다. 블렌드에는 그 행이 남아 있어 이대로는 Gym 이 실패한다.
+#   G2(packing+CP R1)·G3(Gym 파서)·R5(recompute·offload) 결과로 표시된 값을 바꾼다.
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/student_rlvr1_alpha.yaml
+# 실행 (Gym 은 run_grpo.py 가 아니라 run_grpo_nemo_gym.py):
+#   $NRL_ROOT/clean_run.sh $NRL_ROOT/bin/uv run --locked python examples/nemo_gym/run_grpo_nemo_gym.py \
+#     --config examples/configs/alpha/student_rlvr1_alpha.yaml policy.model_name=<hfmodel_00NNNNN> \
+#     data.train.data_path=<rlvr1_alpha.jsonl> logger.log_dir=<dir> </dev/null
+defaults: grpo_alpha_smoke_muon.yaml
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 2                          # node0 학습 · node1 vLLM 롤아웃 (RL_PLAN.md §3)
+
+checkpointing:
+  enabled: true
+  checkpoint_dir: "results/alpha_student_rlvr1"
+  metric_name: null                     # 검증 대신 Pai 벤치로 평가 (RL_PLAN.md §5)
+  keep_top_k: 1000000                   # 전부 보존 (Ultra 동일). ckpt 1개 ≈ 150 GB(옵티마이저 포함) — 디스크 계획은 본 런 전에
+  save_period: 10
+  model_save_format: "safetensors"
+  save_consolidated: false
+  save_optimizer: true                  # Muon 재개는 같은 CP·DP 배치로만 (G7)
+
+grpo:
+  num_prompts_per_step: 64              # 결정 대기 — 학습 처리량(R5)·롤아웃 처리량(G5)으로 정한다
+  num_generations_per_prompt: 16
+  val_num_generations_per_prompt: 2
+  max_rollout_turns: 1
+  max_num_epochs: 1
+  max_num_steps: 1000000
+  normalize_rewards: true
+  use_leave_one_out_baseline: true
+  advantage_clip_low: -20
+  advantage_clip_high: 20
+  val_period: 10000
+  val_at_start: false
+  val_at_end: false
+  overlong_filtering: false             # 잘린 응답도 보상으로 학습 (Ultra 동일) — 잘림 비율 지표를 본다
+  max_val_samples: null
+  val_batch_size: 256
+  seed: 42
+  use_dynamic_sampling: false
+  # H3: 파서가 alpha 도구 호출을 못 읽으면 정상 호출이 invalid 로 판정된다. G3(파서 스모크) 통과 전에는 켜지 않는다 (Ultra -5.0).
+  invalid_tool_call_advantage: null
+  # D4: R1 지표(rollout↔train logprob 정합)를 남기려면 prev_logprobs 가 필요하다 — threshold 를 두면 force_on_policy_ratio 에서도 계산된다
+  seq_logprob_error_threshold: 2
+  async_grpo:
+    enabled: true                       # Gym 은 async 필수 (grpo.py _should_use_nemo_gym)
+    max_trajectory_age_steps: 1
+    max_generation_failures: 3
+    in_flight_weight_updates: true      # M7: R1 은 sync 만 봤다 — G5 에서 KL 확인
+    recompute_kv_cache_after_weight_updates: false
+
+loss_fn:
+  reference_policy_kl_penalty: 0.0      # D4 권고값 (Ultra). 0.01(상속)이면 reference 는 R3 replay 를 안 해 라우팅 차이가 KL 에 섞인다
+  reference_policy_kl_type: "k3"
+  kl_input_clamp_value: null
+  kl_output_clamp_value: null
+  ratio_clip_min: 0.2
+  ratio_clip_max: 0.28
+  ratio_clip_c: null
+  use_on_policy_kl_approximation: true
+  use_importance_sampling_correction: true   # async 필수 (grpo.py assert)
+  truncated_importance_sampling_ratio: 5
+  truncated_importance_sampling_ratio_min: 0.2
+  truncated_importance_sampling_type: tis
+  sequence_level_importance_ratios: false
+  token_level_loss: true
+  force_on_policy_ratio: true
+  use_kl_in_reward: false
+
+policy:
+  tokenizer:
+    chat_template_kwargs: null          # Ultra 의 truncate_history_thinking 을 복사하지 않는다 (CLAUDE.md 레시피 규약)
+  max_total_sequence_length: 131072     # D7 (128K 바로 vs 단계 상향)
+  train_global_batch_size: ${mul:${grpo.num_prompts_per_step}, ${grpo.num_generations_per_prompt}}  # 나머지 샘플이 버려지지 않게 정확히 일치
+  train_micro_batch_size: 1
+  logprob_batch_size: 1
+  logprob_chunk_size: 2048              # CP>1 에서 fused linear logprobs 불가 → chunk + fuse_loss (+ defer_fp32_logits)
+  max_grad_norm: 1.0                    # = SFT clip-grad 8.0@CP8 (Pai grad norm 은 CP 배수, NeMo-RL 은 CP 무관)
+  make_sequence_length_divisible_by: ${mul:${policy.megatron_cfg.context_parallel_size}, ${mul:2, ${policy.megatron_cfg.tensor_model_parallel_size}}}
+  sequence_packing:
+    enabled: true                       # CP>1 필수. GDN 상태 격리는 G1 PASS (2026-10-07, 비트 동일)
+    train_mb_tokens: ${policy.max_total_sequence_length}
+    logprob_mb_tokens: ${policy.max_total_sequence_length}
+    algorithm: "modified_first_fit_decreasing"
+    sequence_length_round: 64
+    fuse_loss: true
+  megatron_cfg:
+    context_parallel_size: 8
+    expert_model_parallel_size: 8
+    tensor_model_parallel_size: 1
+    activation_checkpointing: true
+    recompute_granularity: "full"       # R5 결과로 바꾼다 (Pai SFT 는 selective layernorm·moe)
+    defer_fp32_logits: true
+    # H1: R3 를 켠 레시피에서 router fusion 금지 — mcore fused top-k 가 replay 전에 반환해 R3 가 에러 없이 꺼진다.
+    # (moe_router_fusion 은 megatron_cfg 최상위 키가 아니다. model_overrides 에 넣지 말 것 — check_alpha_recipe.py 가 막는다)
+    moe_router_bias_update_rate: 0.0    # D3 (Ultra 1e-3). 켜면 바뀐 bias 의 vLLM 반영 게이트가 먼저 필요하다 (M8)
+    env_vars:
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"   # D6 권고 — 128K/CP8 Triton OOM 회피 (R4). Pai SFT 도 항상 켰다
+    optimizer:
+      lr: 1.0e-6                        # D5 결정 대기
+      min_lr: 1.0e-6
+    scheduler:
+      lr_warmup_iters: 10               # D5 — 스케줄 단위는 GRPO step. 옵티마이저 상태가 새로 시작하므로 짧은 warmup
+      lr_warmup_init: 1.0e-7
+  generation:
+    max_new_tokens: ${policy.max_total_sequence_length}
+    temperature: 1.0                    # top_p<1 이면 chunked logprob 이 꺼져 128K 메모리 계획이 깨진다
+    top_p: 1.0
+    top_k: null
+    stop_token_ids: null                # Gym 이 null 로 만든다. <|im_end|> 정지는 generation_config eos [3,0] 병합에 의존 (검사 도구가 확인)
+    stop_strings: null
+    vllm_cfg:
+      async_engine: true
+      expose_http_server: true
+      tensor_parallel_size: 1           # async 는 EP≠TP 금지 → TP=EP=1, node1 은 DP8 (M3)
+      expert_parallel_size: 1
+      gpu_memory_utilization: 0.85      # TP1: GPU 당 가중치 30.2 GB, 128K 시퀀스당 KV 1.61 GB
+      max_model_len: ${policy.max_total_sequence_length}
+      enforce_eager: false              # M4: 스모크(eager)와 롤아웃 수치가 다르다 — G2/G5 에서 R1 재확인
+      enable_prefix_caching: false      # D2 권고값 (upstream R3 레시피). 켜면 chunked prefill 강제 + R3 route 누락 위험 (M1)
+      http_server_serving_chat_kwargs:
+        enable_auto_tools: true
+        tool_parser: qwen3_xml          # H3: Pai 벤치 fleet 이 alpha 에 쓰는 파서 — G3 에서 실경로 검증
+        reasoning_parser: nemotron_v3   # H3: 〃 (Ultra 의 qwen3_coder·nano_v3 를 복사하지 않는다)
+    vllm_kwargs:
+      enable_chunked_prefill: false     # D2 와 함께 (upstream R3 레시피)
+      max_num_seqs: 256                 # M2: async 경로 기본값(128)이 작다 — Ultra 값
+      max_num_batched_tokens: 16384     # M2: async 경로 기본값(2048)이면 128K prefill 이 약 124 스텝
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 8
+        num_nodes: 1
+
+data:
+  _override_: true
+  max_input_seq_length: null
+  shuffle: true
+  num_workers: 1
+  use_multiple_dataloader: false
+  train:
+    data_path: null                     # <rlvr1_alpha.jsonl> (RL_DATA.md §2) — D1 결정 전에는 judge·sandbox 행이 섞여 있다
+  validation:
+    data_path: null
+  default:
+    dataset_name: NemoGymDataset
+    env_name: "nemo_gym"
+    prompt_file: null
+    system_prompt_file: null
+    processor: "nemo_gym_data_processor"
+
+env:
+  _override_: true
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
+    skip_venv_if_present: true
+    port_range_low: 5000
+    port_range_high: 5999
+    effort_levels:                      # Ultra 계수 (RL_PLAN.md §4.5). 블렌드 3.5% 가 마커를 담는다. low_ub 는 alpha 실측으로 다시 본다
+      low_string: "{reasoning effort: efficient}"
+      low_weight: 0.1
+      low_penalty: 1
+      low_ub: 15000
+    invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
+    thinking_tags: ["<think>", "</think>"]
+    config_paths:
+      - responses_api_models/vllm_model/configs/vllm_model_for_training.yaml
+      # judge·sandbox 불필요 (블렌드 76.6%)
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/instruction_following/configs/instruction_following.yaml
+      - resources_servers/code_gen/configs/code_gen.yaml          # sandbox 없이 Ray 워커에서 모델 코드 실행 — 격리 검토 (H4)
+      - resources_servers/math_with_judge/configs/math_with_judge.yaml   # should_use_judge: false (아래)
+      - resources_servers/mcqa/configs/mcqa.yaml
+      - resources_servers/reasoning_gym/configs/reasoning_gym.yaml
+      - resources_servers/structured_outputs/configs/structured_outputs_json_yaml_xml_v1.yaml
+      - resources_servers/calendar/configs/calendar.yaml
+      # D1 결정 대기 — GenRM (identity 689행 포함)
+      # - resources_servers/genrm_compare/configs/genrm_compare.yaml
+      # - resources_servers/abstention/configs/abstention.yaml
+      # D1 — LLM judge (기본값은 정책 자신이 채점)
+      # - resources_servers/multichallenge/configs/multichallenge.yaml
+      # D1 — 안전 judge (Nemotron-Content-Safety-Reasoning-4B)
+      # - resources_servers/jailbreak_detection/configs/jailbreak_detection_nemotron_combined_reward_tp8.yaml
+      # D1 — 코드 sandbox (NeMo-Skills 파이썬·Lean)
+      # - resources_servers/ns_tools/configs/ns_tools.yaml
+      # - resources_servers/math_formal_lean/configs/math_formal_lean_multi_turn.yaml
+      # D1 — 라이선스 pending-legal-review (ARC-AGI)
+      # - resources_servers/nvarc/configs/inductive.yaml
+      # - resources_servers/nvarc/configs/transductive.yaml
+    policy_model:
+      responses_api_models:
+        vllm_model:
+          num_workers: 8
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs: null
+    policy_model_reasoning_off:
+      _copy: policy_model
+      responses_api_models:
+        vllm_model:
+          num_workers: 2
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs:
+            enable_thinking: false
+    math_with_judge:
+      resources_servers:
+        math_with_judge:
+          should_use_judge: false       # math-verify 만 (nanov3 패턴) — judge 를 쓰려면 D1
+    code_gen:
+      resources_servers:
+        code_gen:
+          num_processes: 64             # 결정 대기 — 공유 노드의 CPU 여유로 정한다 (Ultra 2048)
+          unit_test_timeout_secs: 10
+          debug: false
+
+# Ultra 의 token_ids(unwanted [2]·think 12/13)는 Nemotron 토크나이저 id 다 — alpha 에서는 <|im_start|>·<tool_response>·</tool_response> 가 된다.
+# alpha: <think> 14 · </think> 15 · <|im_start|> 2 · <tool_response> 12 · </tool_response> 13 (check_alpha_recipe.py 가 토크나이저와 대조)
+reward_penalties:
+  penalize_duplicated_reasoning: false  # 결정 대기 — Ultra 는 4종 전부 켬
+  penalize_empty_final_answer: false
+  penalize_unwanted_tokens: false
+  penalize_malformed_think_tag: false
+  token_ids:
+    unwanted: [2, 12, 13]               # 응답 안의 <|im_start|>·<tool_response>·</tool_response>
+    think_open: 14
+    think_close: 15
+
+logger:
+  log_dir: "logs/alpha_student_rlvr1"
+  wandb_enabled: false
+  tensorboard_enabled: true
+  monitor_gpus: true
