@@ -34,6 +34,7 @@ RL 단계의 설계 정본이다. 진행 상태와 열린 결정은 [`STATUS.md`
 | 12 | 멀티턴 경계 토큰 = **`<\|im_end\|>`(3)** (`vllm_cfg.turn_end_token_id`) | alpha EOS(0)는 문서 경계라 Gym 멀티턴이 2번째 호출부터 깨진다 (`KNOWN_ISSUES.md` 2026-10-07 턴 경계) | 2026-10-07 |
 | 13 | Gym 도구 정의의 **`strict` 유지** (구현 대기) | SFT Agentic-v2 와 RL 블렌드 도구 행 13,190/13,190 이 strict 를 담는다 (`KNOWN_ISSUES.md` 2026-10-07 렌더 차이) | 사용자 결정 2026-10-07 |
 | 15 | **첫 RLVR 런 설정**: judge·sandbox·nvarc 를 뺀 10개 환경 71,730행(`rlvr1_alpha_judgefree.jsonl`) · 최대 128K · KL 0 + `seq_logprob_error_threshold 2` · expert bias 갱신 0 · Muon lr 1e-6 warmup 10 GRPO step. prefix caching 끔·ES 켬은 권고값 그대로. 정확성 확인 뒤 학습·롤아웃 병목을 재고 속도 최적화를 정한다. **게이트 G0~G7 뒤 추가(2026-10-07)**: reward_penalties 4종 켬 · `keep_top_k 2` + 100스텝마다 HF 반출(모두 보존) · 학습 데이터 덤프는 첫 10스텝만, 분석 기록 뒤 삭제 | `RLVR_READINESS.md` D1·D3·D4·D5·D7, `STATUS.md` 첫 런 결정. identity(GenRM 채점)·GenRM·judge 환경은 judge 배치를 정한 뒤 추가한다 | 사용자 결정 2026-10-07 |
+| 16 | **첫 RLVR 런 재시작**: 생성 상한 64K (학습 길이 128K 유지) · 시퀀스 마스킹(threshold 2)은 학습 forward 안에서 평가 (upstream #4171) · upstream 정확성 수정 4건 이식 뒤 처음부터 재시작 · 구간 1 종료 뒤 3~4시간 실험(속도 레버 chunked prefill·`max_trajectory_age_steps` 2)을 거쳐 본 런 | 근거: 첫 런 병목 판정(`RLVR_READINESS.md` §5.1)·가속 검토(§5.2)·`KNOWN_ISSUES.md` 2026-10-08 | 사용자 결정 2026-10-08 |
 | 14 | **RLVR 준비를 먼저** 진행한다. Pai 의 중요한 학습 설정을 유지하고 SFT 학습 최적화를 이식해 최대 128K 로 학습한다. 첫 작업은 이식 위험 보고·게이트(`RLVR_READINESS.md`) | §1 의 PivotRL 선행 순서는 재검토 대상 — Ultra RLVR1 블렌드의 38% 가 이미 단일 스텝 도구 호출(피벗형) 환경이다 | 사용자 지시 2026-10-07 |
 
 ### SFT → RL 승계 범위 (2026-10-07)

@@ -180,6 +180,24 @@ R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `los
 학습 처리량은 노드당 3.0만~3.6만 tok/s (R5 의 128K full recompute 3.34만과 같은 수준)이고 시간은 배치 토큰에 비례한다. 구간 1 은 덤프 기록에 스텝당 ≈ 2분이 더 든다.
 정상 상태 속도(스텝 ≈ 31분)면 1에폭(≈ 1,120스텝)은 ≈ 24일이다. 다음: 롤아웃 꼬리(최대 생성 길이 D7·`max_trajectory_age_steps` 2)와 학습 가속(prev_logprob 패스·R3 route 전송)을 함께 검토한다.
 
+### 5.2 가속 기법 검토 (2026-10-08, 최신 NeMo-RL upstream main 8bf6bd4ba + Nemotron-3 Ultra `ultra-v3`)
+
+결론: 정상 상태 병목은 롤아웃 긴 꼬리다. Ultra 의 주 가속 수단(MTP 투기 디코딩 5토큰, 학습의 2.7배인 생성 GPU)은 alpha 에 쓸 수 없다 — MTP 헤드가 없고 노드가 고정이다.
+Ultra 의 학습 형상(full recompute·bf16·packing·chunk 2048·async age 1·KL 0 + threshold 2)은 우리와 같아 따라 할 숨은 학습 가속은 없다.
+큰 레버는 Ultra 밖에서 나왔다. 검토 중 첫 런의 정확성 결함 4건도 찾았다 (`KNOWN_ISSUES.md` 2026-10-08).
+
+| 레버 | 근거 | 기대 | 상태 |
+|---|---|---|---|
+| 생성 상한 64K (D7 재결정) | 64K 넘는 응답이 학습 토큰의 29~62% 인데 보상 ≈ 0 (code_gen 평균 9.5만~10.4만 토큰, 보상>0 0~1%). Ultra RLVR 1단계도 49K→64K | 배치 완성 바닥·학습 토큰 동시 감소 | **적용** (레시피) |
+| prev_logprob 패스 제거 — threshold 를 loss 안에서 (upstream #4171) | 패스는 threshold 때문에만 돈다 (`grpo.py:2486-2507`), `force_on_policy_ratio` 에서 loss 는 그 값을 안 쓴다 (`loss_functions.py:385-401`). reference 패스는 KL 0 이라 이미 꺼짐 | 학습 시간 23~32% | **적용** (이식 + 레시피) |
+| vLLM chunked prefill | KV 용량 ≈ 2배 (GPU 당 144만 → 약 300만 토큰) | 동시 처리 증가 | 실험 E0·E1 (128K/64K + CUDA graph 에서 R3 미검증) |
+| `max_trajectory_age_steps` 2 | 격스텝 대기 제거, 생성 노드 유휴 활용 | 대기 대부분 제거 | 실험 E0·E1 (궤적 1스텝 더 오래됨 — KL·IS 지표로 판정) |
+| R3 route 전송 축소 | 배치 최대 길이 패딩 48 GiB 를 스텝당 2번 `ray.put`, object store 넘침 (스필 누적 293 GB). 실토큰만 담으면 6~11 GB | 학습 시간 150~250 s | 보류 (본체 수정, #4171 로 put 1번이 됨) |
+| `apply_rope_fusion: true` (Ultra) | 비융합 THD 경로는 패킹 시퀀스마다 Python 루프·호스트 동기화 | ≤ 수 % | 보류 (프로파일 뒤, M2·R1) |
+| MoE `flex` + deepep (Ultra 는 HybridEP) | 설치본에 HybridEP 없음 | 수 % | 보류 (프로파일 뒤) |
+| vLLM fused-MoE 튜닝 config (E=192) | 기본 config 사용 중 | 디코드 5~15% (추정) | 보류 |
+| 해당 없음 | MTP·EAGLE 투기 디코딩(헤드 없음), Blackwell 전용(MXFP8·NVFP4), prefix caching(D2, R3 충돌), FP8 생성(gen_kl 0.0024~0.0031 보고), SC 계열(beta, #4171 거부) | — | — |
+
 ## 6. 게이트 계획 (2026-10-07 재편 — 정확성 → 첫 RLVR 런 → 속도)
 
 **1단계 — 정확성 (첫 RLVR 런 전 필수)**

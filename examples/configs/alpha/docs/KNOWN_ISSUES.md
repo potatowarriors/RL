@@ -5,6 +5,35 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 첫 RLVR 런이 레시피와 다른 보상으로 학습됐다 — async 경로의 upstream 결함 4건 (2026-10-08 ✅ 이식, 브랜치 `alpha/perf-fixes`)
+
+**발견 경위**: 첫 RLVR 런 구간 1 의 병목 판정 뒤 최신 NeMo-RL(upstream main 8bf6bd4ba, 분기점 이후 268커밋)을 검토하다 찾았다.
+네 건 모두 upstream 에 수정이 있고, 우리 브랜치(분기점 2026-08-12)에는 없었다. 코드로 직접 확인했다.
+
+| # | 결함 | 영향 | upstream 수정 |
+|---|---|---|---|
+| 1 | async 수집기가 `run_async_nemo_gym_rollout` 에 `effort_config` 를 넘기지 않는다 (`trajectory_collector.py:818-840`, 동기 경로 `grpo.py:2957` 은 넘김) | 레시피의 `env.nemo_gym.effort_levels`(Ultra 계수)가 조용히 무시된다. 마커 프롬프트(블렌드 3,429행)의 긴 응답에 감점이 없었다 — 4스텝 "efficient" math 44,735 토큰 무감점 | 4c6e5c84e (#3885) |
+| 2 | async 루프가 `max_num_steps` 만 본다 (`grpo.py:4499`) | 1에폭 런은 데이터가 떨어질 때 "dataloader exhausted" RuntimeError 로 끝나 마지막 저장 뒤 최대 9스텝을 잃는다. `training_info.json` 의 `total_steps` 도 0 이었다 | f49e41dda (#3248) |
+| 3 | LOO + `normalize_rewards` 가 std 를 E[r²]−E[r]² 로 구한다 (`algorithms/utils.py:189-195`) | 그룹 보상이 모두 같은 비이진 값이면 fp32 잡음 std 로 나눠 advantage 가 튄다. #1 을 고치면 보상이 비이진이 된다 | 8535caefc (#4158) |
+| 4 | in-flight refit 중 vLLM 을 멈추지 않는다 | upstream 은 refit 과 forward 의 경쟁 조건이 NaN logprob·KL 튐을 낸다고 설명한다. 우리 KL 은 정상이었다 (미검증) | 4f653c4dc (#3839) |
+
+**대응**: 네 건을 `alpha/perf-fixes` 에 이식했다 (각 커밋에 REBASE NOTE). #2 는 upstream 이 기대는 재개 lookahead 인프라 없이 핵심만 옮겼다.
+첫 런은 warmup 10스텝(lr 1e-7~1e-6) 뒤 처음부터 다시 시작한다 (사용자 결정 2026-10-08). 같은 검토에서 upstream #4171(loss 안 시퀀스 마스킹)도 이식했다.
+충돌을 풀며 깨끗이 합쳐진 파일이 이 브랜치에 없는 모듈을 import 하는 경우를 찾았다 (`draft_config.coerce_draft_config` — 그대로면 `grpo.py` 전체 ImportError).
+그래서 이식 뒤에는 바뀐 파일 전체를 `ruff --select F821,F401` 로 검사한다.
+
+**교훈**: fork 가 upstream 에서 두 달 떨어지면 정확성 수정도 함께 놓친다. 큰 런 전에 분기점 이후 upstream 의 `fix(` 커밋을 우리 경로(async·Gym·Megatron) 기준으로 훑는다.
+
+## Ray 를 쓰는 단위 테스트가 실행 중인 운영 클러스터에 붙는다 (2026-10-08)
+
+**발견 경위**: 이식 검증으로 main1 에서 `test_vllm_generation.py` 를 돌렸다. 통합 테스트 하나가 placement group 대기 시간 초과로 실패했는데,
+`ray list placement-groups` 에 그 테스트의 `vllm-test-policy-cluster-separate-node0` 가 운영 클러스터 기록으로 남아 있었다 (REMOVED).
+`RAY_ADDRESS` 를 지워도 `ray.init()` 이 `/tmp/ray/ray_current_cluster` 로 같은 노드의 클러스터를 찾아 붙는다.
+이번에는 GPU 가 모두 런에 잡혀 있어 테스트가 자원을 못 얻고 끝났다. 런이 끝나 GPU 가 비는 순간에 돌았다면 테스트가 GPU 를 가로챌 수 있었다.
+
+**대응**: 클러스터 노드에서 Ray 를 띄우는 테스트는 클러스터가 비어 있을 때만 돌린다. CPU 단위 테스트는 `CUDA_VISIBLE_DEVICES=""` 로 GPU 를 가린다.
+운영 런이 쓰는 venv 도 건드리지 않는다 — pytest 는 scratchpad 의 별도 venv 에 드라이버 venv 의 site-packages 를 `.pth` 로 이어 붙여 쓴다.
+
 ## 런을 연장해 재개하면 Megatron 스케줄러 assert 로 멈춘다 — 스케줄 길이가 max_num_steps 를 따라간다 (2026-10-07 ✅ `scheduler.max_steps`)
 
 **발견 경위**: G7(저장 → 재개) 첫 시도에서 G5 의 step_3 를 `grpo.max_num_steps` 3 → 5 로 재개했다 (런 연장 시나리오).
