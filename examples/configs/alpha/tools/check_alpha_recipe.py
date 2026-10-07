@@ -130,6 +130,21 @@ def check(cfg: dict) -> None:
             and cfg["checkpointing"]["enabled"]:
         err("expandable_segments + checkpoint.async_save: 비동기 writer 가 CUDA IPC 를 pidfd_getfd EPERM 으로 못 받아 저장에서 멈춘다 "
             "(G5 2026-10-07) — megatron_cfg.checkpoint.async_save: false")
+    sched_max = (mcfg.get("scheduler") or {}).get("max_steps")
+    if cfg["checkpointing"]["enabled"] and sched_max is None:
+        warn("megatron_cfg.scheduler.max_steps 미설정: 스케줄 길이가 grpo.max_num_steps 를 따라가 max_num_steps 를 바꿔 재개하면 "
+             "'total number of weight decay iterations do not match' 로 멈춘다 (G7 2026-10-07)")
+    elif sched_max is not None:
+        # GRPO 의 train_iters = min(max_num_steps, max_num_epochs × 에폭당 스텝) (grpo.py). Bridge 는 max_steps < train_iters 를 거부한다
+        path = ((cfg.get("data") or {}).get("train") or {}).get("data_path")
+        if path and os.path.isfile(path):
+            with open(path) as f:
+                rows = sum(1 for line in f if line.strip())
+            g = cfg["grpo"]
+            est = min(g["max_num_steps"], g["max_num_epochs"] * -(-rows // g["num_prompts_per_step"]))
+            if sched_max < est:
+                err(f"megatron_cfg.scheduler.max_steps {sched_max} < 실효 train_iters ≈ {est} "
+                    f"(min(max_num_steps, max_num_epochs × 에폭당 스텝)) — Bridge 가 기동에서 거부한다")
     if gen["colocated"]["enabled"] and "expandable_segments:True" in alloc:
         err("colocated(CUDA IPC refit) + expandable_segments: 이 컨테이너에서 refit 이 pidfd_getfd EPERM 으로 실패한다 "
             "(KNOWN_ISSUES 2026-10-07). colocated 런은 env_vars 에서 ES 를 뺀다")
