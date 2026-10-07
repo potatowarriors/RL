@@ -190,13 +190,28 @@ Ultra 의 학습 형상(full recompute·bf16·packing·chunk 2048·async age 1·
 |---|---|---|---|
 | 생성 상한 64K (D7 재결정) | 64K 넘는 응답이 학습 토큰의 29~62% 인데 보상 ≈ 0 (code_gen 평균 9.5만~10.4만 토큰, 보상>0 0~1%). Ultra RLVR 1단계도 49K→64K | 배치 완성 바닥·학습 토큰 동시 감소 | **적용** (레시피) |
 | prev_logprob 패스 제거 — threshold 를 loss 안에서 (upstream #4171) | 패스는 threshold 때문에만 돈다 (`grpo.py:2486-2507`), `force_on_policy_ratio` 에서 loss 는 그 값을 안 쓴다 (`loss_functions.py:385-401`). reference 패스는 KL 0 이라 이미 꺼짐 | 학습 시간 23~32% | **적용** (이식 + 레시피) |
-| vLLM chunked prefill | KV 용량 ≈ 2배 (GPU 당 144만 → 약 300만 토큰) | 동시 처리 증가 | 실험 E0·E1 (128K/64K + CUDA graph 에서 R3 미검증) |
-| `max_trajectory_age_steps` 2 | 격스텝 대기 제거, 생성 노드 유휴 활용 | 대기 대부분 제거 | 실험 E0·E1 (궤적 1스텝 더 오래됨 — KL·IS 지표로 판정) |
+| vLLM chunked prefill | KV 용량 ≈ 2배 (GPU 당 144만 → 약 300만 토큰) | 동시 처리 증가 | E0 기능 확인 (G8: KV 290만 토큰/GPU, R3 fallback 0) · E1 A/B 진행 중 (§5.3) |
+| `max_trajectory_age_steps` 2 | 격스텝 대기 제거, 생성 노드 유휴 활용 | 대기 대부분 제거 | E0 기능 확인 (G8: 궤적 나이 0/1/2, KL 0.0020/0.0020/0.0019) · E1 A/B 진행 중 (§5.3, 궤적 1스텝 더 오래됨 — KL·IS 지표로 판정) |
 | R3 route 전송 축소 | 배치 최대 길이 패딩 48 GiB 를 스텝당 2번 `ray.put`, object store 넘침 (스필 누적 293 GB). 실토큰만 담으면 6~11 GB | 학습 시간 150~250 s | 보류 (본체 수정, #4171 로 put 1번이 됨) |
 | `apply_rope_fusion: true` (Ultra) | 비융합 THD 경로는 패킹 시퀀스마다 Python 루프·호스트 동기화 | ≤ 수 % | 보류 (프로파일 뒤, M2·R1) |
 | MoE `flex` + deepep (Ultra 는 HybridEP) | 설치본에 HybridEP 없음 | 수 % | 보류 (프로파일 뒤) |
 | vLLM fused-MoE 튜닝 config (E=192) | 기본 config 사용 중 | 디코드 5~15% (추정) | 보류 |
 | 해당 없음 | MTP·EAGLE 투기 디코딩(헤드 없음), Blackwell 전용(MXFP8·NVFP4), prefix caching(D2, R3 충돌), FP8 생성(gen_kl 0.0024~0.0031 보고), SC 계열(beta, #4171 거부) | — | — |
+
+### 5.3 속도 레버 A/B — E1 (2026-10-08, 진행 중)
+
+설계: 두 arm 은 본 런 레시피 그대로다 (64 프롬프트 × 16, 생성 상한 64K, loss 안 마스킹, 같은 데이터·seed). 레버만 다르다.
+각 arm 은 5스텝을 돌린다. 체크포인트는 끄고, 학습 데이터 덤프는 위치별 KL 대조용으로 켠다 (분석 뒤 삭제). arm 당 상한은 85분이다.
+실행기는 `$NRL_ROOT/runs/rlvr1_alpha_v2/run_e1.sh` 이다. 배치 시작·완료와 스텝 경계의 시각은 `events_exp_e1{a,b}.txt` 에 남는다.
+
+| arm | chunked prefill | `max_trajectory_age_steps` | 기대 |
+|---|---|---|---|
+| e1a (레버 켬) | 켬 (`max_num_batched_tokens` 16384, KV 290만 토큰/GPU) | 2 | 배치 3개 동시 생성, KV 대기 감소 |
+| e1b (레버 끔) | 끔 (KV 157만 토큰/GPU) | 1 | v2 기본값 — 대조군 |
+
+근거: v1 구간 1 에서 긴 스텝(3·5스텝)마다 엔진당 대기 샘플이 130~138개였다. 같은 때 동시 처리는 95~117개로 `max_num_seqs` 256 보다 훨씬 낮았다 — KV 용량에 막혔다.
+판정 기준: 정상 상태 스텝 간격 · `exposed_generation` · vLLM 유휴·대기, 그리고 정확성(스텝 KL < 0.002, 위치 구간별 KL 이 e1b 와 같은 수준, R3 오류 0).
+정확성이 같고 e1a 가 빠르면 두 레버를 함께 채택한다. e1a 가 느리거나 KL 이 나빠지면 레버를 끈 채 본 런을 띄운다.
 
 ## 6. 게이트 계획 (2026-10-07 재편 — 정확성 → 첫 RLVR 런 → 속도)
 
