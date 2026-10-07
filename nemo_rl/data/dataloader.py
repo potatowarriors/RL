@@ -12,7 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Iterator
+from typing import Any
+
 from torchdata.stateful_dataloader import StatefulDataLoader
+
+from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+
+class CyclingDataLoader:
+    """Repeat a stateful dataloader until its consumer stops.
+
+    alpha backport of upstream ``nemo_rl/data/dataloader.py`` (ea147e38d), needed by the
+    f49e41dda async max_num_epochs fix: the async trajectory collector looks ahead past the
+    epoch boundary, and on StopIteration it stops and drops in-flight batches (E0 2026-10-08).
+    """
+
+    def __init__(self, dataloader: StatefulDataLoader) -> None:
+        self.dataloader = dataloader
+
+    def __iter__(self) -> Iterator[BatchedDataDict]:
+        consecutive_empty_epochs = 0
+        while True:
+            produced_this_epoch = False
+            for batch in self.dataloader:
+                produced_this_epoch = True
+                yield batch
+
+            if produced_this_epoch:
+                consecutive_empty_epochs = 0
+            else:
+                consecutive_empty_epochs += 1
+                if consecutive_empty_epochs >= 2:
+                    raise RuntimeError(
+                        "Dataloader yielded no batches for two consecutive epochs"
+                    )
+
+    def state_dict(self) -> dict[str, Any]:
+        return self.dataloader.state_dict()
 
 
 class MultipleDataloaderWrapper:

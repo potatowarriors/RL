@@ -68,7 +68,7 @@ from nemo_rl.algorithms.utils import (
 )
 from nemo_rl.data import DataConfig
 from nemo_rl.data.collate_fn import rl_collate_fn
-from nemo_rl.data.dataloader import MultipleDataloaderWrapper
+from nemo_rl.data.dataloader import CyclingDataLoader, MultipleDataloaderWrapper
 from nemo_rl.data.datasets import AllTaskProcessedDataset
 from nemo_rl.data.interfaces import DatumSpec, LLMMessageLogType, VLMMessageLogType
 from nemo_rl.data.llm_message_utils import (
@@ -4392,7 +4392,12 @@ def async_grpo_train(
     )
 
     # Start trajectory collection in background
-    collection_task = trajectory_collector.start_collection.remote(dataloader)
+    # alpha backport (upstream f49e41dda): cycle the dataloader so the collector's lookahead never
+    # hits StopIteration (which stops collection and drops in-flight batches); training stops at
+    # the effective max_num_steps computed above.
+    collection_task = trajectory_collector.start_collection.remote(
+        CyclingDataLoader(dataloader)
+    )
 
     # Ensure collector knows initial weight version
     trajectory_collector.set_weight_version.remote(weight_version)
