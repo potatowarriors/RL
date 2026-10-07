@@ -52,7 +52,8 @@ grpo:
   use_dynamic_sampling: false
   # H3: 파서가 alpha 도구 호출을 못 읽으면 정상 호출이 invalid 로 판정된다. G3(파서 스모크) 통과 전에는 켜지 않는다 (Ultra -5.0).
   invalid_tool_call_advantage: null
-  # D4: R1 지표(rollout↔train logprob 정합)를 남기려면 prev_logprobs 가 필요하다 — threshold 를 두면 force_on_policy_ratio 에서도 계산된다
+  # D4: 시퀀스 mult_prob_error > 2 마스킹. 사용자 결정 2026-10-08: 학습 forward 안에서 평가한다(loss_fn.seq_logprob_error_in_loss,
+  # upstream #4171 이식) — 별도 prev_logprob 패스(첫 런 스텝의 23%)가 없어진다. 덤프 분석 도구용 토큰별 prev_logprobs 는 0 이 된다
   seq_logprob_error_threshold: 2
   async_grpo:
     enabled: true                       # Gym 은 async 필수 (grpo.py _should_use_nemo_gym)
@@ -77,6 +78,7 @@ loss_fn:
   sequence_level_importance_ratios: false
   token_level_loss: true
   force_on_policy_ratio: true
+  seq_logprob_error_in_loss: true       # D4 (2026-10-08) — 위 grpo.seq_logprob_error_threshold 참고. Megatron·token_level·force_on_policy 필수
   use_kl_in_reward: false
 
 policy:
@@ -123,7 +125,10 @@ policy:
       # mcore 가 "total number of weight decay iterations do not match" 로 멈춘다. lr·wd 가 상수라 값은 수치에 영향이 없다 (≥ train_iters)
       max_steps: 100000
   generation:
-    max_new_tokens: ${policy.max_total_sequence_length}
+    # D7 재결정 (사용자 2026-10-08): 생성 상한 64K, 학습 길이는 128K 유지 (프롬프트 최대 39K + 생성 64K).
+    # 첫 런에서 64K 를 넘는 응답은 학습 토큰의 29~62% 인데 보상이 거의 0 이었고, 배치 완성이 128K 생성의 순차 디코딩에 묶였다.
+    # Ultra 도 RLVR 1단계는 49K → 64K 로 올렸다 (128K 는 SWE·MOPD 단계)
+    max_new_tokens: 65536
     temperature: 1.0                    # top_p<1 이면 chunked logprob 이 꺼져 128K 메모리 계획이 깨진다
     top_p: 1.0
     top_k: null

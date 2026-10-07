@@ -109,7 +109,11 @@ def check(cfg: dict) -> None:
     if r3 and loss.get("reference_policy_kl_penalty", 0) > 0:
         warn("KL>0 + R3: reference logprob 은 route replay 를 안 한다 — 라우팅 차이가 KL 에 섞인다 (M6, D4)")
     if loss.get("force_on_policy_ratio") and grpo.get("seq_logprob_error_threshold") is None:
-        warn("force_on_policy_ratio + seq_logprob_error_threshold 없음 → prev_logprobs 를 건너뛴다. rollout↔train 정합 지표(R1)가 사라진다")
+        warn("force_on_policy_ratio + seq_logprob_error_threshold 없음 → 시퀀스 마스킹이 꺼진다 (gen_kl_error 는 학습 forward 에서 계속 나온다)")
+    if (loss.get("force_on_policy_ratio") and grpo.get("seq_logprob_error_threshold") is not None
+            and not loss.get("seq_logprob_error_in_loss")):
+        warn("seq_logprob_error_threshold 를 별도 prev_logprob 패스로 평가한다 (첫 RLVR 런 스텝의 23%) — "
+             "loss_fn.seq_logprob_error_in_loss: true 면 학습 forward 안에서 같은 마스킹을 한다 (D4 2026-10-08)")
 
     # M1·M2
     if vcfg.get("enable_prefix_caching") is None:
