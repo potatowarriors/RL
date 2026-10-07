@@ -5,6 +5,17 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## R4 결과 JSON 의 loss 가 전부 NaN 이다 — 하네스가 없는 키를 읽었다 (2026-10-07, G0 에서 수정)
+
+**발견 경위**: 이식 위험 보고(`RLVR_READINESS.md`)를 쓰며 R4 산출물을 다시 읽었다. 5개 조건(16K/CP2 ~ 128K/CP8) 전 rank·전 스텝의 `loss` 가 NaN 이었다.
+
+**원인**: `tools/measure_train_memory.py` 가 `res.get("loss", nan)` 으로 읽는다. `MegatronPolicyWorkerImpl.train` 은 `global_loss`·`grad_norm` 을 반환한다
+(`megatron_policy_worker.py:1004-1011`). 키가 없어 기본값 NaN 이 찍혔다. 수치 문제가 아니다.
+
+**함의**: R4 는 메모리·실행 가능성만 증명했다. 128K/CP8 에서 loss·grad norm 이 유한한지는 본 적이 없다.
+
+**교훈**: 게이트 하네스는 읽는 키가 실제로 있는지 assert 한다. 기본값으로 덮인 지표는 "측정 안 함"과 구별되지 않는다.
+
 ## 장문맥 학습 스텝 OOM 은 총량이 아니라 단편화다 — PyTorch 캐시가 쥔 빈 블록 때문에 Triton 할당이 실패한다 (2026-10-07, ES 로 128K/CP8 통과 · 기본값 채택은 결정 대기)
 
 **발견 경위**: R4 메모리 실측(sub1, Muon 레시피, 학습 전용 노드 가정)에서 rank 당 16K 토큰 조건이 길이·CP 와 무관하게 전부 OOM 이었다(32K/CP2 · 64K/CP4 · 128K/CP8).
@@ -24,6 +35,8 @@ rank 당 12K 토큰(96K/CP8)까지는 통과했다. 수치표는 [`GATES.md`](GA
 - Muon optimizer-state offload(Pai 기능 #4) 포팅은 1노드 128K/CP8 에 필요 없다. 2026-10-06 추정(바닥 ≈45 GB, 오프로드 필요 가능성)을 실측 27 GB 가 대체한다.
 - ES 에는 대가가 있다. NeMo-RL 주석(`megatron_policy_worker.py:2742`)은 ES 가 weight transfer 를 약 5배 느리게 한다고 적는다. upstream Megatron 레시피 다수는 `expandable_segments:False` 를 명시한다.
   alpha 구성에서의 refit 비용은 미측정이다. RL 기본값 채택은 결정 대기다 (`STATUS.md`).
+  - 2026-10-07 재확인: "5배" 근거는 `_clear_fp8_caches` docstring 한 줄이다(FP8 단편화 맥락, 측정값·전송 방식 없음). 2노드 분리 refit 은 NCCL broadcast 라 TCP 대역이 지배한다.
+    Pai SFT 는 `train.sh:82` 에서 ES 를 항상 켰다. 같은 docstring 은 `max_split_size_mb:512` 를 대안으로 든다 (G4 에서 대조).
 
 **같이 드러난 NeMo-RL 제약** (전부 `nemo_rl/models/megatron/setup.py`):
 1. CP>1 은 sequence packing 이 필수다 (:839-840 assert). alpha 레시피 불변량 "packing 끔"(GDN)과 충돌한다.

@@ -33,6 +33,7 @@ RL 단계의 설계 정본이다. 진행 상태와 열린 결정은 [`STATUS.md`
 | 11 | 학습 엔진 = **NeMo-RL mcore + Pai 기능 포팅** (B안). Pai Megatron-LM-251125 를 NeMo-RL 에 넣는 A안은 불가, RL 프레임워크 교체 C안은 비권고 | A안: NeMo-RL·Bridge 가 import 하는 mcore 모듈 157개 중 23개가 251125 에 없다(GDN `ssm.gated_delta_net`, R3 `moe.router_replay`, refit `resharding.refit` 등). 모델 클래스(MambaModel 48층 vs GPTModel 24층)와 스택(torch 2.8/TE 2.9 vs 2.11/2.14)도 다르다. C안은 검증 자산(브리지·플러그인·게이트)을 버린다 | 권고 2026-10-06, 사용자가 검증 게이트 3종 진행 승인 2026-10-07 |
 | 12 | 멀티턴 경계 토큰 = **`<\|im_end\|>`(3)** (`vllm_cfg.turn_end_token_id`) | alpha EOS(0)는 문서 경계라 Gym 멀티턴이 2번째 호출부터 깨진다 (`KNOWN_ISSUES.md` 2026-10-07 턴 경계) | 2026-10-07 |
 | 13 | Gym 도구 정의의 **`strict` 유지** (구현 대기) | SFT Agentic-v2 와 RL 블렌드 도구 행 13,190/13,190 이 strict 를 담는다 (`KNOWN_ISSUES.md` 2026-10-07 렌더 차이) | 사용자 결정 2026-10-07 |
+| 14 | **RLVR 준비를 먼저** 진행한다. Pai 의 중요한 학습 설정을 유지하고 SFT 학습 최적화를 이식해 최대 128K 로 학습한다. 첫 작업은 이식 위험 보고·게이트(`RLVR_READINESS.md`) | §1 의 PivotRL 선행 순서는 재검토 대상 — Ultra RLVR1 블렌드의 38% 가 이미 단일 스텝 도구 호출(피벗형) 환경이다 | 사용자 지시 2026-10-07 |
 
 ### SFT → RL 승계 범위 (2026-10-07)
 
@@ -41,7 +42,7 @@ B안에서 SFT 가 만든 특성이 어디까지 이어지는지 정리한다. �
 | 구분 | 항목 | 근거 |
 |---|---|---|
 | 이어짐 (검증 완료) | 가중치 (M1 14,181/14,181 비트 동일) · forward 함수 (M2 cos ≥ 0.99984) · forward·gradient 동등성 (M5, bf16 노이즈 바닥 이내) · 롤아웃↔학습 정합 (R1 KL 0.0014) · Muon 동역학 (R2: momentum 0.95·nesterov·extra_scale 0.2·NS 5 quintic·spectral·wd 0.1·Adam β2 0.95) · QGKV 4-way split (upstream 동등, Pai 구현 대비 상대오차 6e-7) · 라우터 정밀도 (연산 fp32 이상, `expert_bias` fp32) · 단일 턴 chat 렌더 (R3 P1 12/12) | — |
-| 의도적으로 달라짐 | optimizer 상태는 새로 시작한다 (SFT 스테이지 전환 관례와 같음) · 라우터는 동결한다 (NeMo-RL RL 기본) · grad clip·lr 은 별도 결정한다 (SFT 8.0·1e-5 는 loss 정규화가 달라 그대로 못 옮김) · GDN 구현 코드는 다르다 (Pai megatron_patch vs mcore — 같은 함수임은 M2·M5 로 확인) | `STATUS.md` 열린 결정 |
+| 의도적으로 달라짐 | optimizer 상태는 새로 시작한다 (SFT 스테이지 전환 관례와 같음) · 라우터는 동결한다 (NeMo-RL RL 기본) · lr 은 별도 결정한다. grad clip 은 SFT 8.0@CP8 이 NeMo-RL 1.0 과 같은 크기다 — Pai 는 grad norm 이 CP 배수로 기록되고 NeMo-RL 은 CP 무관 (2026-10-07, `RLVR_READINESS.md` §2) · GDN 구현 코드는 다르다 (Pai megatron_patch vs mcore — 같은 함수임은 M2·M5 로 확인) | `STATUS.md` 열린 결정 |
 | 미확인 | Gym 멀티턴 도구 렌더 (`strict` 구현 후 R3 P6) · packing+CP 경로 수치 (장문맥) · RL 후 일반 능력 (벤치 비하락 — Pai `SFT_BENCHMARKS.md`) | `STATUS.md` 다음 할 일 |
 
 Pai 기능 중 포팅 후보였던 Muon optimizer-state offload(Pai 기능 #4, upstream PR #6244 는 Megatron-LM `dev` 에만 있음)는 R4 실측상 1노드 128K/CP8 에 필요 없다.
@@ -71,8 +72,10 @@ Pai 기능 중 포팅 후보였던 Muon optimizer-state offload(Pai 기능 #4, u
    Pai 벤치 스위트의 RULER 로 회귀를 측정한다.
 4. **MOPD 재현 범위** (결정 필요 — `STATUS.md` 열린 결정): 교사 슬롯 수(2~3 vs 5), 192k→128k 캡,
    NeMo RL/Gym 스택 포팅 vs 자체 구현(verl/ChatLearn 백엔드 검토).
-5. **effort/budget**: SFT 단계의 effort 렌더(Pai `SFT_RL_DATASETS.md` §2.6)는 Ultra 재현이다. NeMo-RL `effort_levels` 계수
-   (`low_weight`/`low_ub`/`low_penalty`)는 미공개 — RL 착수 시 medium-effort 응답 길이 실측으로 정한다.
+5. **effort/budget**: SFT 단계의 effort 렌더(Pai `SFT_RL_DATASETS.md` §2.6)는 Ultra 재현이다. NeMo-RL `effort_levels` 계수는
+   Ultra 레시피에 공개돼 있다 — `low_weight 0.1`·`low_penalty 1`·`low_ub 15000` (`examples/nemo_gym/nemotron-3-ultra/student_rlvr1.yaml:393-397`,
+   2026-10-07 확인. 이전 "미공개" 기록은 틀렸다). `low_ub` 는 alpha medium-effort 응답 길이 실측으로 다시 본다.
+   RLVR1 블렌드 3,429행(3.5%)이 alpha 템플릿과 같은 형식의 마커(`\n\n{reasoning effort: efficient}`)를 담는다.
 
 ## 5. 평가
 

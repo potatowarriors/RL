@@ -19,7 +19,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 | 종료 토큰 | `<\|im_end\|>` id 3 (chat 끝) · `<\|endoftext\|>` id 0 (EOD). HF `generation_config` eos = [3, 0] | 롤아웃 stop 조건 |
 | Chat template | Pai `examples/alpha/tokenizer_v5/chat_template.jinja` (think·tool 규약은 Pai `docs/INTERLEAVED_THINKING.md`) | 보상·파서가 이 렌더를 가정 |
 | 롤아웃 엔진 | **vLLM 플러그인만** — upstream mcore GDN 은 추론 미지원(`GDN does not support inference for now`) | mcore 네이티브 생성 백엔드 사용 불가. 학습측 logprob(teacher-forced)은 무관 |
-| sequence packing | 끔 (GDN, Qwen3.5 레시피와 동일) | — |
+| sequence packing | 스모크는 끔. **128K(CP>1)는 필수** | "GDN 이라 끔"은 과거 사정 — mcore GDN 은 cu_seqlens 로 상태를 리셋한다. alpha 실측은 G1·G2 (`docs/RLVR_READINESS.md` H2) |
 
 ## 레시피 규약 (모든 alpha GRPO 레시피)
 
@@ -29,6 +29,9 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - Gym 레시피는 `chat_template_kwargs: null`. Ultra 의 `truncate_history_thinking: false` 를 복사하지 않는다 (비도구 이력 reasoning 복원, R3).
 - CP>1 은 sequence packing 필수, `use_fused_linear_logprobs` 와 비호환이다 → `logprob_chunk_size` + `fuse_loss` (+ `defer_fp32_logits: true`).
   packing+CP 경로의 GDN 수치는 미검증이다 — 장문맥 레시피 전에 R1 을 그 경로로 돌린다.
+- **R3 를 켠 레시피에서 `moe_router_fusion` 금지.** mcore fused top-k 는 replay 전에 반환해 R3 가 에러 없이 꺼진다. Pai SFT 는 켰다 — 복사하지 않는다.
+- Pai·Ultra 노브를 옮길 때는 NeMo-RL 이 실제로 읽는지 확인한다. `megatron_cfg` 최상위의 모르는 키와 Ultra 의 loss 정규화 키 4개는 조용히 무시된다.
+  위험 목록과 게이트 계획은 [`docs/RLVR_READINESS.md`](docs/RLVR_READINESS.md).
 - `policy.megatron_cfg.env_vars` 에 `CUDNN_HOME`(Megatron 워커 venv 의 pip cuDNN 경로) 필수.
 - 브리지·플러그인 수정 중에는 `megatron_cfg.force_reconvert_from_hf: true` (변환 캐시에 버전 검사 없음).
 - FlashQLA 는 opt-in: `policy.megatron_cfg.env_vars` 에 `ALPHA_GDN_BACKEND: "flashqla"`. 실패 시 시끄럽게 중단, 무설정이면 fla.
@@ -54,6 +57,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-07 | R4 결과 JSON 의 loss 가 전부 NaN | 하네스가 `loss` 키를 읽음(워커 반환은 `global_loss`) — 수치 문제 아님. 하네스 수정, R4 는 loss 유한성을 본 적 없음 |
 | 10-07 | 장문맥 학습 스텝 `Triton Error [CUDA]: out of memory` (rank 당 16K 토큰) | PyTorch 캐시 단편화(reserved−alloc 13.6 GB)가 Triton 할당을 막음 → `expandable_segments:True` 로 128K/CP8 OK, 기본값은 결정 대기 |
 | 10-07 | Gym 멀티턴 `AssertionError: EOS token #0 not found in template_token_ids` | 턴 경계를 EOS(0)로 찾음 → `vllm_cfg.turn_end_token_id: 3` (본체 패치) |
 | 10-07 | Gym 경로 렌더가 SFT 와 다름 (도구 정의) | Gym 이 `strict` 를 지움 → 유지 결정, Gym 플러그인 서버로 구현 대기 · `description` None 은 데이터 게이트 |
