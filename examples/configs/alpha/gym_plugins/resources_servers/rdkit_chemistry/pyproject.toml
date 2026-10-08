@@ -1,0 +1,20 @@
+# alpha Gym 플러그인 — resources_servers/rdkit_chemistry (Gym 0.6.0 에 없는 Ultra rdkit_chemistry_agent 행의 채점기).
+# 서버 venv 는 Gym 내장 서버와 같은 의존성(nemo-gym[dev])만 쓴다 (RDKit 은 쓰지 않는다 — 정답이 행에 들어 있다).
+[project]
+name = "alpha-rdkit-chemistry"
+version = "0.1.0"
+requires-python = ">=3.13.14"
+dependencies = [
+    "nemo-gym[dev]",
+]
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61", "setuptools-scm"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["rdkit_chemistry"]
+
+[tool.uv.sources]
+nemo-gym = { path = "../../../../../../3rdparty/Gym-workspace/Gym", editable = true }
