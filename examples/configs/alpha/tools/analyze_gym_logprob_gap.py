@@ -47,6 +47,14 @@ def main() -> int:
         tok = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
     for f in args.files:
         rows = [json.loads(line) for line in open(f)]
+        # loss 안 마스킹(seq_logprob_error_in_loss) 런은 prev_logprob 패스를 건너뛰어 덤프의 prev_logprobs 가 0 이다 (2026-10-08 E1a)
+        if all(
+            not np.asarray(r["prev_logprobs"][0], float)[np.asarray(r["token_loss_mask"][0], bool)].any()
+            for r in rows
+            if any(r["token_loss_mask"][0])
+        ):
+            print(f"== {f}: SKIP — prev_logprobs 가 전부 0 (seq_logprob_error_in_loss 런의 덤프). 학습측 logprob 이 없어 오차를 낼 수 없다")
+            continue
         per_agent = collections.defaultdict(list)
         bad = []
         for i, r in enumerate(rows):

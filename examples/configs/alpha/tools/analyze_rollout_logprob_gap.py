@@ -4,6 +4,8 @@ Generation KL(k3)·mult_prob_err 재계산(게이트 출력과 일치해야 함)
 위치에 따라 KL 이 커지면 재귀 상태 dtype(mamba_ssm_cache_dtype), 꼬리가 크면 MoE 라우팅 뒤집힘(R3) 의심.
 사용: python analyze_rollout_logprob_gap.py [--max-len N] <log_dir>/exp_*/train_data_step*.jsonl
   --max-len: 레시피 max_total_sequence_length (기본 4096 = R1 스모크). 잘림 판정과 위치 구간 상한에 쓴다.
+loss 안 마스킹(`loss_fn.seq_logprob_error_in_loss: true`) 런은 prev_logprob 패스를 건너뛰어 덤프의 prev_logprobs 가 0 이다.
+그 덤프로는 KL 을 낼 수 없으므로 파일을 건너뛴다 (2026-10-08 E1a: 0 을 학습측 값으로 읽으면 k3 8559 같은 무의미한 값이 나온다).
 """
 import argparse, json, sys, math
 import numpy as np
@@ -21,8 +23,12 @@ def load(f):
         m=np.array(r["token_loss_mask"][0],bool); g=np.array(r["generation_logprobs"][0]); p=np.array(r["prev_logprobs"][0])
         rows.append((m,g,p,r["input_lengths"][0]))
     return rows
+def placeholder_prev(rows):  # 학습 토큰의 prev_logprobs 가 전부 0 = prev_logprob 패스를 건너뛴 런
+    return all(not p[m].any() for m,g,p,L in rows if m.any())
 for f in ARGS.files:
     rows=load(f); D=[];POS=[];SK=[];TR=[]
+    if placeholder_prev(rows):
+        print(f"== {f.split('/')[-1]}: SKIP — prev_logprobs 가 전부 0 (seq_logprob_error_in_loss 런의 덤프). 학습측 logprob 이 없어 KL 을 낼 수 없다"); continue
     for m,g,p,L in rows:
         idx=np.where(m)[0]
         if len(idx)==0: continue

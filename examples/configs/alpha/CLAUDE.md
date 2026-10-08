@@ -62,6 +62,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | v2 덤프로 KL 분석하면 k3 8559 같은 무의미한 값 | loss 안 마스킹 런은 prev_logprob 패스를 건너뛰어 덤프 `prev_logprobs` 가 0 → 분석 도구 2종이 건너뛴다. 위치별 KL 이 필요한 구간만 `seq_logprob_error_in_loss=false` |
 | 10-08 | 첫 RLVR 런 7스텝이 오류 없이 6.5시간 멈춤 — in-flight 요청 67개가 vLLM 엔진 1개에서 진척 0 | 원인 후보(교차 스레드 AsyncLLM 사용·문맥 초과 무응답) upstream 수정 이식, v2 는 진척 없음 감시 |
 | 10-08 | 런이 끝나도 Gym 서버(`python app.py`)가 남아 132개 누적 | 별도 Ray 작업이라 드라이버와 함께 안 죽음 → v2 `launch.sh` 가 기동 전 `gym_cleanup.py` 로 정리 |
 | 10-08 | 첫 RLVR 런이 레시피와 다른 보상으로 학습 — async 경로에서 effort shaping 누락 등 upstream 결함 4건 | upstream 수정 이식(`alpha/perf-fixes`) 뒤 재시작. 큰 런 전에 분기점 이후 upstream `fix(` 커밋을 훑는다 |
