@@ -94,6 +94,7 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 | 순서·lr·배치 | **도구 사용 warm-up → STEM → Code·Math → General**, Muon lr 1e-6 · warmup 10 · GBS 1,024 (검증된 RLVR 값) | 사용자 2026-10-08 |
 | Code·Math 의 코드 | **B — 미루지 않는다**. 생성 상한 48K 로 능력을 다시 재고, 코드 능력 확인 + 점진적 커리큘럼으로 끌어올린다. **1차 최대 과제** (열린 과제, Code·Math 시작 전까지 해법을 찾는다) | 사용자 2026-10-08 |
 | sandbox | **gpu06 `alpha-eval` (DinD)** 에 NeMo-Skills sandbox 를 띄워 ns_tools(python 도구)·Lean 을 쓴다. 구성은 §5.9 | 사용자 2026-10-08 |
+| judge 배치 | **A — 롤아웃 노드를 롤아웃 6장 + judge 2장으로 나눈다** (`RL_PLAN.md` 결정 21). 본체 수정은 브랜치 `alpha/judge-split` (`2807ef2be`, 단위 테스트 PASS) — 2노드 스모크 뒤 병합한다. STEM 은 judge 를 포함한 §5.4 비율로 시작한다 | 사용자 2026-10-08 |
 
 ### 5.1 원칙
 

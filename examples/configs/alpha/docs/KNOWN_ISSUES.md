@@ -108,6 +108,17 @@ Gym 서버는 각자 별도 Ray 작업(드라이버)으로 떠서 NeMo-RL 드라
 **대응**: 운영 클러스터가 떠 있는 노드에서는 NeMo-RL pytest 를 돌리지 않는다 — 클러스터가 비어 있을 때만 돌린다. CPU 단위 테스트는 `CUDA_VISIBLE_DEVICES=""` 로 GPU 를 가린다.
 운영 런이 쓰는 venv 도 건드리지 않는다 — pytest 는 scratchpad 의 별도 venv 에 드라이버 venv 의 site-packages 를 `.pth` 로 이어 붙여 쓴다.
 
+**재발 (2026-10-08 21:3x, `--noconftest` 로도 붙음)**: 도구 teacher 런 중에 `--noconftest -k noncolocated` 로 `tests/unit/algorithms/test_grpo.py` 를 돌렸다.
+출력에 `(pid=…, ip=10.0.37.2)` 워커 로그가 섞여 나왔다. 이 모듈 안의 autouse fixture `reset_env_calls` 가 `mock_env`·`mock_envs` 를 끌어오고,
+그 fixture 들이 `MockEnvironment.remote()` 로 Ray 액터를 만든다. 첫 `.remote()` 가 Ray 를 자동 init 하면서 운영 클러스터(10.0.37.4:6379)에 붙었다.
+액터는 `num_cpus=0` 이고 fixture 정리 때 지워졌다. 런은 영향이 없었다 (36/400 스텝, KL 0.0013).
+- **격리 방법**: Ray 를 쓰는 테스트 모듈은 `RAY_ADDRESS=local RAY_TMPDIR=$(mktemp -d /tmp/rut.XXXX)` 로 새 로컬 Ray 에서 돌린다.
+  `RAY_ADDRESS=local` 이면 새 인스턴스를 띄운다 (`ray/_private/services.py:705-708`). `RAY_TMPDIR` 는 소켓 경로 길이 제한(107자) 때문에 짧은 `/tmp` 경로를 쓰고 끝나면 지운다.
+  pytest 는 `clean_run.sh env RAY_ADDRESS=… RAY_TMPDIR=… uv run --no-sync --with pytest python -m pytest --noconftest -p no:cacheprovider` 로 돌린다.
+  `--no-sync` 는 운영 venv 동기화를 막는다 — worktree 에서 동기화하면 editable `nemo_rl` 이 worktree 를 가리키게 될 수 있다.
+- **이 방식의 한계**: Ray 상태 API 의 자동 탐색은 운영·로컬 두 인스턴스를 보고 `ConnectionError: Found multiple active Ray instances` 로 실패한다. 연결은 하지 않는다.
+  `test_grpo.py` 에서는 22개가 이렇게 실패하므로, 변경 전후 실행의 실패 집합을 비교해 판정한다 (`alpha/judge-split` 검증에서 같은 22개).
+
 ## 런을 연장해 재개하면 Megatron 스케줄러 assert 로 멈춘다 — 스케줄 길이가 max_num_steps 를 따라간다 (2026-10-07 ✅ `scheduler.max_steps`)
 
 **발견 경위**: G7(저장 → 재개) 첫 시도에서 G5 의 step_3 를 `grpo.max_num_steps` 3 → 5 로 재개했다 (런 연장 시나리오).
