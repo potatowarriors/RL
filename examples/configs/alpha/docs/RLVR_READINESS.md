@@ -330,6 +330,28 @@ advantage 0 샘플은 320/1024 (31%) 인데 학습 토큰의 60.5% 다. code_gen
 
 시간을 크게 줄이는 길은 작업량 감축(생성 수·응답 길이·데이터·에폭), 자원 증설, 학습 커널 개선(MFU, 불확실) 셋이다 — 설정 튜닝으로 몇 배 빨라질 근거는 실측상 없다.
 
+### 5.6 속도 트랙 종료 — 남긴 기능과 재사용 조건 (2026-10-08, `RL_PLAN.md` 결정 18)
+
+결정 18 로 속도 최적화를 멈추고 학습 규모를 줄이기로 했다. 레시피에 들어간 것은 E1 레버 둘(chunked prefill 16K · `max_trajectory_age_steps` 2, `ba332448c`)뿐이다.
+나머지는 본체에 **기본 꺼짐**으로 병합했다. teacher 런에서 필요하면 아래 조건으로 켠다.
+
+| 기능 | 켜는 법 | 조건·주의 | 검증 |
+|---|---|---|---|
+| advantage 0 샘플 학습 제외 (DAPO dynamic sampling 의 학습 쪽 절반, `644d97c41`) | `++grpo.skip_zero_advantage_samples=true` · `++grpo.zero_advantage_keep_fraction` (기본 0.1 — advantage 0 샘플 10개 중 1개를 남겨 loss 안 지표를 유지) | async GRPO · `force_on_policy_ratio` · token-level loss · KL 0 · Megatron · MTP·draft·NLL·OPD 없음 · router 부하 균형 손실·z-loss 없음. 어기면 기동에서 에러다. 남긴 토큰 비율로 advantage 를 재조정하고, lr 스케줄러는 전체 GBS 로 센다. loss 안 시퀀스 마스킹이 제외 샘플의 토큰을 떨어뜨리면 정확히 같지 않다 | 게이트 Z1 PASS (기울기 동일, 잡음 바닥 기준). E2E 이득은 미측정이다 — 학습이 병목이 아니었다. v2 런에서 학습 토큰의 36~66% 가 advantage 0 이었고 대부분 code_gen 이었다 |
+| vLLM 요청별 시각 기록 (`a24ff7a94`) | `EXTRA_ENV="NRL_VLLM_REQUEST_TRACE_DIR=<dir>"` → `tools/analyze_vllm_request_trace.py <dir>` | HTTP(Gym) 경로만 기록한다. 요청당 JSON 한 줄 | T0 (§5.4) |
+| 요청 우선순위 (target weight 순, 지정 agent 우선, `abe4f2a49`) | `EXTRA_ENV="NRL_REQUEST_PRIORITY_LONG_AGENTS=<agent,...>"` + `policy.generation.vllm_kwargs.scheduling_policy=priority` | **미채택** — 긴 요청 대기가 0~3 s 라 줄일 대기가 없다 | 단위 테스트만 |
+| 학습 데이터 덤프의 agent 별 통계 | `tools/analyze_dump_agent_stats.py --cap <요청별 생성 상한> --max-len <총 길이 상한> <dumps>` | 샘플 수·학습/생성 토큰 비중·잘림·보상 > 0·advantage 0 비율 | 이전 분석 스크립트와 수치 일치 (E0 덤프, 잘림 68/128) |
+
+기각한 것: 투기 디코딩 T2 (§5.4 — 디코딩 −36%, R3 route 누락). 우선순위 스케줄링 시험 T1 (대기 없음).
+
+남은 산출물 (2026-10-08 확인, 체크포인트·HF 반출본은 없다 — 모두 1~10스텝 시험 런이다):
+
+| 위치 | 내용 | 크기 |
+|---|---|---|
+| `results/alpha/rollout_speed/` (리포 워크스페이스, gitignored) | T0·T2·T2b 로그·요청 기록, Z1 결과 | 172 MB |
+| `$NRL_ROOT/runs/rlvr1_alpha/` | v1 첫 런 로그·실행기 | 188 MB |
+| `$NRL_ROOT/runs/rlvr1_alpha_v2/` | E0(G8) 덤프 3스텝(각 82 MB)·E1·v2 구간 A 로그, 이전 실행기(`run_e1.sh`·`run_main.sh`·`stall_watch.sh`) — 새 런은 리포 `runs/launch.sh` 를 쓴다 | 397 MB |
+
 ## 6. 게이트 계획 (2026-10-07 재편 — 정확성 → 첫 RLVR 런 → 속도)
 
 **1단계 — 정확성 (첫 RLVR 런 전 필수)**

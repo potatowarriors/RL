@@ -26,7 +26,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | 경로 | 내용 |
 |---|---|
 | `vllm_alpha_plugin/` | vLLM 플러그인 패키지 (커밋 `599b58ac3`, pyproject 의 vllm extra + uv source 로 연결). `vllm.general_plugins` 엔트리포인트로 stock 0.25.1 휠에 `AlphaForCausalLM` 등록. qwen3_next 서브클래스 + 표준 RMSNorm 전면 교체(융합 QK-norm 커널은 zero-centered +1.0 하드코딩이라 비활성화) + FusedMoE DSV3 인자(`apply_routed_scale_to_output=False` 의도적) |
-| `runs/launch.sh` | RLVR 런 실행기 (2026-10-08): `launch.sh <campaign> <tag> [override]`. 산출물은 리포 워크스페이스의 `results/alpha/<campaign>/` (gitignored: 로그 디렉토리·드라이버 로그·`runs.log`·`ckpt/`), wandb 는 RL 전용 프로젝트 `alpha-rl` (group = campaign). 기동 전 GPU 점유 검사(`runs/gpu_check.py`)·남은 Gym 서버 정리(`runs/gym_cleanup.py`). 이전 런(v1·E0·E1·v2 구간 A)은 `$NRL_ROOT/runs/` 에 남아 있다 |
+| `runs/launch.sh` | RLVR 런 실행기 (2026-10-08): `launch.sh <campaign> <tag> [override]`. 산출물은 리포 워크스페이스의 `results/alpha/<campaign>/` (gitignored: 로그 디렉토리·드라이버 로그·`runs.log`·`ckpt/`), wandb 는 RL 전용 프로젝트 `alpha-rl` (group = campaign). 기동 전 GPU 점유 검사(`runs/gpu_check.py`)·남은 Gym 서버 정리(`runs/gym_cleanup.py`). 이전 런(v1·E0·E1·v2 구간 A)은 `$NRL_ROOT/runs/` 에 남아 있다. 레시피는 `student_rlvr1_alpha.yaml` 고정이다 |
 | `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1·G1·G7). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3), `verify_packing_isolation.py` 는 packing 상태 누출(G1), `verify_optimizer_resume.py` 는 재개 전후 옵티마이저 상태 연속성(G7, CPU) |
 | `tools/check_alpha_recipe.py` | 레시피 실행 전 검사 (CPU) — R3+router fusion·파서·Ultra token id·GBS 나눗셈·CP 패딩·eos 등 |
 | `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
@@ -34,6 +34,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/gen_hf_reference_logits.py` | M2·M4 의 HF 참조 로짓 생성 (Pai 환경 전용) |
 | `tools/analyze_rollout_logprob_gap.py` | rollout-vs-train logprob 어긋남 분해 (CPU) — R1 진단 |
 | `tools/analyze_vllm_request_trace.py` | vLLM 요청별 시각 기록(`NRL_VLLM_REQUEST_TRACE_DIR`) 분석 (CPU) — rollout 긴 꼬리를 대기·prefill·디코딩으로 분해, 긴 요청의 대기 비중·속도, 구간별 동시 실행 수 |
+| `tools/analyze_dump_agent_stats.py` | 학습 데이터 덤프(`train_data_step*.jsonl`)의 agent 별 통계 (CPU) — 샘플 수·학습/생성 토큰 비중·잘림(요청별 상한·총 길이)·보상 > 0·advantage 0 비율 (`docs/RLVR_READINESS.md` §5.6) |
 | `tools/analyze_gym_logprob_gap.py` | Gym 경로 logprob 어긋남을 시퀀스·환경·호출 구간별로 분해 (CPU) — G3 진단 |
 | `tools/teacher_pool_index.py` · `tools/teacher_pool_build.py` | 1차 teacher Code·Math 후보 풀 — 원천 색인 → 문제 단위 중복 제거·정규 행 선택·벤치 오염 제거·사전 측정 목록 (CPU, `docs/RL_DATA.md` §5.6 P0-2) |
 | `tools/filter_rl_blend.py` · `tools/measure_blend_prompt_lengths.py` | RL 블렌드 환경 필터(`--preset judge_free`, D1) · 첫 턴 프롬프트 길이 데이터 게이트 (`max_model_len` 초과 행은 런을 멈춘다) |
