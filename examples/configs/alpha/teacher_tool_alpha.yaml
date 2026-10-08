@@ -1,0 +1,65 @@
+# teacher_tool_alpha.yaml — 1차 도구 사용 warm-up teacher (RL_PLAN.md 결정 19·20, docs/RL_DATA.md §5.8).
+#
+# 검증된 RLVR 설정(student_rlvr1_alpha.yaml: 2노드 분리 · async age 2 · chunked prefill · Muon lr 1e-6 warmup 10 · GBS 1,024 ·
+# 128K/CP8 · R3 · GDN 상태 fp32 · strict 도구 유지 · KL 0 + threshold 2 · 페널티 4종)을 그대로 상속한다.
+# 바꾸는 것은 데이터 · 스텝 · 생성 상한 · Gym 환경뿐이다 (메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+#
+# 블렌드: alpha_blends/teacher_blends/teacher_tool_v1.jsonl (25,600 = 400 스텝 × 64, tau 피벗 55.7% · toolcall_schema 30% ·
+#         swe_pivot 14.3%) · 검증셋 teacher_tool_v1_val.jsonl (512, 학습에서 뺐다 — HF 반출본 오프라인 평가용)
+# 데이터 게이트 (2026-10-08): D1 구조 OK · 첫 턴 프롬프트 최대 98,568 토큰 (131,072 이하, 생성 8K 를 더해도 들어감)
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_tool_alpha.yaml
+# 실행: RECIPE=examples/configs/alpha/teacher_tool_alpha.yaml DATA=<teacher_tool_v1.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_tool <tag> policy.model_name=<hfmodel_0002862>
+defaults: student_rlvr1_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_tool"
+
+grpo:
+  max_num_steps: 400                    # 규모 B (결정 19): 25,600 프롬프트 1 에폭
+
+policy:
+  generation:
+    max_new_tokens: 8192                # 단일 스텝 도구 호출 — v1 런 생성 평균 145~374 토큰, 잘림 0
+
+env:
+  _override_: true
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
+    skip_venv_if_present: true
+    port_range_low: 5000
+    port_range_high: 5999
+    effort_levels:                      # 부모와 같다 (이 블렌드에는 마커 행이 없다)
+      low_string: "{reasoning effort: efficient}"
+      low_weight: 0.1
+      low_penalty: 1
+      low_ub: 15000
+    invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
+    thinking_tags: ["<think>", "</think>"]
+    config_paths:
+      # strict 유지 서버 (결정 13). NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins (launch.sh 가 넘긴다)
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+    policy_model:
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 8
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs: null
+    policy_model_reasoning_off:
+      _copy: policy_model
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 2
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs:
+            enable_thinking: false
+
+logger:
+  wandb:
+    project: alpha-rl
