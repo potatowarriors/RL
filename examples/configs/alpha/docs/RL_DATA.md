@@ -164,6 +164,14 @@ knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (
 | 경쟁 코딩 | code_gen (unit test, Gym CPU 실행) | 50% | OCR-25K 23,971 + Super 9,626 + Nano 10,688 (Nano SFT pass_rate 있음) | alpha 보상 > 0 0.7%, 64K 잘림 88.5% |
 | 수학 | math_with_judge (math-verify, judge 끔) | 50% | Ultra 1,591 + 복원 대상 Nano 22,056 · Super 약 12.3K · Math-v2 3,984 (DAPO-17k·Skywork-OR1) | alpha 보상 > 0 5.1%, 64K 잘림 45% |
 
+- **P0-3 스모크 (2026-10-08, iter2862, 생성 상한 24K, 측정 목록 앞 16문제 × 2회, temperature 1.0 · top_p 1.0)** — 본 측정 보류, 사용자 결정 대기:
+
+  | 모드 | 수학 끝냄 | 수학 정답 | 코드 끝냄 | 코드 정답 | 끝낸 응답 평균 |
+  |---|---|---|---|---|---|
+  | 기본 | 5/16 | 4/16 | 1/16 | 0/16 | 수학 6.8K · 코드 7.5K 토큰 |
+  | efficient 마커 | 10/16 | 6/16 | 0/16 | 0/16 | 수학 5.6K 토큰 |
+
+  수학은 끝내면 대부분 맞힌다. 코드는 24K 안에 거의 끝내지 못한다 (이전 64K·128K 런도 잘림 88~90%, 보상 > 0 0.7%). 산출물 `$NRL_ROOT/p0_measure/smoke{,_eff}/`.
 - 선별: P0 에서 alpha 로 문제당 4회(24K 상한) 풀어 1~3회 맞힌 문제를 남기고, 0회 문제를 일부 더한다. 고유 10K 이상을 목표로 하고 2에폭을 넘기지 않는다.
 - 길이: 24K 상한으로 시작한다. 잘림이 10% 미만이 되면 48K 로 올린다. effort 마커 행은 Ultra 비율(약 3.5%)을 유지한다.
 - ns_tools(python sandbox)·lean(Lean sandbox)은 2차 agentic(도구) teacher 로 넘긴다.
