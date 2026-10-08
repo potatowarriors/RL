@@ -7,6 +7,7 @@
 #   launch.sh <campaign> <tag> [hydra override ...]
 #   환경변수: DATA (기본: judge-free 블렌드) · CKPT (기본: results/alpha/<campaign>/ckpt — 같은 CKPT 로 다시 띄우면 최신 step 에서 재개, G7)
 #            R3_TRACE (기본 1) · WANDB (기본 1, 0 이면 끈다)
+#            EXTRA_ENV (공백으로 나눈 VAR=값 목록 — clean_run.sh 화이트리스트를 거쳐 드라이버에 넘긴다. 예: NRL_REQUEST_PRIORITY_LONG_AGENTS=a,b)
 # 기동 전에 GPU 점유(1 GiB)를 검사하고, 지난 런이 남긴 Gym 서버를 정리한다 (KNOWN_ISSUES 2026-10-08).
 # 이 스크립트는 실행 중에 편집하지 않는다 — bash 는 스크립트를 오프셋으로 읽는다.
 set -u
@@ -33,11 +34,11 @@ if [ "${WANDB:-1}" = "1" ]; then
   export WANDB_API_KEY="$(cat "$WANDB_KEY_FILE")"
   WANDB_ARGS="logger.wandb_enabled=true logger.wandb.project=alpha-rl ++logger.wandb.group=$campaign logger.wandb.name=${campaign}_${tag}"
 fi
-echo "[$(date '+%F %T')] host=$(hostname) commit=$(git rev-parse --short HEAD) case=$tag data=$(basename $DATA) ckpt=$CKPT r3_trace=${R3_TRACE:-1} wandb=${WANDB:-1} overrides=$*" | tee -a $OUT/runs.log
+echo "[$(date '+%F %T')] host=$(hostname) commit=$(git rev-parse --short HEAD) case=$tag data=$(basename $DATA) ckpt=$CKPT r3_trace=${R3_TRACE:-1} wandb=${WANDB:-1} extra_env=${EXTRA_ENV:-} overrides=$*" | tee -a $OUT/runs.log
 env -u CUDA_VISIBLE_DEVICES $NRL/clean_run.sh /usr/bin/env -u NVIDIA_VISIBLE_DEVICES -u HOSTNAME \
   $(env | grep -o '^BACKENDAI_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') \
   RAY_ADDRESS=10.0.37.4:6379 NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0 TP_SOCKET_IFNAME=eth0 \
-  NEMO_GYM_EXTRA_ROOTS=$REPO/examples/configs/alpha/gym_plugins NRL_ROUTER_REPLAY_VALIDATE=1 $TRACE_ENV \
+  NEMO_GYM_EXTRA_ROOTS=$REPO/examples/configs/alpha/gym_plugins NRL_ROUTER_REPLAY_VALIDATE=1 $TRACE_ENV ${EXTRA_ENV:-} \
   $NRL/bin/uv run --locked python examples/nemo_gym/run_grpo_nemo_gym.py \
   --config examples/configs/alpha/student_rlvr1_alpha.yaml \
   data.train.data_path=$DATA data.validation.data_path=$DATA \

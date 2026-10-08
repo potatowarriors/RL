@@ -526,7 +526,7 @@ def test_trace_request_timing_writes_engine_timestamps(tmp_path):
         metrics=stats,
     )
 
-    trace_request_timing(final_res, str(tmp_path))
+    trace_request_timing(final_res, str(tmp_path), priority=3)
     trace_request_timing(final_res, None)  # no trace dir: no-op
     trace_request_timing(  # no engine stats: no-op
         SimpleNamespace(metrics=None), str(tmp_path)
@@ -537,6 +537,7 @@ def test_trace_request_timing_writes_engine_timestamps(tmp_path):
     assert record["request_id"] == "req-1"
     assert (record["prompt_tokens"], record["gen_tokens"]) == (3, 2)
     assert record["finish_reason"] == "length"
+    assert record["priority"] == 3
     assert record["scheduled_ts"] - record["queued_ts"] == 2.5
     assert record["last_token_ts"] - record["first_token_ts"] == 27.0
     assert {"now_mono", "now_wall"} <= record.keys()
