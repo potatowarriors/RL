@@ -5,6 +5,12 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## vLLM ngram 투기 디코딩(CPU 제안기)이 엔진 기동에서 죽는다 — `Numba needs NumPy 2.4 or less. Got NumPy 2.5.` (2026-10-08, `ngram_gpu` 로 우회)
+
+**발견 경위**: rollout 속도 시험 T2 에서 `speculative_config.method=ngram` 으로 띄우자 vLLM EngineCore 가 기동 중 ImportError 로 죽었다 (rc 134).
+**원인**: vLLM 0.25.1 의 CPU 용 ngram 제안기(`v1/spec_decode/ngram_proposer.py`)는 numba 를 import 한다. vLLM 워커 venv 의 NumPy 2.5 를 설치된 numba 가 지원하지 않는다.
+**대응**: GPU 용 제안기 `method=ngram_gpu` (`ngram_proposer_gpu.py`, torch 만 쓴다)로 시험한다 (T2b). venv 의 NumPy·numba 를 바꾸는 것은 환경 재구축(E 게이트)이라 하지 않았다.
+
 ## Gym 경로 `truncation_rate` 가 생성 상한(max_new_tokens) 잘림을 세지 않는다 (2026-10-08 ✅ `78568c330` 병합)
 
 **발견 경위**: E0(G8, 생성 상한 16K)에서 128개 중 68개가 정확히 16,384 토큰에서 끝났는데 `train/truncation_rate` 는 0 이었다.

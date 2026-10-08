@@ -62,6 +62,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | vLLM `speculative_config.method=ngram` 이 엔진 기동에서 `Numba needs NumPy 2.4 or less` 로 죽음 | CPU 제안기의 numba 가 venv NumPy 2.5 미지원 → `method=ngram_gpu` 사용 |
 | 10-08 | 같은 배치·같은 가중치로 학습 스텝을 두 번 돌려도 기울기가 1~1.6% 어긋남 (Z1) | backward 비결정성(MoE·bf16) → 기울기 비교 게이트는 같은 배치 반복으로 잡음 바닥을 재고 그 배수로 판정 |
 | 10-08 | Gym 런의 `truncation_rate` 가 0 인데 실제로는 생성 상한에서 12~17% 잘림 | 지표가 `max_model_len` 을 채운 샘플만 셈 → 요청별 출력 상한 잘림도 세게 수정 (`78568c330`) |
 | 10-08 | v2 덤프로 KL 분석하면 k3 8559 같은 무의미한 값 | loss 안 마스킹 런은 prev_logprob 패스를 건너뛰어 덤프 `prev_logprobs` 가 0 → 분석 도구 2종이 건너뛴다. 위치별 KL 이 필요한 구간만 `seq_logprob_error_in_loss=false` |
