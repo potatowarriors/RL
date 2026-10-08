@@ -226,6 +226,8 @@ Ultra 의 학습 형상(full recompute·bf16·packing·chunk 2048·async age 1·
 | e1a (레버 켬) | 켬 (`max_num_batched_tokens` 16384, KV 290만 토큰/GPU) | 2 | 배치 3개 동시 생성, KV 대기 감소 |
 | e1b (레버 끔) | 끔 (KV 157만 토큰/GPU) | 1 | v2 기본값 — 대조군 |
 
+노드 배치 (Ray 가 기동마다 정한다): 두 arm 모두 학습 sub1·롤아웃 main1 이다 (v1·E0 는 반대). replay buffer 만 다르다 — e1a main1, e1b sub1.
+e1b 는 배치가 sub1 → 드라이버(main1) → 학습(sub1)으로 TCP 를 두 번 건너므로 `exposed_generation`(배치 이동) 비교는 따로 본다.
 근거: v1 구간 1 에서 긴 스텝(3·5스텝)마다 엔진당 대기 샘플이 130~138개였다. 같은 때 동시 처리는 95~117개로 `max_num_seqs` 256 보다 훨씬 낮았다 — KV 용량에 막혔다.
 판정 기준: 정상 상태 스텝 간격 · `exposed_generation` · vLLM 유휴·대기, 그리고 정확성(스텝 KL < 0.002, 위치 구간별 KL 이 e1b 와 같은 수준, R3 오류 0).
 정확성이 같고 e1a 가 빠르면 두 레버를 함께 채택한다. e1a 가 느리거나 KL 이 나빠지면 레버를 끈 채 본 런을 띄운다.
