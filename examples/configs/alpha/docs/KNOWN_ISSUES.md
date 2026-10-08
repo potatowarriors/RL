@@ -5,6 +5,25 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## Gym 경로 `truncation_rate` 가 생성 상한(max_new_tokens) 잘림을 세지 않는다 (2026-10-08 ✅ `78568c330` 병합)
+
+**발견 경위**: E0(G8, 생성 상한 16K)에서 128개 중 68개가 정확히 16,384 토큰에서 끝났는데 `train/truncation_rate` 는 0 이었다.
+E1a(상한 64K)도 덤프의 생성 구간 길이로 센 잘림 12.6~16.5% 가 지표로는 0 이었다.
+
+**원인**: NeMo-Gym 후처리(`_postprocess_single_nemo_gym_group`)는 prompt+response 가 `max_model_len` 을 정확히 채운 샘플만 잘림으로 셌다.
+모델 호출이 요청별 출력 상한(`max_output_tokens = min(행 상한, max_new_tokens)`, `_prepare_nemo_gym_rows`)에서 멈춘 경우는 정상 종료로 셌다.
+비-Gym 경로는 생성의 `truncated` 플래그로 이 경우를 센다. upstream main 8bf6bd4ba 도 같은 코드다.
+
+**영향**: 지표만 틀렸다 (`truncation_rate`·`natural_termination_rate`). 배치의 `truncated` 는 overlong filtering 에만 쓰이고 alpha 레시피는 끈다.
+64K 상한(D7)의 잘림 비율을 본 런 내내 볼 수 없었을 것이다. 덧붙여 async 경로의 그룹별 지표 합산은 `max_` 로 시작하는 키를 그룹 간 최댓값으로 합친다
+(`grpo.py` `aggregate_rollout_metrics`) — `max_gen_tokens_per_turn/mean` 같은 값은 잘림 비율로 쓸 수 없다.
+
+**수정**: assistant 메시지 길이가 그 행의 `max_output_tokens` 이상이면 잘림으로 센다. NeMo-Gym 은 `generation_token_ids` 를 모델 호출의 마지막 출력 항목에만 붙이므로
+assistant 메시지 하나가 호출 한 번의 생성 전체다 (`nemo_rl/environments/nemo_gym.py`). 브랜치 `alpha/gym-trunc-metric` (`6a6bad156`) → `78568c330` 병합.
+
+**검증**: 새 테스트 `test_postprocess_nemo_gym_group_counts_output_cap_truncation` 이 수정 전 코드에서 `[False, False, True]` 로 실패하고 수정 뒤 통과한다.
+관련 테스트 4개 통과 (`pytest --noconftest` — 운영 Ray 클러스터에 붙지 않는다). 본 런 구간 A 의 덤프 계수와 지표를 대조한다.
+
 ## 첫 RLVR 런이 7스텝에서 6.5시간 멈췄다 — Gym HTTP 경로의 vLLM 요청이 엔진 하나에서 끝나지 않았다 (2026-10-08, 원인 후보 이식)
 
 **발견 경위**: 구간 1 의 6스텝이 01:13 에 끝난 뒤, 7스텝은 배치(target 6)를 기다렸다. 01:49 이후 replay buffer 가 87 그룹에서 멈췄다
