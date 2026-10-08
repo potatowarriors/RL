@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
+import os
 import threading as _threading
 import time
 from collections import defaultdict
@@ -54,6 +56,34 @@ TokenizerType = PreTrainedTokenizerBase
 _MAX_NEMO_GYM_STREAM_RETRIES = 3
 _NEMO_GYM_RETRY_DELAY_BASE_SECONDS = 1.0
 _REPLAY_BUFFER_MAX_BACKOFF_SECONDS = 0.5
+
+# Experimental (alpha rollout speed): comma-separated NeMo-Gym agent names whose
+# rows are expected to generate long responses. When set, every NeMo-Gym row gets
+# a vLLM request priority (requires vllm_kwargs.scheduling_policy=priority).
+REQUEST_PRIORITY_LONG_AGENTS_ENV = "NRL_REQUEST_PRIORITY_LONG_AGENTS"
+
+
+def annotate_request_priority(
+    rows: list[dict[str, Any]],
+    target_weight_version: int,
+    long_agents: frozenset[str],
+) -> None:
+    """Set a vLLM request priority on NeMo-Gym rows (lower runs first).
+
+    Batches for earlier training steps run first, so the batch the trainer needs
+    next is never starved. Within a batch, rows of ``long_agents`` run first so
+    the generations that bound batch completion start as early as possible.
+    The value travels through NeMo-Gym's per-request ``metadata.extra_body``,
+    which the vLLM model server merges into the chat completion request.
+    """
+    for row in rows:
+        params = row["responses_create_params"]
+        metadata = dict(params.get("metadata") or {})
+        extra_body = json.loads(metadata.get("extra_body") or "{}")
+        is_long = row["agent_ref"]["name"] in long_agents
+        extra_body["priority"] = 2 * target_weight_version + (0 if is_long else 1)
+        metadata["extra_body"] = json.dumps(extra_body)
+        params["metadata"] = metadata
 
 
 @ray.remote  # pragma: no cover
@@ -1130,6 +1160,22 @@ class AsyncTrajectoryCollector:
             if use_nemo_gym
             else {}
         )
+        long_agents = os.environ.get(REQUEST_PRIORITY_LONG_AGENTS_ENV)
+        if use_nemo_gym and long_agents:
+            scheduling_policy = self.master_config.policy["generation"][
+                "vllm_kwargs"
+            ].get("scheduling_policy")
+            if scheduling_policy != "priority":
+                raise ValueError(
+                    f"{REQUEST_PRIORITY_LONG_AGENTS_ENV} needs "
+                    "policy.generation.vllm_kwargs.scheduling_policy=priority, got "
+                    f"{scheduling_policy!r}"
+                )
+            annotate_request_priority(
+                repeated_batch["extra_env_info"],
+                target_weight_version,
+                frozenset(a.strip() for a in long_agents.split(",") if a.strip()),
+            )
         buffered_group_indices: set[int] = set()
         last_error: Exception | None = None
         max_attempts = 1 + (_MAX_NEMO_GYM_STREAM_RETRIES if use_nemo_gym else 0)

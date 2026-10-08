@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import json
 import os
 import tempfile
 import threading
@@ -2714,3 +2715,28 @@ def test_turn_count_fallback_priority():
     assert f({"turns_per_sample/max": 5, "turns_per_sample/mean": 3}) == 5.0
     assert f({"turns_per_sample/mean": 6}) == 6.0
     assert f({"reward": 1.0}) is None
+
+
+def test_annotate_request_priority_orders_by_target_then_long_agents():
+    rows = [
+        {
+            "agent_ref": {"name": name},
+            "responses_create_params": {
+                "metadata": {"extra_body": '{"top_k": 5}'} if keep else {}
+            },
+        }
+        for name, keep in (("code_gen", True), ("tool_use", False))
+    ]
+
+    trajectory_collector_mod.annotate_request_priority(
+        rows, target_weight_version=3, long_agents=frozenset({"code_gen"})
+    )
+
+    extra = [
+        json.loads(row["responses_create_params"]["metadata"]["extra_body"])
+        for row in rows
+    ]
+    # Long agent first within the batch; earlier batches (lower target) first.
+    assert [e["priority"] for e in extra] == [6, 7]
+    # Existing per-request extra_body keys are preserved.
+    assert extra[0]["top_k"] == 5

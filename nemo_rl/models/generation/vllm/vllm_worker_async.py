@@ -67,12 +67,15 @@ LOGGER = logging.getLogger(__name__)
 REQUEST_TRACE_DIR_ENV = "NRL_VLLM_REQUEST_TRACE_DIR"
 
 
-def trace_request_timing(final_res: Any, trace_dir: Optional[str]) -> None:
+def trace_request_timing(
+    final_res: Any, trace_dir: Optional[str], priority: Optional[int] = None
+) -> None:
     """Append queue/prefill/decode timestamps of a finished request as JSONL.
 
     ``queued_ts``/``scheduled_ts``/``first_token_ts``/``last_token_ts`` are
     engine-core monotonic timestamps; ``now_mono``/``now_wall`` let readers
-    convert them to wall-clock time. No-op without a trace dir or stats.
+    convert them to wall-clock time. ``priority`` is the request's scheduling
+    priority as received. No-op without a trace dir or stats.
     """
     if not trace_dir or final_res is None:
         return
@@ -85,6 +88,7 @@ def trace_request_timing(final_res: Any, trace_dir: Optional[str]) -> None:
         "prompt_tokens": len(getattr(final_res, "prompt_token_ids", None) or []),
         "gen_tokens": len(outputs[0].token_ids) if outputs else 0,
         "finish_reason": outputs[0].finish_reason if outputs else None,
+        "priority": priority,
         "arrival_time": stats.arrival_time,
         "queued_ts": stats.queued_ts,
         "scheduled_ts": stats.scheduled_ts,
@@ -752,7 +756,11 @@ class VllmAsyncGenerationWorkerImpl(
                 ):
                     return response
 
-                trace_request_timing(final_res, os.environ.get(REQUEST_TRACE_DIR_ENV))
+                trace_request_timing(
+                    final_res,
+                    os.environ.get(REQUEST_TRACE_DIR_ENV),
+                    priority=getattr(request, "priority", None),
+                )
 
                 if request.logprobs and return_as_token_id:
                     response = attach_token_information_to_chat_response_choices(
