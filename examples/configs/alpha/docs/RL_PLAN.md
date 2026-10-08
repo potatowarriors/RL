@@ -10,13 +10,14 @@ Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는
 
 ```
 [Pai] LC → general SFT(iter2862) → agentic SFT ──evaluate.sh──▶ hfmodel_*
-[NeMo-RL] SFT ckpt ─┬─ RLVR teacher: General (chat·IF) ─┐
-                    ├─ RLVR teacher: STEM ──────────────┼─▶ MOPD1 ─▶ agentic teacher (SWE·search·terminal 등) ─┐
-                    └─ RLVR teacher: Code·Math ─────────┘                                                     ├─▶ MOPD2
-                       General·STEM teacher 재사용 ────────────────────────────────────────────────────────────┘
+[NeMo-RL] SFT ckpt ─┬─ RLVR teacher: General (chat·IF) ──┐
+ (agentic iter2862)  ├─ RLVR teacher: STEM ───────────────┤
+                    ├─ RLVR teacher: Code·Math ──────────┼─▶ MOPD1 ─▶ agentic teacher (SWE·search·terminal 등) ─┐
+                    └─ RLVR teacher: 도구 사용 warm-up ───┘                                                     ├─▶ MOPD2
+                       General·STEM teacher 재사용 (Code·Math 는 학습 경향을 보고 결정) ──────────────────────────┘
 ```
 
-- 1차 teacher 블렌드안은 [`RL_DATA.md`](RL_DATA.md) §5 (승인 대기).
+- 1차 teacher 블렌드·규모·sandbox 는 [`RL_DATA.md`](RL_DATA.md) §5 (결정 현황 §5.0).
 - PivotRL 은 2차 agentic teacher 단계의 방법 후보로 다시 본다 — 방법·검증기 매핑은 [`study/pivotrl_study.md`](study/pivotrl_study.md) §5.
 - 레시피 파일과 작성 여부는 [`../README.md`](../README.md) "레시피" 표.
 
@@ -41,6 +42,7 @@ Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는
 | 16 | **첫 RLVR 런 재시작**: 생성 상한 64K (학습 길이 128K 유지) · 시퀀스 마스킹(threshold 2)은 학습 forward 안에서 평가 (upstream #4171) · upstream 정확성 수정 4건 이식 뒤 처음부터 재시작 · 구간 1 종료 뒤 3~4시간 실험(속도 레버 chunked prefill·`max_trajectory_age_steps` 2)을 거쳐 본 런 | 근거: 첫 런 병목 판정(`RLVR_READINESS.md` §5.1)·가속 검토(§5.2)·`KNOWN_ISSUES.md` 2026-10-08 | 사용자 결정 2026-10-08 |
 | 17 | **v2 본 런 세부**: code_gen 유지 (64K 상한에서 생성 토큰 65%·학습 토큰 47%·보상>0 0% 임을 알고 유지) · E1 레버 A/B 는 계획대로 완주 · 본 런 첫 10스텝(덤프 구간)은 loss 안 마스킹을 꺼 덤프에 학습측 logprob 을 남긴다(위치별·agent 별 KL) · wandb 로깅 (`alpha-posttraining`, group `rlvr1_v2`) | 근거: E1a 1스텝 agent 별 통계(`RLVR_READINESS.md` §5.3), loss 안 마스킹 덤프의 prev_logprobs 는 0 (G8·E1a) | 사용자 결정 2026-10-08 |
 | 18 | **RL 단계 재편 (§1)**: SFT ckpt → 1차 RLVR teacher 3종(General = chat·IF · STEM · Code·Math) → MOPD1 → MOPD1 에서 agentic teacher(SWE·search·terminal 등) → MOPD2 (General·STEM teacher 재사용). Ultra 형태의 Student-RLVR1·2 는 두지 않는다. 속도 최적화 대신 현 자원(H100 16장)에 맞게 학습 규모를 줄인다 | Ultra 형태 일정 42~44일 (`RLVR_READINESS.md` §5.5). 설정 튜닝으로 몇 배 빨라질 근거가 실측상 없다 | 사용자 결정 2026-10-08 |
+| 19 | **1차 teacher 세부**: 시작 ckpt = agentic 최종 iter2862 · teacher 4종 (도구 사용 warm-up teacher 추가 — MOPD1 에서 도구 사용 능력 망각 방지) · 규모 B = Ultra teacher 와 같은 샘플 수 (General 640 · STEM 820 · Code·Math 600 스텝, 블렌드 1 에폭) · judge = Gemma-4-31B-it · sandbox = gpu06 `alpha-eval` · 한국어 보강 안 함 · Code·Math teacher 의 MOPD2 재사용은 학습 경향을 보고 결정 | `RL_DATA.md` §5.0·§5.2·§5.8·§5.9 | 사용자 결정 2026-10-08 |
 | 14 | **RLVR 준비를 먼저** 진행한다. Pai 의 중요한 학습 설정을 유지하고 SFT 학습 최적화를 이식해 최대 128K 로 학습한다. 첫 작업은 이식 위험 보고·게이트(`RLVR_READINESS.md`) | §1 의 PivotRL 선행 순서는 재검토 대상 — Ultra RLVR1 블렌드의 38% 가 이미 단일 스텝 도구 호출(피벗형) 환경이다 | 사용자 지시 2026-10-07 |
 
 ### SFT → RL 승계 범위 (2026-10-07)

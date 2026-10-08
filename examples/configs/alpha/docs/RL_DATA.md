@@ -89,8 +89,9 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 | P0 | **승인** — 내려받기(수학 복원 원본 · Gemma) · GPU 사전 측정 | 사용자 2026-10-08 |
 | 한국어 보강 | **하지 않는다** (시간 없음) | 사용자 2026-10-08 |
 | Code·Math teacher 의 MOPD2 재사용 | **보류** — 학습 경향을 보고 정한다 (사용자는 agentic teacher 가 Code·Math 도 개선할 것으로 봄) | 사용자 2026-10-08 |
-| 규모 | **결정 대기** — 250 스텝은 작다는 지적 (사용자 2026-10-08). 재제안은 §5.2 | |
-| 도구 사용 warm-up teacher | **결정 대기** — 사용자 제안, 검토는 §5.8 | |
+| 규모 | **B — Ultra teacher 와 같은 샘플 수** (General 640 · STEM 820 · Code·Math 600 스텝, 블렌드 1 에폭). 첫 제안 250 스텝은 작다는 지적 뒤 재제안 (§5.2) | 사용자 2026-10-08 |
+| 도구 사용 warm-up teacher | **넣는다** — 1차 teacher 는 4종 (§5.8) | 사용자 2026-10-08 |
+| sandbox | **gpu06 `alpha-eval` (DinD)** 에 NeMo-Skills sandbox 를 띄워 ns_tools(python 도구)·Lean 을 쓴다. 구성은 §5.9 | 사용자 2026-10-08 |
 
 ### 5.1 원칙
 
@@ -176,7 +177,7 @@ knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (
 | P0-2 | 데이터 변환: 수학 마스킹 복원 (HF 내려받기) · 신규 셋 `agent_ref` 부여 · 벤치 대조 · D1 구조 게이트 | CPU | |
 | P0-3 | Code·Math alpha 사전 측정 (Gym `nemo-gym-reward-profiling` 경로, 후보 약 2.4만 × 4회) | GPU 16장 반나절 | 후보는 Nano pass_rate 로 먼저 줄인다 |
 | P0-4 | judge 검증: Gemma-4-31B-it (사용자 결정) 를 롤아웃 노드 GPU 2장에 올리고 역할별로 잰다 — GenRM-v1 정답 쌍 일치율 · Safety-v1 일치율 · equivalence 판정 · 처리량 | GPU 2장 몇 시간 | Ultra 의 GenRM 은 235B(롤아웃 노드 8장 전부)·550B(불가)라 쓸 수 없다. 안전 판정이 기준에 못 미치면 safety 4B 를 따로 내려받는다 |
-| P0-5 | calendar 보상 0 원인 | CPU | General 블렌드 포함 여부 |
+| P0-5 | calendar 보상 0 원인 | CPU | **완료 (2026-10-08)**: 모델 능력·어려운 표본이다. 채점기는 정상 — 솔버로 만든 정답 836/836 이 보상 1. 직전 달력 복사로 통과하는 행 111/910 (12.2%), 지금까지 본 calendar 프롬프트는 4개뿐. P0-3 에 후보 1~2K 를 넣고 0 < 정답률 < 1 인 행이 10% 이상이면 General 에 1~2% 로 넣는다 |
 
 순서: P0 → STEM → Code·Math → General. STEM 은 보상 신호가 건강해 teacher 파이프라인을 먼저 검증한다.
 도구 사용 teacher (§5.8, 결정 대기) 는 judge·사전 측정이 필요 없어 어느 자리에도 넣을 수 있다.
@@ -191,7 +192,7 @@ Code·Math 는 P0-3 결과가 필요하다. General 은 judge 가 가장 많이 
 | Code·Math | code_gen · math_with_judge |
 | 도구 사용 (§5.8) | tau · swe_pivot · toolcall_schema · workplace — warm-up teacher, 만들지 않으면 SFT ckpt |
 
-### 5.8 도구 사용 warm-up teacher (사용자 제안 2026-10-08, 결정 대기)
+### 5.8 도구 사용 warm-up teacher (사용자 결정 2026-10-08 — 넣는다)
 
 MOPD1 이 세 도메인만 증류하면, 2차 agentic teacher 의 출발점인 MOPD1 에서 도구 사용 능력이 약해질 수 있다.
 권고는 1차에 네 번째 teacher 로 넣는 것이다.
@@ -205,3 +206,19 @@ MOPD1 이 세 도메인만 증류하면, 2차 agentic teacher 의 출발점인 M
 | MOPD1 에서 | 도구 프롬프트를 MOPD1 에 넣고 이 teacher 에 라우팅한다. 망각을 막고, 단일 스텝 도구 호출을 올린 상태로 2차 agentic teacher 를 시작한다 |
 | 대안 (비용 0) | teacher 를 만들지 않고 MOPD1 의 도구 프롬프트를 SFT ckpt 에 라우팅한다. 망각은 막지만 개선은 없다 |
 | 근거 | Ultra 도 Student-RLVR 블렌드의 38% 가 단일 스텝 도구 호출이고, MOPD 에서 도구 프롬프트를 general teacher 에 라우팅했다. 원래 계획의 PivotRL (agentic SFT 직후) 과 같은 역할이다 |
+
+### 5.9 sandbox — gpu06 `alpha-eval` (사용자 결정 2026-10-08, 구성 대기)
+
+Backend.AI 노드(main1·sub1)는 docker 를 못 띄운다. Pai 가 SWE-bench·Terminal-Bench 에 쓰는 외부 docker 호스트 gpu06 의 DinD 컨테이너
+`alpha-eval` 을 sandbox 로 쓴다. 접속·복구 정본은 Pai `examples/alpha/docs/EVAL_DOCKER_NODE.md` 다.
+
+| 항목 | 내용 |
+|---|---|
+| 상태 (2026-10-08 확인) | ssh 2홉 접속 정상 · dockerd 29.1.3 overlayfs · `/var/lib/docker` 여유 4.1 TB · 64코어 · 가용 RAM 441 GB · 공용 서버 |
+| 띄울 것 | NeMo-Skills sandbox 이미지 — Gym `ns_tools` 요구 커밋 `da85a881` 의 `dockerfiles/Dockerfile.sandbox` (Python·pypy·Lean 4 v4.12 + Mathlib). 공개 이미지가 없어 빌드한다 |
+| 연결 | gpu06 앞단 방화벽은 선별 포트만 연다. main1 에서 `ssh -L 0.0.0.0:6000:localhost:6000 alpha-eval` 로 터널을 열고, Gym 서버에 `NEMO_SKILLS_SANDBOX_HOST=10.0.37.4`·`PORT=6000` 을 넘긴다 |
+| 쓰는 환경 | ns_tools (python 도구 수학: Ultra 1,569 + Math-v2 3,867, 과학: Science-v1 90,566) · math_formal_lean (Ultra·Super 2,288) |
+| 검증 | 터널 너머 실행 지연·동시 처리량 · ns_tools·Lean 각 소량을 P0-3 사전 측정에 넣어 끝까지 돌린다 |
+| 미정 | code_gen 은 지금도 sandbox 없이 Gym CPU 에서 모델 코드를 실행한다 (H4). sandbox 로 옮길지는 따로 본다 |
+
+ns_tools·Lean 이 들어오면 블렌드 비율을 다시 낸다 (Code·Math 에 python 도구 수학·Lean, STEM 에 과학 python 도구 문제). 사용자 승인 뒤 반영한다.
