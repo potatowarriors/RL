@@ -63,6 +63,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | 도구 사용 teacher(lr 1e-6)가 42스텝 동안 보상 평탄 — 정합 지표·학습 경로는 정상 | 스텝당 갱신 2e-7 이 bf16 반올림 경계(6e-5)보다 작아 50스텝 누적의 12% 만 bf16 에 반영 → lr 3e-6 (결정 22). 보상이 평탄하면 `tools/measure_bf16_delivery.py` 로 반영률을 잰다 |
 | 10-08 | STEM 블렌드의 rdkit 행은 Gym 0.6.0 에 서버가 없고, Science-v1 도구 행은 ns_tools 에 채점기(`verifier_type`)가 등록돼 있지 않음 | 둘 다 학습을 띄워야 드러난다 → rdkit alpha 플러그인 · 레시피 `ns_tools.verifiers` 등록. `check_alpha_recipe.py` 가 데이터의 agent·verifier_type 을 Gym 설정과 대조한다 (블렌드를 바꾸면 다시 돌린다) |
 | 10-08 | 레시피에 `grpo.reward_shaping`(DAPO 길이 감점)을 켜도 효과 없음 | async 경로가 호출하지 않는다 → 길이 보상은 `rollouts.py` 그룹 후처리에 (`docs/KNOWN_ISSUES.md`) |
 | 10-08 | alpha vLLM `--data-parallel-size 8` 이 NCCL 초기화에서 `double free` 로 죽음 | vLLM DP 모드 문제 (Pai 문서에 이미 있음) → Pai `serve_fleet.sh`(GPU 당 단일 서버 + lb_proxy)·`stop_fleet.sh`. 서빙·벤치 경로는 Pai `SFT_BENCHMARKS.md` §2.5~2.6 이 정본 |
