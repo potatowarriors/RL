@@ -160,6 +160,23 @@ judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없
 nvarc(ARC-AGI)는 라이선스 확인 전까지 뺀다. Science-v1 은 CC BY-SA 4.0 이다.
 knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (0,1) 일 수 있다 — P0 표본으로 확인한다.
 
+**최종 후보 `teacher_stem_v1.jsonl` (2026-10-08, 비율 승인 대기)** — 52,500행 (= 820 스텝 × 64) + 검증 666, D1 OK. 위 표에 sandbox 결정(§5.9) 뒤
+python 도구 과학을 넣고 주관식·객관식을 줄였다. 레시피 `teacher_stem_alpha.yaml` (`alpha/judge-split`, 결정 21)
+
+| 구성 | agent (채점) | 학습 행 | 비중 | 원천 (참조 pass_rate) |
+|---|---|---|---|---|
+| 과학·지식 객관식 | mcqa | 26,613 | 50.7% | Ultra · Super · Nano · knowledge-mcqa — 모두 (0,1) |
+| 과학·지식 주관식 | equivalence_llm_judge (Gemma) | 10,500 | 20.0% | Ultra reasoning 5,183 (0,1) · Science-v1 2,659 · ExamQA 학습 split 2,658 (둘 다 pass_rate 없음, 50:50 은 임의 배분) |
+| 논리·퍼즐 | reasoning_gym | 7,875 | 15.0% | Ultra · Super (0,1) + ReasoningGym-v1 |
+| python 도구 과학 | ns_tools (sandbox) → equivalence_llm_judge | 5,250 | 10.0% | Science-v1 (pass_rate 없음, 답의 97.3% 서술형) |
+| 화학 | rdkit_chemistry (alpha 플러그인, 정수 일치) | 2,262 | 4.3% | Ultra (0,1) — 고유 1,131 × 2 |
+
+- **Gym 0.6.0 에는 rdkit_chemistry 서버가 없다.** alpha 플러그인 `gym_plugins/resources_servers/rdkit_chemistry` 를 만들었다 (`KNOWN_ISSUES.md` 2026-10-08).
+- Science-v1 python 도구 행의 `verifier_type` 은 equivalence_llm_judge 다 → 레시피가 `ns_tools.verifiers` 에 등록한다. 도구 설명의 시간 제한 120초에 맞춰 `exec_timeout_s 120` (Gym 기본 10초).
+- 난이도 정보는 Ultra 몫에만 있다. pass_rate 가 없는 15,817행(30.1%)은 alpha 정답률을 모른다 — 첫 100 스텝의 agent 별 보상으로 본다.
+- Science-v1 보상(주관식 2,659 + 도구 5,250 = 15.1%)은 긴 서술형 정답을 Gemma 가 판정한다 → P0-4 에 `sci_equivalence` 를 넣었다 (§5.6).
+- 주관식 7,841행(Ultra·ExamQA)은 `output_regex` 가 없어 judge 가 최종 응답 전체를 정답과 비교한다 (Ultra 와 같다).
+
 ### 5.5 Code·Math — 비율 (24K 상한으로 시작해 48K 로 올린다)
 
 | 구성 | agent (채점) | 비중 | 풀 | 근거 |
@@ -197,9 +214,9 @@ knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (
 | # | 작업 | 자원 | 비고 |
 |---|---|---|---|
 | P0-1 | 시작 ckpt 확정 + 게이트 M1·M2·M3 → R1 | 1노드 반나절 | **완료 (2026-10-08)**: iter2862 M1 14,181/14,181 · M2 cos ≥ 0.99980 · M3 1.0228 · M4 cos ≥ 0.99995 · R1 0.0014/0.0013/0.0013 — 모두 PASS (`GATES.md`) |
-| P0-2 | 데이터 변환: 수학 마스킹 복원 (HF 내려받기) · 신규 셋 `agent_ref` 부여 · 벤치 대조 · D1 구조 게이트 | CPU | **Code·Math 완료 (2026-10-08)**: 복원 `alpha_blends/{nano,super,math_v2}_restored/` (남은 마스킹 0). 후보 풀 `alpha_blends/teacher_pool/` — 코드 23,971 · 수학 29,406 문제 (원천 99,876 · 59,844 행에서 중복 제거, 벤치 오염 19 · 답 충돌 40 제외), 측정 목록 각 12,000, 6개 파일 D1 통과. 도구 `tools/teacher_pool_{index,build}.py`. 대조한 벤치 AIME25 · HMMT Feb25 · GPQA-D · MMLU-Pro · LCB v5, 못 한 벤치 MATH-500 · AIME24 · HMMT Nov25 · LCB v6 이후 (로컬에 없음). **도구 블렌드 완료**: `teacher_blends/teacher_tool_v1.jsonl` 25,600 + 검증 512 (`tools/build_tool_blend.py`). **STEM·General 의 judge 불필요 부분 완료 (2026-10-08)**: `teacher_stem_judgefree_v1.jsonl` 36,750 (객관식 26,613 · 퍼즐 7,875 · rdkit 2,262 = 고유 1,131 × 2) · `teacher_general_judgefree_v1.jsonl` 20,500 (지시 따르기 14,350 · SO v1 2,768 · SO v3 1,845 · citation 922 · freeform 615) · 각 검증 512 · D1 OK · 오염 제외 STEM 1 · General 4 (IFEval 3 포함). Science-v1 python 도구 행 중 math-verify 채점 가능한 답은 1,409 개뿐이다 (90,566 중 서술형 88,280) — `teacher_stem_scitir_candidates_v1.jsonl`. knowledge-mcqa 변환 코드는 있고 Qwen (0,1) 247,287 문제가 확장 풀로 남았다. 도구 스크립트는 scratchpad (리포 반영은 최종 블렌드 때). 남은 것: judge 부분 (STEM 주관식 · General 50%), effort 마커 재삽입 (약 3.5%), 코드 테스트 수 상한 (p90 106개), General 레시피에 SO v3 · citation · freeform 서버 추가 |
+| P0-2 | 데이터 변환: 수학 마스킹 복원 (HF 내려받기) · 신규 셋 `agent_ref` 부여 · 벤치 대조 · D1 구조 게이트 | CPU | **Code·Math 완료 (2026-10-08)**: 복원 `alpha_blends/{nano,super,math_v2}_restored/` (남은 마스킹 0). 후보 풀 `alpha_blends/teacher_pool/` — 코드 23,971 · 수학 29,406 문제 (원천 99,876 · 59,844 행에서 중복 제거, 벤치 오염 19 · 답 충돌 40 제외), 측정 목록 각 12,000, 6개 파일 D1 통과. 도구 `tools/teacher_pool_{index,build}.py`. 대조한 벤치 AIME25 · HMMT Feb25 · GPQA-D · MMLU-Pro · LCB v5, 못 한 벤치 MATH-500 · AIME24 · HMMT Nov25 · LCB v6 이후 (로컬에 없음). **도구 블렌드 완료**: `teacher_blends/teacher_tool_v1.jsonl` 25,600 + 검증 512 (`tools/build_tool_blend.py`). **STEM·General 의 judge 불필요 부분 완료 (2026-10-08)**: `teacher_stem_judgefree_v1.jsonl` 36,750 (객관식 26,613 · 퍼즐 7,875 · rdkit 2,262 = 고유 1,131 × 2) · `teacher_general_judgefree_v1.jsonl` 20,500 (지시 따르기 14,350 · SO v1 2,768 · SO v3 1,845 · citation 922 · freeform 615) · 각 검증 512 · D1 OK · 오염 제외 STEM 1 · General 4 (IFEval 3 포함). Science-v1 python 도구 행 중 math-verify 채점 가능한 답은 1,409 개뿐이다 (90,566 중 서술형 88,280) — `teacher_stem_scitir_candidates_v1.jsonl`. knowledge-mcqa 변환 코드는 있고 Qwen (0,1) 247,287 문제가 확장 풀로 남았다. 도구 스크립트는 scratchpad (리포 반영은 최종 블렌드 때). **STEM judge 부분 완료 (2026-10-08)**: `teacher_stem_judge_v1.jsonl` 15,750 (주관식 10,500 · python 도구 과학 5,250) + 검증 154, 최종 후보 `teacher_stem_v1.jsonl` 52,500 + 검증 666, 스모크 `teacher_stem_smoke_v2.jsonl` 256 (§5.4) — 스크립트 scratchpad `build_stem_judge.py`·`assemble_stem.py`. 남은 것: General judge 부분 (50%), effort 마커 재삽입 (약 3.5%), 코드 테스트 수 상한 (p90 106개), General 레시피에 SO v3 · citation · freeform 서버 추가 |
 | P0-3 | Code·Math alpha 사전 측정 (Gym `nemo-gym-reward-profiling` 경로, 후보 약 2.4만 × 4회) | GPU 16장 반나절 | 후보는 Nano pass_rate 로 먼저 줄인다 |
-| P0-4 | judge 검증 (Gemma 62.6 GB 내려받기 완료, `/home/work/vidsearch/models/gemma-4-31B-it`): Gemma-4-31B-it (사용자 결정) 를 롤아웃 노드 GPU 2장에 올리고 역할별로 잰다 — GenRM-v1 정답 쌍 일치율 · Safety-v1 일치율 · equivalence 판정 · 처리량 | GPU 2장 몇 시간 | Ultra 의 GenRM 은 235B(롤아웃 노드 8장 전부)·550B(불가)라 쓸 수 없다. 안전 판정이 기준에 못 미치면 safety 4B 를 따로 내려받는다 |
+| P0-4 | judge 검증 (Gemma 62.6 GB 내려받기 완료, `/home/work/vidsearch/models/gemma-4-31B-it`): Gemma-4-31B-it (사용자 결정) 를 롤아웃 노드 GPU 2장에 올리고 역할별로 잰다 — GenRM-v1 정답 쌍 일치율 · Safety-v1 일치율 · equivalence 판정 · 처리량 | GPU 2장 몇 시간 | Ultra 의 GenRM 은 235B(롤아웃 노드 8장 전부)·550B(불가)라 쓸 수 없다. 안전 판정이 기준에 못 미치면 safety 4B 를 따로 내려받는다. **2026-10-08 보강**: STEM 채점 경로 두 개를 더 잰다 — `sci_equivalence` (Science-v1 서술형 정답 200 쌍: 정답 그대로 · 같은 하위 주제의 다른 정답, 기준 양성 수용·음성 거부 ≥ 0.95) · `math_judge` (math_with_judge 프롬프트, 두 순서) |
 | P0-5 | calendar 보상 0 원인 | CPU | **완료 (2026-10-08)**: 모델 능력·어려운 표본이다. 채점기는 정상 — 솔버로 만든 정답 836/836 이 보상 1. 직전 달력 복사로 통과하는 행 111/910 (12.2%), 지금까지 본 calendar 프롬프트는 4개뿐. P0-3 에 후보 1~2K 를 넣고 0 < 정답률 < 1 인 행이 10% 이상이면 General 에 1~2% 로 넣는다 |
 
 순서: P0 → STEM → Code·Math → General. STEM 은 보상 신호가 건강해 teacher 파이프라인을 먼저 검증한다.

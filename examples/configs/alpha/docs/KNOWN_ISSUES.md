@@ -5,6 +5,16 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## STEM 블렌드의 rdkit 행은 Gym 0.6.0 에 서버가 없고, Science-v1 도구 행은 ns_tools 에 채점기가 등록돼 있지 않다 (2026-10-08 ✅ 플러그인·레시피·검사기)
+
+- **발견 경위**: STEM 레시피를 쓰면서 블렌드의 agent 마다 Gym 설정을 찾았다. `rdkit_chemistry_agent` (2,262행, 4.3%)는 Gym v0.6.0 `3045a793` 어디에도 없다 — Ultra 블렌드에만 행이 있다.
+  첫 RLVR 런은 이 환경을 쓰지 않아 드러나지 않았다. STEM judge 부분을 만들면서 Science-v1 python 도구 행의 `verifier_type: equivalence_llm_judge` 도 찾았다.
+  `ns_tools` 는 `verifiers` 에 없는 채점기를 `ValueError("Unknown verifier")` 로 거부한다 (`resources_servers/ns_tools/app.py` verify). 기본 설정에는 math_with_judge 만 있다.
+  둘 다 런을 띄워 롤아웃이 돌아야 드러나는 실패다.
+- **대응**: rdkit 채점기를 alpha Gym 플러그인 `gym_plugins/resources_servers/rdkit_chemistry` 로 만들었다. 정답이 모두 정수라 지시한 형식(`\boxed{N}` 또는 `((N))`)의 마지막 값과 일치하면 1 이다 (테스트 17건).
+  STEM 레시피가 `ns_tools.verifiers.equivalence_llm_judge` 를 등록한다. `check_alpha_recipe.py` 가 데이터 행의 agent·verifier_type 을 Gym 설정과 대조한다 — 음성 대조에서 rdkit 설정을 빼면 2,298행, verifier 를 빼면 5,301행을 ERROR 로 잡는다.
+- **교훈**: 블렌드를 바꾸면 레시피 검사기를 데이터 경로와 함께 다시 돌린다. Ultra 블렌드 행이라고 우리 Gym 버전에 서버가 있는 것은 아니다.
+
 ## upstream `grpo.reward_shaping`(DAPO 길이 감점)은 async GRPO 경로에서 적용되지 않는다 (2026-10-08, 조사)
 
 - **사실**: `reward_shaping` 은 동기 `grpo_train` 에서만 호출된다 (`nemo_rl/algorithms/grpo.py:3131`). alpha 레시피가 쓰는 `async_grpo_train` 에는 호출이 없다. 원보상 기준 표준편차(`std_rewards`)도 동기 경로에서만 넘어간다 (3149행). 레시피에서 켜도 조용히 아무 일도 없다.
