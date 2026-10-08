@@ -91,6 +91,8 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 | Code·Math teacher 의 MOPD2 재사용 | **보류** — 학습 경향을 보고 정한다 (사용자는 agentic teacher 가 Code·Math 도 개선할 것으로 봄) | 사용자 2026-10-08 |
 | 규모 | **B — Ultra teacher 와 같은 샘플 수** (General 640 · STEM 820 · Code·Math 600 스텝, 블렌드 1 에폭). 첫 제안 250 스텝은 작다는 지적 뒤 재제안 (§5.2) | 사용자 2026-10-08 |
 | 도구 사용 warm-up teacher | **넣는다** — 1차 teacher 는 4종 (§5.8) | 사용자 2026-10-08 |
+| 순서·lr·배치 | **도구 사용 warm-up → STEM → Code·Math → General**, Muon lr 1e-6 · warmup 10 · GBS 1,024 (검증된 RLVR 값) | 사용자 2026-10-08 |
+| Code·Math 의 코드 | **B — 미루지 않는다**. 생성 상한 48K 로 능력을 다시 재고, 코드 능력 확인 + 점진적 커리큘럼으로 끌어올린다. **1차 최대 과제** (열린 과제, Code·Math 시작 전까지 해법을 찾는다) | 사용자 2026-10-08 |
 | sandbox | **gpu06 `alpha-eval` (DinD)** 에 NeMo-Skills sandbox 를 띄워 ns_tools(python 도구)·Lean 을 쓴다. 구성은 §5.9 | 사용자 2026-10-08 |
 
 ### 5.1 원칙

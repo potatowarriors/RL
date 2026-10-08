@@ -36,6 +36,7 @@ _마지막 갱신: 2026-10-08 (결정 18 — RL 단계 재편, 1차 teacher 블�
 
 | 결정 | 선택지 · 권고 | 정본 |
 |---|---|---|
+| **코드 능력 끌어올리기 — 1차 최대 과제 (사용자 2026-10-08, `RL_PLAN.md` 결정 20)** | 24K 에서 alpha 는 코드 답을 거의 끝내지 못한다 (32회 중 1회, 정답 0). 미루지 않고 48K 로 다시 재고 커리큘럼으로 올린다. Code·Math teacher 시작(세 번째) 전까지 방법을 찾는다 | `RL_DATA.md` §5.5 |
 | ~~1차 teacher 블렌드안~~ **결정됨 (사용자 2026-10-08, `RL_PLAN.md` 결정 19)** | 시작 ckpt agentic iter2862 · judge Gemma-4-31B-it · P0 승인 · 규모 B · 도구 사용 warm-up teacher 추가 · sandbox gpu06 · 한국어 보강 안 함 · Code·Math teacher 의 MOPD2 재사용은 학습 경향을 보고 결정. **남은 것**: sandbox 가 들어온 뒤의 블렌드 비율 (ns_tools·Lean) | `RL_DATA.md` §5.0 |
 | ~~reward_penalties (첫 런)~~ **결정됨 2026-10-07 — 4종 켬** — Ultra 는 4종(중복 reasoning·빈 최종 답·금지 토큰·think 태그 형식)을 모두 켠다. 발동하면 보상 0 | 근거: G5 롤아웃 384개에 오프라인 적용 시 보상 > 0 인 83개 중 깎이는 것 0 — 발동(형식 4a 78·빈 답 65·형식 4b 11)은 전부 이미 보상 0 인 잘림·퇴화 응답 (`tools/analyze_reward_penalties.py`). alpha token id 는 레시피에 반영됨 | `RLVR_READINESS.md` H5 |
 | ~~체크포인트 보존 (첫 런)~~ **결정됨 2026-10-07 (같은 날 축소)** — `keep_top_k 2`(최근 2개) + `tools/export_watch.sh` 로 100스텝마다 HF 반출(1회 30 GB, 모두 보존). 학습 데이터 덤프는 첫 10스텝만 켜고, 분석을 기록한 뒤 지운다. 게이트 산출물 삭제: 스모크 체크포인트 6개 930 GB · G6 HF 반출본 90 GB · M5 랭크별 덤프 9.4 GB. 용량 예산은 아래 "첫 RLVR 런 저장 용량" | 저장 1회 155 GB, 1에폭 ≈ 1,120 스텝, 전부 보존이면 ≈ 17 TB (NFS 여유 13 TB, 공용) | 이 표 |
