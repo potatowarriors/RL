@@ -62,6 +62,8 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | alpha vLLM `--data-parallel-size 8` 이 NCCL 초기화에서 `double free` 로 죽음 | vLLM DP 모드 문제 (Pai 문서에 이미 있음) → Pai `serve_fleet.sh`(GPU 당 단일 서버 + lb_proxy)·`stop_fleet.sh`. 서빙·벤치 경로는 Pai `SFT_BENCHMARKS.md` §2.5~2.6 이 정본 |
+| 10-08 | NeMo-Skills sandbox 빌드 `vedas==0.0.1` 없음 | PyPI 에서 사라짐 → `sandbox.lock` 에서 그 줄 제거, `GITHUB_CI=1` (gpu06 `alpha-eval`, `docs/RL_DATA.md` §5.9) |
 | 10-08 | vLLM `speculative_config.method=ngram` 이 엔진 기동에서 `Numba needs NumPy 2.4 or less` 로 죽음 | CPU 제안기의 numba 가 venv NumPy 2.5 미지원 → `method=ngram_gpu` 사용 |
 | 10-08 | 같은 배치·같은 가중치로 학습 스텝을 두 번 돌려도 기울기가 1~1.6% 어긋남 (Z1) | backward 비결정성(MoE·bf16) → 기울기 비교 게이트는 같은 배치 반복으로 잡음 바닥을 재고 그 배수로 판정 |
 | 10-08 | Gym 런의 `truncation_rate` 가 0 인데 실제로는 생성 상한에서 12~17% 잘림 | 지표가 `max_model_len` 을 채운 샘플만 셈 → 요청별 출력 상한 잘림도 세게 수정 (`78568c330`) |
@@ -82,7 +84,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 | 10-07 | Gym 경로 렌더가 SFT 와 다름 (도구 정의) | Gym 이 `strict` 를 지움 → 유지 결정, Gym 플러그인 서버(`gym_plugins/`)로 구현 (G3) · `description` None 은 데이터 게이트 |
 | 10-07 | 엔진 동등성 gradient cos 0.98 에서 "불일치"로 보임 | MoE·bf16 포화 — 절대 임계 대신 HF·섭동 기준선과 비교 (M5). 하네스엔 SFT forward 플래그(router fp32 등)를 다 준다 |
 | 10-07 | `clean_run.sh` 아래서 환경변수가 안 먹음 (#23) | whitelist `env -i` → `clean_run.sh /usr/bin/env VAR=값 <cmd>` |
-| 10-07 | 바쁜 GPU 위에 게이트 기동 (#25) · 실행 중 import 코드 편집으로 잡 사망 (#26) | 런처에 기동 직전 GPU 점유 검사(1 GiB) · 실행 중인 잡이 import 하는 코드는 편집 금지 |
+| 10-07 | 바쁜 GPU 위에 게이트 기동 (#25) · 실행 중 import 코드 편집으로 잡 사망 (#26) | 런처에 기동 직전 GPU 점유 검사(1 GiB) · 실행 중인 잡이 import 하는 코드는 편집 금지 · `pkill -f`·`pgrep -f` 는 자기 셸까지 맞힌다(exit 144, 10-08 재발) → 이름으로 정리 (`stop_fleet.sh`·Ray actor 이름) |
 | 10-06 | GRPO KL 게이트 FAIL 0.0042 — 오차가 생성 위치를 따라 커짐 (#21) | vLLM GDN 재귀 상태 bf16 누적 + MoE 경계 라우팅 뒤집힘 → 레시피 기본값 fp32 상태 + R3 → 0.0014 |
 | 10-06 | GRPO 로그로 Muon 적용이 안 보임 | mcore 가 Muon 경로 로그를 기본 숨김 → `verify_muon_optimizer.py` (R2) 로 옵티마이저 직접 검사 |
 | 10-06 | 워커 `invalid device ordinal` (#19) | Ray 가 물리 GPU 번호로 set_device → `CUDA_VISIBLE_DEVICES` 쓰지 않음 |

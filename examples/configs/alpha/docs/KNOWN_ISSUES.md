@@ -5,6 +5,20 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## alpha vLLM 을 `--data-parallel-size 8` 로 띄우면 NCCL 초기화에서 `free(): double free detected in tcache 2` 로 죽는다 (2026-10-08, Pai 문서에 이미 있던 함정)
+
+- **증상**: P0-3 사전 측정용으로 `vllm serve <hfmodel> --data-parallel-size 8` 을 main1·sub1 에 띄웠다. 두 노드 모두 `vLLM is using nccl==2.28.9` 직후 워커 8개가 `double free` 로 죽었다. 깨끗한 환경(sub1, Ray actor)에서도 같았으니 환경 누출(#18)이 원인이 아니다.
+- **원인**: vLLM DP 모드 문제다. Pai 는 이미 우회하고 문서화했다 (Pai `SFT_BENCHMARKS.md` §2.6 "단일GPU 서버 N개 + 라운드로빈 프록시 (vLLM DP munmap 우회)").
+- **대응**: alpha 단독 서빙은 Pai `eval_sft/serve_fleet.sh`(GPU 당 `serve_alpha.sh` 1개 + `lb_proxy.py`)로 띄우고 `stop_fleet.sh` 로 내린다. ssh 가 막힌 sub1 은 `$NRL_ROOT/p0_measure/ray_serve_alpha.py`(Ray detached actor 가 `serve_alpha.sh` N개를 띄움)로 띄운다.
+- **교훈**: 서빙·벤치 경로는 Pai 문서가 정본이다. 새 서빙 스크립트를 만들기 전에 Pai `SFT_BENCHMARKS.md` §2.5~2.6 과 `gym/README.md` 를 먼저 읽는다.
+
+## NeMo-Skills sandbox 이미지 빌드가 `vedas==0.0.1` 을 찾지 못해 실패한다 (2026-10-08 ✅ 고정 줄 제거)
+
+- **증상**: gpu06 `alpha-eval` 에서 NeMo-Skills `da85a881` 의 `dockerfiles/Dockerfile.sandbox` 빌드가 `uv pip install -r requirements/sandbox.lock` 단계에서 `vedas was not found in the package registry` 로 멈췄다.
+- **원인**: `requirements/stem.txt` 가 넣은 `vedas==0.0.1` 이 PyPI 에서 사라졌다.
+- **대응**: 체크아웃(`/opt/nemo-skills/Skills`)의 `sandbox.lock` 에서 그 줄만 지웠다 (원본 `sandbox.lock.orig`). SciCode 테스트 데이터(Google Drive) 내려받기는 `--build-arg GITHUB_CI=1` 로 건너뛴다. 이미지 `alpha-nemo-skills-sandbox:da85a88` 23.2 GB, 내보내기만 8.5분.
+- 검증: Python 실행 p50 0.14 s · 동시 32 에서 초당 117건 (main1·sub1 모두), Lean 4 맞는 증명 통과·틀린 증명 실패 (`RL_DATA.md` §5.9).
+
 ## vLLM ngram 투기 디코딩(CPU 제안기)이 엔진 기동에서 죽는다 — `Numba needs NumPy 2.4 or less. Got NumPy 2.5.` (2026-10-08, `ngram_gpu` 로 우회)
 
 **발견 경위**: rollout 속도 시험 T2 에서 `speculative_config.method=ngram` 으로 띄우자 vLLM EngineCore 가 기동 중 ImportError 로 죽었다 (rc 134).

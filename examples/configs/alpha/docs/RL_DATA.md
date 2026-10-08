@@ -207,7 +207,11 @@ MOPD1 이 세 도메인만 증류하면, 2차 agentic teacher 의 출발점인 M
 | 대안 (비용 0) | teacher 를 만들지 않고 MOPD1 의 도구 프롬프트를 SFT ckpt 에 라우팅한다. 망각은 막지만 개선은 없다 |
 | 근거 | Ultra 도 Student-RLVR 블렌드의 38% 가 단일 스텝 도구 호출이고, MOPD 에서 도구 프롬프트를 general teacher 에 라우팅했다. 원래 계획의 PivotRL (agentic SFT 직후) 과 같은 역할이다 |
 
-### 5.9 sandbox — gpu06 `alpha-eval` (사용자 결정 2026-10-08, 구성 대기)
+### 5.9 sandbox — gpu06 `alpha-eval` (사용자 결정 2026-10-08, **구성 완료 2026-10-08**)
+
+**가동 중**: 컨테이너 `alpha-nemo-skills-sandbox` (이미지 `alpha-nemo-skills-sandbox:da85a88`, 작업 프로세스 32, `NEMO_SKILLS_SANDBOX_BLOCK_NETWORK=1`, `--restart unless-stopped`) ·
+main1 터널 `$NRL_ROOT/sandbox/tunnel.sh` (끊기면 다시 연다, 로그 `tunnel.log`) → `10.0.37.4:6000`. 측정: Python p50 0.14 s · 동시 32 에서 초당 117건 (main1·sub1 동일) ·
+Lean 4 맞는 증명 통과·틀린 증명 실패. 빌드 함정은 `KNOWN_ISSUES.md` 2026-10-08 sandbox 항목.
 
 Backend.AI 노드(main1·sub1)는 docker 를 못 띄운다. Pai 가 SWE-bench·Terminal-Bench 에 쓰는 외부 docker 호스트 gpu06 의 DinD 컨테이너
 `alpha-eval` 을 sandbox 로 쓴다. 접속·복구 정본은 Pai `examples/alpha/docs/EVAL_DOCKER_NODE.md` 다.
