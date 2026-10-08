@@ -35,6 +35,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/analyze_rollout_logprob_gap.py` | rollout-vs-train logprob 어긋남 분해 (CPU) — R1 진단 |
 | `tools/analyze_vllm_request_trace.py` | vLLM 요청별 시각 기록(`NRL_VLLM_REQUEST_TRACE_DIR`) 분석 (CPU) — rollout 긴 꼬리를 대기·prefill·디코딩으로 분해, 긴 요청의 대기 비중·속도, 구간별 동시 실행 수 |
 | `tools/analyze_gym_logprob_gap.py` | Gym 경로 logprob 어긋남을 시퀀스·환경·호출 구간별로 분해 (CPU) — G3 진단 |
+| `tools/teacher_pool_index.py` · `tools/teacher_pool_build.py` | 1차 teacher Code·Math 후보 풀 — 원천 색인 → 문제 단위 중복 제거·정규 행 선택·벤치 오염 제거·사전 측정 목록 (CPU, `docs/RL_DATA.md` §5.6 P0-2) |
 | `tools/filter_rl_blend.py` · `tools/measure_blend_prompt_lengths.py` | RL 블렌드 환경 필터(`--preset judge_free`, D1) · 첫 턴 프롬프트 길이 데이터 게이트 (`max_model_len` 초과 행은 런을 멈춘다) |
 | `tools/export_rl_hf.sh` | **RL 체크포인트 → Pai 호환 HF 반출은 이것으로만** (G6). 변환 → 메타데이터 시작점 복사 → `compare_hf_weights.py` 대조. 변환기 출력 그대로는 Pai 가 토크나이저를 못 읽는다 |
 | `tools/compare_hf_weights.py` · `tools/compare_hf_forward.py` | 반출 HF ↔ 시작점 대조: 텐서·동결·dtype (CPU) · Pai 환경 config·토크나이저·forward + 잡음 바닥 통제 (G6) |
