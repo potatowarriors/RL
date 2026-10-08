@@ -16,7 +16,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 |---|---|---|
 | `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`) + 멀티턴 경계 `<\|im_end\|>`(`generation.vllm_cfg.turn_end_token_id: 3`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1·R3 |
 | `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 게이트 결과 R1·R2 |
-| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7·16·17 반영 (생성 상한 64K·loss 안 마스킹). 게이트 G1~G3·G5~G8 PASS, E1 레버(chunked prefill·age 2) 채택 — **v2 본 런** (`docs/STATUS.md`) |
+| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7·16·17 반영 (생성 상한 64K·loss 안 마스킹). 게이트 G1~G3·G5~G8 PASS, E1 레버(chunked prefill·age 2) 채택. 1단계 학습 전 차단 과제(GenRM·judge·sandbox·code_gen 긴 응답)와 rollout 속도 작업 진행 중 (`docs/STATUS.md`) |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
 | `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | 미작성 |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
@@ -26,6 +26,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | 경로 | 내용 |
 |---|---|
 | `vllm_alpha_plugin/` | vLLM 플러그인 패키지 (커밋 `599b58ac3`, pyproject 의 vllm extra + uv source 로 연결). `vllm.general_plugins` 엔트리포인트로 stock 0.25.1 휠에 `AlphaForCausalLM` 등록. qwen3_next 서브클래스 + 표준 RMSNorm 전면 교체(융합 QK-norm 커널은 zero-centered +1.0 하드코딩이라 비활성화) + FusedMoE DSV3 인자(`apply_routed_scale_to_output=False` 의도적) |
+| `runs/launch.sh` | RLVR 런 실행기 (2026-10-08): `launch.sh <campaign> <tag> [override]`. 산출물은 리포 워크스페이스의 `results/alpha/<campaign>/` (gitignored: 로그 디렉토리·드라이버 로그·`runs.log`·`ckpt/`), wandb 는 RL 전용 프로젝트 `alpha-rl` (group = campaign). 기동 전 GPU 점유 검사(`runs/gpu_check.py`)·남은 Gym 서버 정리(`runs/gym_cleanup.py`). 이전 런(v1·E0·E1·v2 구간 A)은 `$NRL_ROOT/runs/` 에 남아 있다 |
 | `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1·G1·G7). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3), `verify_packing_isolation.py` 는 packing 상태 누출(G1), `verify_optimizer_resume.py` 는 재개 전후 옵티마이저 상태 연속성(G7, CPU) |
 | `tools/check_alpha_recipe.py` | 레시피 실행 전 검사 (CPU) — R3+router fusion·파서·Ultra token id·GBS 나눗셈·CP 패딩·eos 등 |
 | `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
