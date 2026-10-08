@@ -42,6 +42,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/inject_identity_blend.py` | RL 블렌드 identity 주입 (`docs/RL_DATA.md` §2) |
 | `gym_plugins/responses_api_models/alpha_vllm_model/` | Gym 정책 서버 플러그인 — 도구 정의의 `strict` 를 유지한다 (결정 13). `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |
 | `docs/` | 문서 — 색인 [`docs/README.md`](docs/README.md) |
+| `skills/alpha-rl/` | Claude Code skill — 작업 유형별 문서 지도. `.claude/skills/alpha-rl` 링크로 등록, upstream 훅의 "skill 먼저"를 받는다 |
 
 ## 이 디렉토리 밖의 alpha 구성 요소
 

@@ -20,17 +20,35 @@ alpha 지침은 여기와 [`examples/configs/alpha/CLAUDE.md`](../../examples/co
 | 사고·수정 서사 | [`examples/configs/alpha/docs/KNOWN_ISSUES.md`](../../examples/configs/alpha/docs/KNOWN_ISSUES.md) |
 | 모델 불변량 · 레시피 기본값 · 함정 표 | [`examples/configs/alpha/CLAUDE.md`](../../examples/configs/alpha/CLAUDE.md) |
 | 검증 게이트 정의·결과 | [`examples/configs/alpha/docs/GATES.md`](../../examples/configs/alpha/docs/GATES.md) |
+| 작업 유형별 문서 지도 (훅이 요구하는 skill) | `alpha-rl` skill — [`examples/configs/alpha/skills/alpha-rl/SKILL.md`](../../examples/configs/alpha/skills/alpha-rl/SKILL.md) |
+| upstream 문서·서브모듈 skill 링크 | [`examples/configs/alpha/docs/README.md`](../../examples/configs/alpha/docs/README.md) "upstream 참조" |
 | Pai 쪽 (SFT·벤치·모델 정본) | `project_s/Pai-Megatron-Patch/examples/alpha/docs/README.md` |
 
 ## upstream 경계
 
-- **수정 금지 (upstream 문서·설정)**: `AGENTS.md`·`CLAUDE.md`·`docs/`·`.claude/settings.json`·`.claude/skills/`.
-  alpha 문서는 `examples/configs/alpha/` 와 `.claude/rules/alpha*.md` 에만 둔다 — rebase 충돌을 0 으로 유지.
+- **upstream 문서·설정의 기존 내용은 고치지 않는다**: `AGENTS.md`·`CLAUDE.md`·`docs/`·`.claude/settings.json`·`.claude/skills/` 기존 항목.
+  alpha 문서는 `examples/configs/alpha/` 와 `.claude/rules/alpha*.md` 에만 둔다 — rebase 충돌을 0 으로 유지. 예외는 둘이다.
+  - **upstream 커밋 이식은 `docs/` 변경까지 원형대로 가져온다.** 문서만 빼면 코드와 문서가 어긋나고, 문서를 지운 커밋이
+    rebase 뒤에도 남아 upstream 문서를 지운다 (2026-10-08 `0caa1696f` 를 `2579140ab` 로 되돌림).
+  - **`.claude/skills/` 에는 `alpha-*` 이름의 새 링크만 추가한다.** 본문은 `examples/configs/alpha/skills/` 에 둔다.
 - **본체(`nemo_rl/`·`tools/`·`tests/`)는 최소 수정.** 먼저 "수정을 소유한 레이어"(Megatron-Bridge fork·vLLM 플러그인·
   레시피 yaml)에 둘 수 있는지 본다. 본체여야 하면 alpha 문서·레시피와 **별도 커밋**으로 나누고 메시지에 rebase 주의를 적는다
   (선례 `1eca2f383` refit_verifier). v0.7/r0.8 rebase 때 이 커밋들이 충돌 후보다.
-- upstream `.claude/settings.json` 의 UserPromptSubmit 훅이 매 프롬프트 "skill 먼저 호출"을 요구한다. upstream skill 은
-  upstream 기여 작업용이다. alpha 작업에 맞는 skill 이 없으면 이 파일과 alpha `CLAUDE.md` 를 그 역할로 본다.
+- upstream 훅(UserPromptSubmit)이 매 프롬프트 "skill 먼저 호출"을 요구한다. alpha 작업이면 **`alpha-rl` skill** 을 호출한다 —
+  작업 유형별로 읽을 alpha 문서·upstream 문서·서브모듈 skill 의 지도다. upstream skill 은 아래 적용표를 따른다.
+
+## upstream skill 적용표 (2026-10-08)
+
+| 분류 | skill | alpha 에서 |
+|---|---|---|
+| 적용 | `config-conventions`·`error-handling`·`linting-and-formatting`·`testing`(Ray pragma) | 본체 수정·upstream 이식 때 |
+| 적용 | `contributing` | Conventional Commits + `git commit -s`. `/ok to test`(NVIDIA CI)만 무관 |
+| 적용 | `review-pr` 로컬 브랜치 모드 | 본체 패치 검토 |
+| 일부 | `nemo-rl-docs` | docstring 규칙만. "새 기능 문서는 `docs/` 에"는 alpha 기능에 적용하지 않는다 |
+| 일부 | `build-and-dependency` | 참고만. uv 0.11.28 고정·`clean_run.sh` 가 우선 (`alpha-submodules.md`·alpha `docs/SETUP.md`) |
+| 쓰지 않음 | `copyright` | alpha 고유 파일(`examples/configs/alpha/**`)에는 NVIDIA 저작권 헤더를 달지 않는다 (사용자 결정 2026-10-08) |
+| 쓰지 않음 | `nemo-rl-session-memory`·`nemo-rl-auto-research` | 상태는 `STATUS.md`, 실험 브랜치는 커밋 규칙 4 가 대신한다. `session/` 디렉토리를 만들지 않는다 |
+| 무관 | `launch-nemo-rl`(k8s)·`nemo-rl-brev-etiquette`(Brev)·`cicd`(NVIDIA CI)·`review-pr-team` | — |
 
 ## 검증 규칙
 

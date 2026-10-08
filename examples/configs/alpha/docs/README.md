@@ -38,6 +38,28 @@
 | [study/pivotrl_study.md](study/pivotrl_study.md) | PivotRL 스터디 — 방법·Ultra 사용처·공개 자산 실사·agentic SFT 이후 적용 설계·게이트 (2026-09-22, Pai 에서 이관) |
 | [archive/POSTTRAIN_PREP_2026-08.md](archive/POSTTRAIN_PREP_2026-08.md) | [동결] RL 인프라 준비 종합 보고 — 타임라인·결정·게이트·산출물 맵 (2026-08-12~21) |
 
+## upstream 참조 (NeMo-RL 본체·서브모듈 — 링크만)
+
+alpha 는 upstream 문서를 고치지 않고 여기서 링크한다 (`.claude/rules/alpha.md` upstream 경계). 둘이 다르면 alpha 쪽이 이 모델에서 실측한 값이다.
+작업 유형별 읽기 순서는 [`../skills/alpha-rl/SKILL.md`](../skills/alpha-rl/SKILL.md). 서브모듈 skill 은 그 서브모듈 파일을 열기 전에는
+skill 목록에 없다 — `SKILL.md` 를 직접 읽는다. MB = `3rdparty/Megatron-Bridge-workspace/Megatron-Bridge/skills/`,
+Gym = `3rdparty/Gym-workspace/Gym/.agents/skills/` (리포 루트 기준).
+
+| 주제 | upstream | alpha 쪽 |
+|---|---|---|
+| R3 | [docs/guides/router-replay.md](../../../../docs/guides/router-replay.md) | 레시피 기본값 `router_replay.enabled` · GATES R1 |
+| Muon | [docs/guides/muon-optimizer.md](../../../../docs/guides/muon-optimizer.md) | `grpo_alpha_smoke_muon.yaml` 헤더 · GATES R2 |
+| async GRPO·refit | [docs/guides/async-grpo.md](../../../../docs/guides/async-grpo.md) (중요도 보정·체크포인트) · [docs/guides/refit.md](../../../../docs/guides/refit.md) (transport 선택) | `RL_PLAN.md` §3 토폴로지 · GATES G5 |
+| packing·CP | [docs/design-docs/sequence-packing-and-dynamic-batching.md](../../../../docs/design-docs/sequence-packing-and-dynamic-batching.md) | GATES G1·G2 |
+| Gym 연동 | [docs/design-docs/nemo-gym-integration.md](../../../../docs/design-docs/nemo-gym-integration.md) · Gym `nemo-gym-debugging`·`nemo-gym-reward-profiling` | `SPEC_nemo_rl_env_wiring.md` · GATES G3 · `../gym_plugins/` |
+| PivotRL 데이터 | Gym `nemo-gym-pivot-datasets` | `study/pivotrl_study.md` · `SPEC_rl_dataset_inventory.md` |
+| vLLM 커스텀 빌드 | [docs/guides/use-custom-vllm.md](../../../../docs/guides/use-custom-vllm.md) | `../vllm_alpha_plugin/` · `.claude/rules/alpha-submodules.md` vLLM 항 |
+| 새 아키텍처·logprob 일관성 | [docs/adding-new-models.md](../../../../docs/adding-new-models.md) (백엔드 간 logprob 차이·허용 오차) · [docs/model-quirks.md](../../../../docs/model-quirks.md) · MB `adding-model-support`·`parity-testing` | `SPEC_megatron_bridge_surface.md` · GATES M1~M5 |
+| 학습 메모리·장문맥 | [docs/about/tips-and-tricks.md](../../../../docs/about/tips-and-tricks.md) (메모리 단편화) · MB `nemo-mbridge-perf-{memory-tuning,moe-long-context,sequence-packing,activation-recompute,cpu-offloading}` | GATES R4·R5 · `RLVR_READINESS.md` §5 |
+| HF 반출 | [docs/design-docs/checkpointing.md](../../../../docs/design-docs/checkpointing.md) | `../tools/export_rl_hf.sh` · GATES G6 |
+| 환경변수 | [docs/design-docs/env-vars.md](../../../../docs/design-docs/env-vars.md) (Ray 워커 환경변수 우선순위) | `../CLAUDE.md` 레시피 규약 `megatron_cfg.env_vars` · `clean_run.sh` 함정 (#23) |
+| Ultra 원형 | [docs/guides/models/nemotron/nemotron-3-ultra.md](../../../../docs/guides/models/nemotron/nemotron-3-ultra.md) | `../student_rlvr1_alpha.yaml` · `RLVR_READINESS.md` §2·§4 |
+
 ## 이 리포 밖 (Pai 스택 — 링크만)
 
 | 문서 | 한 줄 |
