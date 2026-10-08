@@ -71,6 +71,7 @@ def main() -> int:
     pol["sequence_packing"]["enabled"] = True
     pol["sequence_packing"]["train_mb_tokens"] = L
     pol["sequence_packing"]["logprob_mb_tokens"] = L
+    pol["megatron_cfg"].setdefault("train_iters", 10)  # 워커가 요구한다 (GRPO 는 setup 에서 채운다)
     pol["router_replay"] = {"enabled": True}
     pol["generation"]["colocated"]["enabled"] = False
     pol["generation"]["max_new_tokens"] = L
@@ -155,8 +156,18 @@ def main() -> int:
                 "grad_norm": float(torch.as_tensor(res["grad_norm"]).float().max()),
                 "sched_delta": worker.scheduler.num_steps - sched0, "weights_unchanged": unchanged}
 
-    out = {"A": run("A", full), "B": run("B", kept, gbs=kept.size, lr_scheduler_increment=B),
+    out = {"A": run("A", full), "A2": run("A2", full),
+           "B": run("B", kept, gbs=kept.size, lr_scheduler_increment=B),
            "C": run("C", unscaled, gbs=unscaled.size)}
+    ddp_cfg = getattr(worker.model, "ddp_config", None)
+    config_facts = {
+        "moe_z_loss_coeff": getattr(mcfg, "moe_z_loss_coeff", None),
+        "moe_aux_loss_coeff": getattr(mcfg, "moe_aux_loss_coeff", None),
+        "moe_router_load_balancing_type": getattr(mcfg, "moe_router_load_balancing_type", None),
+        "grad_reduce_in_fp32": getattr(ddp_cfg, "grad_reduce_in_fp32", None),
+        "params_dtype": str(getattr(mcfg, "params_dtype", None)),
+        "main_grad_dtype": str(probe[0].main_grad.dtype),
+    }
 
     def rel(x, y):
         num = math.sqrt(sum(float((a - b).pow(2).sum()) for a, b in zip(x, y)))
@@ -164,24 +175,31 @@ def main() -> int:
         return num / max(den, 1e-30)
 
     rec = {"rank": rank, **{k: v for k, v in out.items()},
+           "probe_grad_rel_diff_A2": rel(grads["A"], grads["A2"]),
            "probe_grad_rel_diff_B": rel(grads["A"], grads["B"]), "probe_grad_rel_diff_C": rel(grads["A"], grads["C"])}
     allrec = [None] * world
     torch.distributed.all_gather_object(allrec, rec)
     if rank == 0:
-        A, Bv, C = out["A"], out["B"], out["C"]
+        A, A2, Bv, C = out["A"], out["A2"], out["B"], out["C"]
         ratio = n_full / n_kept
+        # 잡음 바닥: 같은 전체 배치를 두 번 돌린 차이 (backward 비결정성·누적 반올림)
+        floor_probe = max(r["probe_grad_rel_diff_A2"] for r in allrec)
+        floor_gn = abs(A2["grad_norm"] - A["grad_norm"]) / A["grad_norm"]
         checks = {
             "loss_B_matches_A": abs(Bv["loss"] - A["loss"]) <= args.tol * max(abs(A["loss"]), 1e-12),
-            "grad_norm_B_matches_A": abs(Bv["grad_norm"] - A["grad_norm"]) <= args.tol * A["grad_norm"],
-            "probe_grads_B_match_A": max(r["probe_grad_rel_diff_B"] for r in allrec) <= args.tol,
+            "grad_norm_B_within_noise": abs(Bv["grad_norm"] - A["grad_norm"]) / A["grad_norm"] <= max(args.tol, 3 * floor_gn),
+            "probe_grads_B_within_noise": max(r["probe_grad_rel_diff_B"] for r in allrec) <= max(args.tol, 3 * floor_probe),
             "lr_ticks_B_equal_A": Bv["sched_delta"] == A["sched_delta"] == B,
-            "weights_unchanged": all(r[v]["weights_unchanged"] for r in allrec for v in "ABC"),
-            "negative_control_C_ratio": abs(C["grad_norm"] / A["grad_norm"] - ratio) <= 0.01 * ratio,
+            "weights_unchanged": all(r[v]["weights_unchanged"] for r in allrec for v in ("A", "A2", "B", "C")),
+            # 음성 대조: 재조정을 빼면 차이가 잡음 바닥보다 훨씬 커야 한다
+            "negative_control_C_detected": min(r["probe_grad_rel_diff_C"] for r in allrec) > 10 * max(args.tol, floor_probe),
         }
         summary = {"verdict": "PASS" if all(checks.values()) else "FAIL", "checks": checks,
                    "n_full_tokens": n_full, "n_kept_tokens": n_kept, "expected_C_ratio": ratio,
                    "kept_samples": kept.size, "samples": B, "kept_metrics": kept_metrics,
-                   "A": A, "B": Bv, "C": C, "C_grad_norm_ratio": C["grad_norm"] / A["grad_norm"],
+                   "A": A, "A2": A2, "B": Bv, "C": C, "C_grad_norm_ratio": C["grad_norm"] / A["grad_norm"],
+                   "noise_floor_probe_rel_diff": floor_probe, "noise_floor_grad_norm_rel_diff": floor_gn,
+                   "config_facts": config_facts,
                    "probe_grad_rel_diff_B_max": max(r["probe_grad_rel_diff_B"] for r in allrec),
                    "probe_grad_rel_diff_C_min": min(r["probe_grad_rel_diff_C"] for r in allrec),
                    "seq_len": L, "cp": args.cp, "dp": dp}
