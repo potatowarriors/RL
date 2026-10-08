@@ -3,17 +3,21 @@
 RL 단계의 설계 정본이다. 진행 상태와 열린 결정은 [`STATUS.md`](STATUS.md), 데이터는 [`RL_DATA.md`](RL_DATA.md) 에 쓴다.
 2026-10-07 이관 출처: Pai `SFT_RL_DATASETS.md` §4·§5-6·§6, `ALPHA_POSTTRAIN_PROGRESS.md` §3, `NEMO_RL_SETUP.md` §5, alpha `README.md` 전제 절.
 
-## 1. 단계
+## 1. 단계 (결정 18, 2026-10-08)
 
-재현 대상은 Nemotron 3 Ultra post-training 이다: SFT → Student-RLVR → 전문 교사 RL → **MOPD**(멀티 교사 on-policy 증류).
-레시피 원형은 이 리포의 `examples/nemo_gym/nemotron-3-ultra/` (구 `ultra-v3` 브랜치 `examples/configs/ultra/`).
+alpha 의 순서는 Ultra 와 다르다. teacher 를 SFT ckpt 에서 바로 만들고 MOPD 를 두 번 한다.
+Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는 이 리포의 `examples/nemo_gym/nemotron-3-ultra/` 에 있고, 설정 참조로만 쓴다.
 
 ```
 [Pai] LC → general SFT(iter2862) → agentic SFT ──evaluate.sh──▶ hfmodel_*
-[NeMo-RL] PivotRL(agentic) → RLVR(GRPO) → 전문 교사 RL(2~3종) → MOPD
+[NeMo-RL] SFT ckpt ─┬─ RLVR teacher: General (chat·IF) ─┐
+                    ├─ RLVR teacher: STEM ──────────────┼─▶ MOPD1 ─▶ agentic teacher (SWE·search·terminal 등) ─┐
+                    └─ RLVR teacher: Code·Math ─────────┘                                                     ├─▶ MOPD2
+                       General·STEM teacher 재사용 ────────────────────────────────────────────────────────────┘
 ```
 
-- agentic SFT 완주 뒤 첫 RL 은 **PivotRL** 이다 — 방법·검증기 매핑·게이트는 [`study/pivotrl_study.md`](study/pivotrl_study.md) §5.
+- 1차 teacher 블렌드안은 [`RL_DATA.md`](RL_DATA.md) §5 (승인 대기).
+- PivotRL 은 2차 agentic teacher 단계의 방법 후보로 다시 본다 — 방법·검증기 매핑은 [`study/pivotrl_study.md`](study/pivotrl_study.md) §5.
 - 레시피 파일과 작성 여부는 [`../README.md`](../README.md) "레시피" 표.
 
 ## 2. 설계 결정 (현행)
@@ -36,6 +40,7 @@ RL 단계의 설계 정본이다. 진행 상태와 열린 결정은 [`STATUS.md`
 | 15 | **첫 RLVR 런 설정**: judge·sandbox·nvarc 를 뺀 10개 환경 71,730행(`rlvr1_alpha_judgefree.jsonl`) · 최대 128K · KL 0 + `seq_logprob_error_threshold 2` · expert bias 갱신 0 · Muon lr 1e-6 warmup 10 GRPO step. prefix caching 끔·ES 켬은 권고값 그대로. 정확성 확인 뒤 학습·롤아웃 병목을 재고 속도 최적화를 정한다. **게이트 G0~G7 뒤 추가(2026-10-07)**: reward_penalties 4종 켬 · `keep_top_k 2` + 100스텝마다 HF 반출(모두 보존) · 학습 데이터 덤프는 첫 10스텝만, 분석 기록 뒤 삭제 | `RLVR_READINESS.md` D1·D3·D4·D5·D7, `STATUS.md` 첫 런 결정. identity(GenRM 채점)·GenRM·judge 환경은 judge 배치를 정한 뒤 추가한다 | 사용자 결정 2026-10-07 |
 | 16 | **첫 RLVR 런 재시작**: 생성 상한 64K (학습 길이 128K 유지) · 시퀀스 마스킹(threshold 2)은 학습 forward 안에서 평가 (upstream #4171) · upstream 정확성 수정 4건 이식 뒤 처음부터 재시작 · 구간 1 종료 뒤 3~4시간 실험(속도 레버 chunked prefill·`max_trajectory_age_steps` 2)을 거쳐 본 런 | 근거: 첫 런 병목 판정(`RLVR_READINESS.md` §5.1)·가속 검토(§5.2)·`KNOWN_ISSUES.md` 2026-10-08 | 사용자 결정 2026-10-08 |
 | 17 | **v2 본 런 세부**: code_gen 유지 (64K 상한에서 생성 토큰 65%·학습 토큰 47%·보상>0 0% 임을 알고 유지) · E1 레버 A/B 는 계획대로 완주 · 본 런 첫 10스텝(덤프 구간)은 loss 안 마스킹을 꺼 덤프에 학습측 logprob 을 남긴다(위치별·agent 별 KL) · wandb 로깅 (`alpha-posttraining`, group `rlvr1_v2`) | 근거: E1a 1스텝 agent 별 통계(`RLVR_READINESS.md` §5.3), loss 안 마스킹 덤프의 prev_logprobs 는 0 (G8·E1a) | 사용자 결정 2026-10-08 |
+| 18 | **RL 단계 재편 (§1)**: SFT ckpt → 1차 RLVR teacher 3종(General = chat·IF · STEM · Code·Math) → MOPD1 → MOPD1 에서 agentic teacher(SWE·search·terminal 등) → MOPD2 (General·STEM teacher 재사용). Ultra 형태의 Student-RLVR1·2 는 두지 않는다. 속도 최적화 대신 현 자원(H100 16장)에 맞게 학습 규모를 줄인다 | Ultra 형태 일정 42~44일 (`RLVR_READINESS.md` §5.5). 설정 튜닝으로 몇 배 빨라질 근거가 실측상 없다 | 사용자 결정 2026-10-08 |
 | 14 | **RLVR 준비를 먼저** 진행한다. Pai 의 중요한 학습 설정을 유지하고 SFT 학습 최적화를 이식해 최대 128K 로 학습한다. 첫 작업은 이식 위험 보고·게이트(`RLVR_READINESS.md`) | §1 의 PivotRL 선행 순서는 재검토 대상 — Ultra RLVR1 블렌드의 38% 가 이미 단일 스텝 도구 호출(피벗형) 환경이다 | 사용자 지시 2026-10-07 |
 
 ### SFT → RL 승계 범위 (2026-10-07)
@@ -65,7 +70,7 @@ Pai 기능 중 포팅 후보였던 Muon optimizer-state offload(Pai 기능 #4, u
 
 1. **컨텍스트 정합**: Ultra 의 RLVR ctx 49k→65k 는 우리 SFT max 64k·LC 32k~64k 계획(2026-08-01 당시)과 자연스럽게 맞는다. 충돌 지점은 **SWE 교사·MOPD 의 192k** —
    alpha LC 학습 상한이 128k 이므로 **128k 로 캡**(SWE rollout 축소) 또는 SWE 슬롯 축소가 필요하다.
-2. **교사 패널 현실화** (Ultra 는 550B 학생 + 전문 교사들; alpha 는 15B-A3B):
+2. **교사 패널 현실화** (Ultra 는 550B 학생 + 전문 교사들; alpha 는 15B-A3B) — **결정 18(§1)로 대체됐다**. 아래는 2026-08 초안 기록이다:
    - general 교사 = alpha Student-RLVR 자신 (레시피 그대로, 추가 자원 불요)
    - 전문 교사 = alpha 체크포인트에서 각각 소규모 RL (교사 RL 은 GBS 2048·수백 step 규모라 우리 클러스터로 가능;
      교사 수를 2~3종으로 축소 검토: Reasoning/IF 우선)
