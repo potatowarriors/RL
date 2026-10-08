@@ -57,7 +57,8 @@ grpo:
   seq_logprob_error_threshold: 2
   async_grpo:
     enabled: true                       # Gym 은 async 필수 (grpo.py _should_use_nemo_gym)
-    max_trajectory_age_steps: 1
+    max_trajectory_age_steps: 2         # E1 (2026-10-08): 배치 3개를 겹쳐 격스텝 rollout 대기를 없앤다 — 12.3 vs 15.4~17.8 분/스텝, KL 같음
+                                        # (RLVR_READINESS §5.3). Ultra 는 1 (생성 GPU 2.7배·MTP). 본 런에서 KL·IS 비율이 나빠지면 재개 때 1 로
     max_generation_failures: 3
     in_flight_weight_updates: true      # M7: R1 은 sync 만 봤다 — G5 에서 KL 확인
     recompute_kv_cache_after_weight_updates: false
@@ -153,10 +154,12 @@ policy:
         tool_parser: qwen3_xml          # H3: Pai 벤치 fleet 이 alpha 에 쓰는 파서 — G3 에서 실경로 검증
         reasoning_parser: nemotron_v3   # H3: 〃 (Ultra 의 qwen3_coder·nano_v3 를 복사하지 않는다)
     vllm_kwargs:
-      enable_chunked_prefill: false     # D2 와 함께 (upstream R3 레시피)
-      max_num_seqs: 256                 # M2: async 경로 기본값(128)이 작다 — Ultra 값
+      # E1 (2026-10-08): chunked prefill 로 GPU 당 KV 가 157만 → 290만 토큰, 처음 배치 생성 처리량 1.34만 → 1.74만 tok/s, KL 같음.
+      # prefix caching 은 계속 끈다 (D2) — route 누락은 prefix caching 이 캐시한 토큰에서 생긴다 (G8 R3 fallback 0).
+      enable_chunked_prefill: true
+      max_num_seqs: 256                 # M2: async 경로 기본값(128)이 작다 — Ultra 값. E1a 처음 배치 때 256 에 닿음 (다음 레버 후보)
       # M2·G3: chunked prefill 을 끄면 vLLM 은 max_num_batched_tokens >= max_model_len 을 요구한다 (아니면 엔진 기동 실패, G3 2026-10-07)
-      max_num_batched_tokens: ${policy.max_total_sequence_length}
+      max_num_batched_tokens: 16384
     colocated:
       enabled: false
       resources:

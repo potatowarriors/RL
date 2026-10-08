@@ -16,7 +16,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 |---|---|---|
 | `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`) + 멀티턴 경계 `<\|im_end\|>`(`generation.vllm_cfg.turn_end_token_id: 3`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1·R3 |
 | `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 게이트 결과 R1·R2 |
-| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7 반영. 게이트 G1~G3·G5~G7 PASS — **첫 런 대기** (reward_penalties·체크포인트 보존 결정, `docs/STATUS.md`) |
+| `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7·16·17 반영 (생성 상한 64K·loss 안 마스킹). 게이트 G1~G3·G5~G8 PASS, E1 레버(chunked prefill·age 2) 채택 — **v2 본 런** (`docs/STATUS.md`) |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
 | `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | 미작성 |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
