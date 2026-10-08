@@ -15,7 +15,10 @@
 import asyncio
 import copy
 import gc
+import json
 import logging
+import os
+import socket
 import threading
 import time
 import uuid
@@ -57,6 +60,44 @@ from nemo_rl.models.generation.openai_server_utils import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Diagnostic: when set (e.g. via policy.generation.vllm_cfg.env_vars), every HTTP
+# chat completion appends one JSON line of engine timing to a per-process file
+# in this directory. Used to split rollout time into queueing vs decode.
+REQUEST_TRACE_DIR_ENV = "NRL_VLLM_REQUEST_TRACE_DIR"
+
+
+def trace_request_timing(final_res: Any, trace_dir: Optional[str]) -> None:
+    """Append queue/prefill/decode timestamps of a finished request as JSONL.
+
+    ``queued_ts``/``scheduled_ts``/``first_token_ts``/``last_token_ts`` are
+    engine-core monotonic timestamps; ``now_mono``/``now_wall`` let readers
+    convert them to wall-clock time. No-op without a trace dir or stats.
+    """
+    if not trace_dir or final_res is None:
+        return
+    stats = getattr(final_res, "metrics", None)
+    if stats is None:
+        return
+    outputs = getattr(final_res, "outputs", None) or []
+    record = {
+        "request_id": getattr(final_res, "request_id", None),
+        "prompt_tokens": len(getattr(final_res, "prompt_token_ids", None) or []),
+        "gen_tokens": len(outputs[0].token_ids) if outputs else 0,
+        "finish_reason": outputs[0].finish_reason if outputs else None,
+        "arrival_time": stats.arrival_time,
+        "queued_ts": stats.queued_ts,
+        "scheduled_ts": stats.scheduled_ts,
+        "first_token_ts": stats.first_token_ts,
+        "last_token_ts": stats.last_token_ts,
+        "now_mono": time.monotonic(),
+        "now_wall": time.time(),
+    }
+    path = os.path.join(
+        trace_dir, f"vllm_requests_{socket.gethostname()}_{os.getpid()}.jsonl"
+    )
+    with open(path, "a") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 class _AsyncLLMHTTPClient:
@@ -710,6 +751,8 @@ class VllmAsyncGenerationWorkerImpl(
                     or final_res is None
                 ):
                     return response
+
+                trace_request_timing(final_res, os.environ.get(REQUEST_TRACE_DIR_ENV))
 
                 if request.logprobs and return_as_token_id:
                     response = attach_token_information_to_chat_response_choices(

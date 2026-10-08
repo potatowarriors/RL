@@ -504,3 +504,39 @@ def test_maybe_process_mtp_drafter_after_loading_noop_when_disk_loaded(monkeypat
     ext._maybe_process_mtp_drafter_after_loading()
 
     process_weights.assert_not_called()
+
+
+@pytest.mark.vllm
+def test_trace_request_timing_writes_engine_timestamps(tmp_path):
+    from nemo_rl.models.generation.vllm.vllm_worker_async import (
+        trace_request_timing,
+    )
+
+    stats = SimpleNamespace(
+        arrival_time=100.0,
+        queued_ts=10.0,
+        scheduled_ts=12.5,
+        first_token_ts=13.0,
+        last_token_ts=40.0,
+    )
+    final_res = SimpleNamespace(
+        request_id="req-1",
+        prompt_token_ids=[1, 2, 3],
+        outputs=[SimpleNamespace(token_ids=[4, 5], finish_reason="length")],
+        metrics=stats,
+    )
+
+    trace_request_timing(final_res, str(tmp_path))
+    trace_request_timing(final_res, None)  # no trace dir: no-op
+    trace_request_timing(  # no engine stats: no-op
+        SimpleNamespace(metrics=None), str(tmp_path)
+    )
+
+    (trace_file,) = list(tmp_path.iterdir())
+    (record,) = [json.loads(line) for line in trace_file.read_text().splitlines()]
+    assert record["request_id"] == "req-1"
+    assert (record["prompt_tokens"], record["gen_tokens"]) == (3, 2)
+    assert record["finish_reason"] == "length"
+    assert record["scheduled_ts"] - record["queued_ts"] == 2.5
+    assert record["last_token_ts"] - record["first_token_ts"] == 27.0
+    assert {"now_mono", "now_wall"} <= record.keys()
