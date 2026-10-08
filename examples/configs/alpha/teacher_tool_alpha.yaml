@@ -2,7 +2,9 @@
 #
 # 검증된 RLVR 설정(student_rlvr1_alpha.yaml: 2노드 분리 · async age 2 · chunked prefill · Muon lr 1e-6 warmup 10 · GBS 1,024 ·
 # 128K/CP8 · R3 · GDN 상태 fp32 · strict 도구 유지 · KL 0 + threshold 2 · 페널티 4종)을 그대로 상속한다.
-# 바꾸는 것은 데이터 · 스텝 · 생성 상한 · Gym 환경뿐이다 (메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+# 바꾸는 것은 데이터 · 스텝 · 생성 상한 · Gym 환경 · lr 이다 (메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+# lr 3e-6 (사용자 결정 2026-10-08): lr 1e-6 런은 50스텝 동안 fp32 master 갱신의 약 12% 만 bf16 가중치에 반영됐다
+#   (원소 4.5% 변경, 반올림 경계 6e-5 대비 스텝당 갱신 2e-7). docs/KNOWN_ISSUES.md "bf16 가중치에 갱신이 반영되지 않는다".
 #
 # 블렌드: alpha_blends/teacher_blends/teacher_tool_v1.jsonl (25,600 = 400 스텝 × 64, tau 피벗 55.7% · toolcall_schema 30% ·
 #         swe_pivot 14.3%) · 검증셋 teacher_tool_v1_val.jsonl (512, 학습에서 뺐다 — HF 반출본 오프라인 평가용)
@@ -22,6 +24,10 @@ grpo:
 policy:
   generation:
     max_new_tokens: 8192                # 단일 스텝 도구 호출 — v1 런 생성 평균 145~374 토큰, 잘림 0
+  megatron_cfg:
+    optimizer:
+      lr: 3.0e-6                        # 부모 1e-6 의 3배 — 같은 스텝에서 bf16 에 반영되는 갱신 약 8.5배 (1차 추정)
+      min_lr: 3.0e-6                    # warmup 10 (1e-7 → 3e-6) 은 부모 그대로
 
 env:
   _override_: true
