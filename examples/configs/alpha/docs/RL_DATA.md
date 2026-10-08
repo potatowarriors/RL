@@ -75,15 +75,27 @@ Ultra RL 블렌드는 **이미 NeMo Gym 실행 형식**(행별 `agent_ref` 라�
 - SWE 196k vs alpha 128k 컨텍스트 상한 결정 (`RL_PLAN.md` §4)
 - litmus-bench 모니터링 연결 (활용법 조사 포함)
 
-## 5. 1차 teacher 블렌드안 (2026-10-08, 승인 대기 — `RL_PLAN.md` 결정 18)
+## 5. 1차 teacher 블렌드안 (2026-10-08, 일부 결정 — `RL_PLAN.md` 결정 18)
 
 teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다. 풀 수치는 Ultra·Super·Nano 블렌드와 §1.3 원천을
 프롬프트 해시로 색인해 쟀다 (마스킹 행 제외). alpha 수치는 v1(128K)·E1(64K) 런과 Pai 벤치에서 왔다 (`RLVR_READINESS.md` §5).
 
+### 5.0 결정 현황
+
+| 항목 | 결정 | 일자 |
+|---|---|---|
+| 시작 ckpt | **agentic 최종 iter2862** — 게이트 P0-1 진행 (`$NRL_ROOT/gates/agentic_iter2862/`) | 사용자 2026-10-08 |
+| judge | **Gemma-4-31B-it** (Apache-2.0, bf16 62.6 GB, vLLM 0.25.1 이 `Gemma4ForConditionalGeneration` 지원). 모든 judge 역할에 쓰고, 역할별 적합성은 P0-4 에서 잰다 | 사용자 2026-10-08 |
+| P0 | **승인** — 내려받기(수학 복원 원본 · Gemma) · GPU 사전 측정 | 사용자 2026-10-08 |
+| 한국어 보강 | **하지 않는다** (시간 없음) | 사용자 2026-10-08 |
+| Code·Math teacher 의 MOPD2 재사용 | **보류** — 학습 경향을 보고 정한다 (사용자는 agentic teacher 가 Code·Math 도 개선할 것으로 봄) | 사용자 2026-10-08 |
+| 규모 | **결정 대기** — 250 스텝은 작다는 지적 (사용자 2026-10-08). 재제안은 §5.2 | |
+| 도구 사용 warm-up teacher | **결정 대기** — 사용자 제안, 검토는 §5.8 | |
+
 ### 5.1 원칙
 
 1. **데이터는 충분하고 계산이 모자란다.** 고유 프롬프트는 Ultra 블렌드 33만 행 중 10.2만, Ultra·Super·Nano 합 35.5만이다.
-   teacher 1개는 250 스텝 × 64 = 16,000 프롬프트만 쓴다 (§5.2). 그래서 블렌드는 양이 아니라 **alpha 에게 맞는 난이도**로 고른다.
+   teacher 1개는 권고 규모(§5.2 B)로도 4.1만~5.3만 프롬프트만 쓴다. 그래서 블렌드는 양이 아니라 **alpha 에게 맞는 난이도**로 고른다.
 2. **Ultra 블렌드는 alpha 에게 너무 어렵다.** Ultra 블렌드의 code·math·mcqa·IF 행은 Ultra SFT 가 8회 중 1~7회 맞힌 문제만 담았다.
    alpha 의 보상 > 0 비율은 code_gen 0.7% · math 5.1% 다. 반면 IF 17.7% · mcqa 43.8% · reasoning_gym 41.9% 는 학습 가능한 수준이다.
    Code·Math 는 alpha 로 pass rate 를 먼저 재고 고른다 (P0). STEM·General 은 참조 정책 pass_rate 를 대리 지표로 쓴다.
@@ -98,17 +110,26 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 근거 실측: 학습 3.07만 tok/s/노드 (128K/CP8), 시퀀스당 디코딩 41~65 tok/s, age 2 겹침, GBS 1,024 (64 × 16).
 최대 길이가 줄면 CP 를 줄여 학습이 더 빨라질 수 있다 (R5: 64K 4.31만 vs 128K 3.34만 tok/s). 레시피 단계에서 R4 로 확인한다.
 
-| teacher | 생성 상한 | 평균 생성 (근거) | 스텝 | 스텝 수 | 기간 |
-|---|---|---|---|---|---|
-| STEM | 32K | 7~10K (mcqa 7.5K, GPQA 18.8K) | 6~9분 | 250 | 1.0~1.6일 |
-| Code·Math | 24K → 48K | 15~24K (상한 근처) | 9~11분 → 13~16분 | 200 + 100 | 2.2~2.7일 |
-| General | 16K | 4~5K (IF 3.9K, 구조화 출력 2.3K) | 5~7분 + judge | 250 | 0.9~1.3일 |
-| P0 (§5.6) | — | — | — | — | 0.5~1일 |
-| **합** | | | | | **4.6~6.6일 무중단** (운영 여유 +20~30%). Ultra 형태는 42~44일 |
+| teacher | 생성 상한 | 평균 생성 (근거) | 스텝 시간 (추정) | 하루 프롬프트 |
+|---|---|---|---|---|
+| STEM | 32K | 7~10K (mcqa 7.5K, GPQA 18.8K) | 6~9분 | 1.0만~1.5만 |
+| Code·Math | 24K → 48K | 15~24K (상한 근처) | 9~11분 → 13~16분 | 0.6만~1.0만 |
+| General | 16K | 4~5K (IF 3.9K, 구조화 출력 2.3K) | 5~7분 + judge | 1.3만~1.8만 |
+| 도구 사용 (§5.8) | 8K | 0.2~1.5K (프롬프트 5~17K 토큰) | 4~5분 | 1.8만~2.3만 |
 
-검증 보상이 계속 오르면 teacher 마다 400 스텝까지 늘린다 (+0.6~1.5일).
+규모안 (2026-10-08 재제안). 첫 제안 250 스텝은 teacher 3종을 약 1주에 넣으려고 시간 예산에서 역산한 값이다. 데이터나 학습 곡선에서 나온 값이 아니다.
 
-### 5.3 General (chat·IF) — 16,000 프롬프트
+| 안 | teacher 당 스텝 | teacher 당 샘플 | teacher 3종 기간 | 근거 |
+|---|---|---|---|---|
+| A 첫 제안 | 250~300 | 26만~31만 | 4.1~5.6일 | 시간 예산 역산. Ultra teacher 샘플 수의 30~55% |
+| **B 권고** | General 640 · STEM 820 · Code·Math 600 | 61만~84만 | **9.9~13.5일** | Ultra teacher 와 같은 샘플 수 — IFBench 55.4만 + RLHF 10.4만 (General 에 해당) · Reasoning 83.8만 (5,236 × 10 에폭) |
+| C 가용 풀 전체 1 에폭 | General 2,590 · STEM 2,870 · Code·Math 1,090 | 110만~290만 | 약 29~41일 | 비권고 — 풀의 상당수가 alpha 에게 너무 쉽거나 어렵고, 같은 원천이 겹친다 |
+
+- B 는 블렌드 크기를 스텝 수에 맞춰 1 에폭으로 만든다: General 41,000 · STEM 52,500 프롬프트. Code·Math 는 P0-3 이 고른 풀을 1~2 에폭 돈다.
+- 100 스텝마다 HF 반출과 검증 보상을 보고, 평탄해지면 일찍 멈춘다. 스텝 시간은 첫 teacher 의 20 스텝 실측으로 다시 계산한다.
+- P0 (0.5~1일) 와 운영 여유 (+20~30%) 는 따로 더한다. Ultra 형태 전체 일정은 42~44일이었다.
+
+### 5.3 General (chat·IF) — 비율 (프롬프트 수는 §5.2 규모안을 따른다)
 
 | 구성 | agent (채점) | 비중 | 풀 (고유) | 근거 |
 |---|---|---|---|---|
@@ -123,7 +144,7 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없다. calendar 는 모든 런에서 보상 0 이라 원인을 찾을 때까지 뺀다.
 도구 계열(tau·swe_pivot·toolcall_schema·IPI·workplace)은 2차 agentic 으로 넘긴다.
 
-### 5.4 STEM — 16,000 프롬프트
+### 5.4 STEM — 비율
 
 | 구성 | agent (채점) | 비중 | 풀 (고유) | 근거 |
 |---|---|---|---|---|
@@ -135,7 +156,7 @@ judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없
 nvarc(ARC-AGI)는 라이선스 확인 전까지 뺀다. Science-v1 은 CC BY-SA 4.0 이다.
 knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (0,1) 일 수 있다 — P0 표본으로 확인한다.
 
-### 5.5 Code·Math — 19,200 프롬프트 (24K 200 스텝 → 48K 100 스텝)
+### 5.5 Code·Math — 비율 (24K 상한으로 시작해 48K 로 올린다)
 
 | 구성 | agent (채점) | 비중 | 풀 | 근거 |
 |---|---|---|---|---|
@@ -154,10 +175,11 @@ knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (
 | P0-1 | 시작 ckpt 확정 + 게이트 M1·M2·M3 → R1 | 1노드 반나절 | agentic iter2862 이면 필요. 게이트 완료는 iter2400 뿐 |
 | P0-2 | 데이터 변환: 수학 마스킹 복원 (HF 내려받기) · 신규 셋 `agent_ref` 부여 · 벤치 대조 · D1 구조 게이트 | CPU | |
 | P0-3 | Code·Math alpha 사전 측정 (Gym `nemo-gym-reward-profiling` 경로, 후보 약 2.4만 × 4회) | GPU 16장 반나절 | 후보는 Nano pass_rate 로 먼저 줄인다 |
-| P0-4 | judge 선정: 후보를 롤아웃 노드 GPU 2장에 올리고 GenRM-v1 정답 쌍·Safety-v1 로 일치율을 잰다 | GPU 2장 몇 시간 | Ultra 의 GenRM 은 235B(롤아웃 노드 8장 전부)·550B(불가)라 쓸 수 없다. 로컬 후보 gpt-oss-120b 등. safety 4B 는 내려받기 필요 |
+| P0-4 | judge 검증: Gemma-4-31B-it (사용자 결정) 를 롤아웃 노드 GPU 2장에 올리고 역할별로 잰다 — GenRM-v1 정답 쌍 일치율 · Safety-v1 일치율 · equivalence 판정 · 처리량 | GPU 2장 몇 시간 | Ultra 의 GenRM 은 235B(롤아웃 노드 8장 전부)·550B(불가)라 쓸 수 없다. 안전 판정이 기준에 못 미치면 safety 4B 를 따로 내려받는다 |
 | P0-5 | calendar 보상 0 원인 | CPU | General 블렌드 포함 여부 |
 
 순서: P0 → STEM → Code·Math → General. STEM 은 보상 신호가 건강해 teacher 파이프라인을 먼저 검증한다.
+도구 사용 teacher (§5.8, 결정 대기) 는 judge·사전 측정이 필요 없어 어느 자리에도 넣을 수 있다.
 Code·Math 는 P0-3 결과가 필요하다. General 은 judge 가 가장 많이 필요하다.
 
 ### 5.7 MOPD1 라우팅 (예정, MOPD1 설계 때 확정)
@@ -167,4 +189,19 @@ Code·Math 는 P0-3 결과가 필요하다. General 은 judge 가 가장 많이 
 | General | IF · structured_outputs v1·v3 · citation · freeform · calendar · multichallenge · inverse_if · abstention · genrm 2종 · jailbreak 계열 · identity · 매핑 없는 agent |
 | STEM | mcqa · equivalence_llm_judge · reasoning_gym · rdkit_chemistry |
 | Code·Math | code_gen · math_with_judge |
-| 미정 | 도구 계열 프롬프트를 MOPD1 에 넣어 SFT ckpt 를 기준 teacher 로 둘지 (agentic 능력 망각 방지) |
+| 도구 사용 (§5.8) | tau · swe_pivot · toolcall_schema · workplace — warm-up teacher, 만들지 않으면 SFT ckpt |
+
+### 5.8 도구 사용 warm-up teacher (사용자 제안 2026-10-08, 결정 대기)
+
+MOPD1 이 세 도메인만 증류하면, 2차 agentic teacher 의 출발점인 MOPD1 에서 도구 사용 능력이 약해질 수 있다.
+권고는 1차에 네 번째 teacher 로 넣는 것이다.
+
+| 항목 | 내용 |
+|---|---|
+| 환경 | judge 가 필요 없는 단일 스텝 도구 호출 — tau 피벗 · swe_pivot · toolcall_schema · workplace_assistant. G3·E1 에서 검증한 경로다 |
+| 풀 (고유) | tau 99,105 · toolcall_schema 8,917 · swe_pivot 3,752 (+ SWE-Pivot-v1 50,661) · workplace 1,047 · Function-Calling-Pivot 9,620 |
+| alpha 신호 | 보상 > 0: tau 37.2% · swe_pivot 34.9% · toolcall_schema 45.2% (v1) — 학습 가능한 수준이다 |
+| 비용 | 생성은 짧다 (145~374 토큰). 학습 시간은 긴 프롬프트가 정한다 (샘플당 tau 5.3K · swe_pivot 17.3K 토큰). 스텝 4~5분, 400 스텝 1.1~1.4일 (추정) |
+| MOPD1 에서 | 도구 프롬프트를 MOPD1 에 넣고 이 teacher 에 라우팅한다. 망각을 막고, 단일 스텝 도구 호출을 올린 상태로 2차 agentic teacher 를 시작한다 |
+| 대안 (비용 0) | teacher 를 만들지 않고 MOPD1 의 도구 프롬프트를 SFT ckpt 에 라우팅한다. 망각은 막지만 개선은 없다 |
+| 근거 | Ultra 도 Student-RLVR 블렌드의 38% 가 단일 스텝 도구 호출이고, MOPD 에서 도구 프롬프트를 general teacher 에 라우팅했다. 원래 계획의 PivotRL (agentic SFT 직후) 과 같은 역할이다 |
