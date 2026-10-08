@@ -5,6 +5,11 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## upstream `grpo.reward_shaping`(DAPO 길이 감점)은 async GRPO 경로에서 적용되지 않는다 (2026-10-08, 조사)
+
+- **사실**: `reward_shaping` 은 동기 `grpo_train` 에서만 호출된다 (`nemo_rl/algorithms/grpo.py:3131`). alpha 레시피가 쓰는 `async_grpo_train` 에는 호출이 없다. 원보상 기준 표준편차(`std_rewards`)도 동기 경로에서만 넘어간다 (3149행). 레시피에서 켜도 조용히 아무 일도 없다.
+- **대응**: 길이 보상은 그룹이 모이는 `nemo_rl/experience/rollouts.py` 의 `_postprocess_single_nemo_gym_group` (effort shaping·페널티 계산 자리)에 넣는다. 설계·오프라인 검증은 `RL_DATA.md` §5.5 (Code·Math 차례에 구현).
+
 ## alpha vLLM 을 `--data-parallel-size 8` 로 띄우면 NCCL 초기화에서 `free(): double free detected in tcache 2` 로 죽는다 (2026-10-08, Pai 문서에 이미 있던 함정)
 
 - **증상**: P0-3 사전 측정용으로 `vllm serve <hfmodel> --data-parallel-size 8` 을 main1·sub1 에 띄웠다. 두 노드 모두 `vLLM is using nccl==2.28.9` 직후 워커 8개가 `double free` 로 죽었다. 깨끗한 환경(sub1, Ray actor)에서도 같았으니 환경 누출(#18)이 원인이 아니다.

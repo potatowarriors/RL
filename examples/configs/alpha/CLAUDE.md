@@ -33,6 +33,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - **Gym 레시피는 `vllm_cfg.env_vars.VLLM_ENFORCE_STRICT_TOOL_CALLING: "0"` 필수.** 기본값이면 vLLM 이 `strict:true` 도구에 제약 디코딩을 걸어 롤아웃이 off-policy 가 된다 (G3).
 - Ultra 의 `reward_penalties.token_ids`(2·12·13)는 Nemotron id 다 — alpha 에서는 `<|im_start|>`·`<tool_response>`·`</tool_response>`. alpha think 는 14·15.
 - **레시피를 돌리기 전에 `tools/check_alpha_recipe.py <recipe>` 가 ERROR 0 이어야 한다** (H1·H3·H5·GBS·CP 패딩·eos 등 자동 검사).
+- **W&B 에는 실제 학습 런만 올린다.** 스모크·게이트·속도 시험은 `WANDB=0`. 지표는 `logger.wandb.metric_allowlist`(부모 레시피)로 핵심만 보내고, 전체는 TensorBoard 에 남는다 (사용자 2026-10-08).
 - Pai·Ultra 노브를 옮길 때는 NeMo-RL 이 실제로 읽는지 확인한다. `megatron_cfg` 최상위의 모르는 키와 Ultra 의 loss 정규화 키 4개는 조용히 무시된다.
   위험 목록과 게이트 계획은 [`docs/RLVR_READINESS.md`](docs/RLVR_READINESS.md).
 - `policy.megatron_cfg.env_vars` 에 `CUDNN_HOME`(Megatron 워커 venv 의 pip cuDNN 경로) 필수.
@@ -62,6 +63,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-08 | 레시피에 `grpo.reward_shaping`(DAPO 길이 감점)을 켜도 효과 없음 | async 경로가 호출하지 않는다 → 길이 보상은 `rollouts.py` 그룹 후처리에 (`docs/KNOWN_ISSUES.md`) |
 | 10-08 | alpha vLLM `--data-parallel-size 8` 이 NCCL 초기화에서 `double free` 로 죽음 | vLLM DP 모드 문제 (Pai 문서에 이미 있음) → Pai `serve_fleet.sh`(GPU 당 단일 서버 + lb_proxy)·`stop_fleet.sh`. 서빙·벤치 경로는 Pai `SFT_BENCHMARKS.md` §2.5~2.6 이 정본 |
 | 10-08 | NeMo-Skills sandbox 빌드 `vedas==0.0.1` 없음 | PyPI 에서 사라짐 → `sandbox.lock` 에서 그 줄 제거, `GITHUB_CI=1` (gpu06 `alpha-eval`, `docs/RL_DATA.md` §5.9) |
 | 10-08 | vLLM `speculative_config.method=ngram` 이 엔진 기동에서 `Numba needs NumPy 2.4 or less` 로 죽음 | CPU 제안기의 numba 가 venv NumPy 2.5 미지원 → `method=ngram_gpu` 사용 |
