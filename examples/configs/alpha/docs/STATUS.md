@@ -35,6 +35,7 @@ _마지막 갱신: 2026-10-08 (첫 RLVR 런 병목 판정 · 가속 검토 · �
 |---|---|---|
 | ~~reward_penalties (첫 런)~~ **결정됨 2026-10-07 — 4종 켬** — Ultra 는 4종(중복 reasoning·빈 최종 답·금지 토큰·think 태그 형식)을 모두 켠다. 발동하면 보상 0 | 근거: G5 롤아웃 384개에 오프라인 적용 시 보상 > 0 인 83개 중 깎이는 것 0 — 발동(형식 4a 78·빈 답 65·형식 4b 11)은 전부 이미 보상 0 인 잘림·퇴화 응답 (`tools/analyze_reward_penalties.py`). alpha token id 는 레시피에 반영됨 | `RLVR_READINESS.md` H5 |
 | ~~체크포인트 보존 (첫 런)~~ **결정됨 2026-10-07 (같은 날 축소)** — `keep_top_k 2`(최근 2개) + `tools/export_watch.sh` 로 100스텝마다 HF 반출(1회 30 GB, 모두 보존). 학습 데이터 덤프는 첫 10스텝만 켜고, 분석을 기록한 뒤 지운다. 게이트 산출물 삭제: 스모크 체크포인트 6개 930 GB · G6 HF 반출본 90 GB · M5 랭크별 덤프 9.4 GB. 용량 예산은 아래 "첫 RLVR 런 저장 용량" | 저장 1회 155 GB, 1에폭 ≈ 1,120 스텝, 전부 보존이면 ≈ 17 TB (NFS 여유 13 TB, 공용) | 이 표 |
+| **GBS·lr** (2026-10-08 지적) | 프롬프트/스텝 64 는 레시피 골격의 임시값(`# 결정 대기`)이었다 — Ultra RLVR1 은 512 × 16 = GBS 8,192, alpha 는 64 × 16 = 1,024. lr 1e-6·warmup 10 은 Ultra(GBS 8,192) 기준이라 alpha 는 같은 데이터에 8배 많이 갱신한다. 생성 노드가 최대 처리량의 약 91% 로 돌아 배치 크기는 시간당 샘플 수를 크게 바꾸지 않는다 | rollout 속도 시험 결과와 함께 선택지(64·128·256·512)·lr 조정안을 보고 → 사용자 결정 |
 | ~~D1·D2·D3·D4·D5·D7~~ | **결정됨 2026-10-07** — 첫 RLVR 런: judge 불필요 10개 환경 71,730행 · prefix caching 끔 · bias 갱신 0 · KL 0 + threshold 2 · lr 1e-6 warmup 10 · 128K | `RL_PLAN.md` 결정 15 |
 | Megatron-Bridge 포인터를 fork(`bcc4e415`)로 고정할지 | 현재 superproject 기록은 upstream `0c565c9a` — 새 클론은 AlphaBridge 가 없다 | `.claude/rules/alpha-submodules.md` |
 | 셋업 재구성 제안 | 로컬 venv 스냅샷 · 인터프리터 로컬 · 바이트코드 사전 컴파일 · JIT 캐시 로컬 (2026-10-06 제안, 승인 대기) | `SETUP.md` §1 |
