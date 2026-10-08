@@ -904,6 +904,8 @@ def setup(
         inference_resources = generation_config["colocated"]["resources"]
         inference_gpus_per_node = inference_resources["gpus_per_node"]
         inference_nodes = inference_resources["num_nodes"]
+        # GPUs per inference node that neither inference nor training uses
+        inference_node_free_gpus = 0
 
         # validate and configure resources
         if policy_nodes == 1:
@@ -943,13 +945,19 @@ def setup(
                 "when cluster.num_nodes > 1 and inference is non-colocated, "
                 f"but got {inference_nodes}."
             )
+            # Inference may take only part of each inference node. The GPUs it
+            # leaves stay free for NeMo Gym GPU services (e.g. an LLM judge served
+            # by local_vllm_model), which Ray places on whatever is left.
             assert (
                 inference_gpus_per_node is not None
-                and inference_gpus_per_node == cluster_config["gpus_per_node"]
+                and 0 < inference_gpus_per_node <= cluster_config["gpus_per_node"]
             ), (
-                "policy.generation.colocated.resources.gpus_per_node must be explicitly set and equal to cluster.gpus_per_node "
+                "policy.generation.colocated.resources.gpus_per_node must be explicitly set to a value in [1, cluster.gpus_per_node] "
                 "when cluster.num_nodes > 1 and inference is non-colocated, "
                 f"but got inference_gpus_per_node={inference_gpus_per_node}, cluster.gpus_per_node={cluster_config['gpus_per_node']}."
+            )
+            inference_node_free_gpus = (
+                cluster_config["gpus_per_node"] - inference_gpus_per_node
             )
             train_nodes -= inference_nodes
 
@@ -1075,7 +1083,10 @@ def setup(
         )
         # When domain constraints are set, eagerly create placement groups
         # so training claims the constrained nodes before inference can grab them.
-        if node_resource_constraints is not None:
+        # Do the same when inference nodes leave GPUs free: NeMo Gym places its
+        # GPU services while the policy initializes, and a service landing on a
+        # training node would make the training placement group span nodes.
+        if node_resource_constraints is not None or inference_node_free_gpus > 0:
             train_cluster.get_placement_groups()
         print(
             f"  ✓ Ray train cluster initialized with {train_nodes} nodes with {train_gpus_per_node} GPUs per node",
@@ -1114,6 +1125,11 @@ def setup(
             f"  ✓ Ray inference cluster initialized with {inference_nodes} nodes with {inference_gpus_per_node} GPUs per node",
             flush=True,
         )
+        if inference_node_free_gpus > 0:
+            print(
+                f"  ✓ {inference_node_free_gpus} GPUs per inference node left free for NeMo Gym GPU services",
+                flush=True,
+            )
 
     # Reserve topology-aware teacher placement groups before NeMo Gym starts
     # opportunistically placing its GPU-backed services. Worker creation and
