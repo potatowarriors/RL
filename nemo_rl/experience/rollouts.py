@@ -2593,6 +2593,24 @@ def _postprocess_single_nemo_gym_group(
             max_total_tokens_per_sample = policy_generation.cfg[
                 "max_total_sequence_length"
             ]
+
+        # A model call cut at its output cap (max_output_tokens, set per row by
+        # _prepare_nemo_gym_rows) is truncated too, as in the non-Gym rollout paths
+        # (generation `truncated` flag). Counting only samples that fill
+        # max_model_len reports truncation_rate 0 whenever max_new_tokens <
+        # max_model_len. (alpha fix 2026-10-08; not in upstream main)
+        def _hit_max_tokens(row: dict, r: dict) -> bool:
+            if sum(len(m["token_ids"]) for m in r["message_log"]) == (
+                max_total_tokens_per_sample
+            ):
+                return True
+            cap = row.get("responses_create_params", {}).get("max_output_tokens")
+            return cap is not None and any(
+                len(m["token_ids"]) >= cap
+                for m in r["message_log"]
+                if m["role"] == "assistant"
+            )
+
         all_sample_metrics = [
             {
                 "total_reward": r["full_result"]["reward"],
@@ -2603,8 +2621,7 @@ def _postprocess_single_nemo_gym_group(
                 ),
                 "total_tokens": sum(len(m["token_ids"]) for m in r["message_log"]),
                 "turn_count": sum(1 for m in r["message_log"] if m["role"] == "user"),
-                "hit_max_tokens": sum(len(m["token_ids"]) for m in r["message_log"])
-                == max_total_tokens_per_sample,
+                "hit_max_tokens": _hit_max_tokens(row, r),
                 # max_gen_tokens_per_turn: Diagnostic for long single generations
                 "max_gen_tokens_per_turn": max(
                     (
@@ -2615,7 +2632,7 @@ def _postprocess_single_nemo_gym_group(
                     default=0,
                 ),
             }
-            for r in results
+            for row, r in zip(nemo_gym_rows, results)
         ]
 
     # Aggregate metrics across all samples
