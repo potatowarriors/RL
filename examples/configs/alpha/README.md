@@ -33,6 +33,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/measure_train_memory.py` | 학습 스텝 메모리·처리량 실측 (R4·R5) — Ray 없이 torchrun 으로 `MegatronPolicyWorkerImpl` 을 직접 만든다. recompute 변형·합성 R3 route·스텝당 마이크로배치 수 |
 | `tools/gen_hf_reference_logits.py` | M2·M4 의 HF 참조 로짓 생성 (Pai 환경 전용) |
 | `tools/analyze_rollout_logprob_gap.py` | rollout-vs-train logprob 어긋남 분해 (CPU) — R1 진단 |
+| `tools/analyze_vllm_request_trace.py` | vLLM 요청별 시각 기록(`NRL_VLLM_REQUEST_TRACE_DIR`) 분석 (CPU) — rollout 긴 꼬리를 대기·prefill·디코딩으로 분해, 긴 요청의 대기 비중·속도, 구간별 동시 실행 수 |
 | `tools/analyze_gym_logprob_gap.py` | Gym 경로 logprob 어긋남을 시퀀스·환경·호출 구간별로 분해 (CPU) — G3 진단 |
 | `tools/filter_rl_blend.py` · `tools/measure_blend_prompt_lengths.py` | RL 블렌드 환경 필터(`--preset judge_free`, D1) · 첫 턴 프롬프트 길이 데이터 게이트 (`max_model_len` 초과 행은 런을 멈춘다) |
 | `tools/export_rl_hf.sh` | **RL 체크포인트 → Pai 호환 HF 반출은 이것으로만** (G6). 변환 → 메타데이터 시작점 복사 → `compare_hf_weights.py` 대조. 변환기 출력 그대로는 Pai 가 토크나이저를 못 읽는다 |
