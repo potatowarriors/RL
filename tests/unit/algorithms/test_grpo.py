@@ -4952,3 +4952,61 @@ def test_validate_use_kl_in_reward_allows_zero_kl_penalty():
 def test_train_fields_for_step(skip_prev_logprobs, expect_prev):
     fields = _train_fields_for_step(skip_prev_logprobs)
     assert ("prev_logprobs" in fields) is expect_prev
+
+
+def _zero_adv_batch(advantage_rows, sample_mask):
+    """Batch with 6 tokens/sample; token_mask covers positions 2..5."""
+    batch_size, seq_len = len(advantage_rows), 6
+    token_mask = torch.zeros(batch_size, seq_len)
+    token_mask[:, 2:] = 1.0
+    advantages = torch.tensor(advantage_rows, dtype=torch.float32)[:, None].expand(
+        batch_size, seq_len
+    ).clone()
+    return BatchedDataDict(
+        {
+            "input_ids": torch.arange(batch_size * seq_len).view(batch_size, seq_len),
+            "token_mask": token_mask,
+            "sample_mask": torch.tensor(sample_mask, dtype=torch.float32),
+            "advantages": advantages,
+            "generation_logprobs": torch.randn(batch_size, seq_len),
+            "agent": [f"a{i}" for i in range(batch_size)],
+        }
+    )
+
+
+def _normalized_loss_sum(batch):
+    valid = batch["token_mask"][:, 1:] * batch["sample_mask"].unsqueeze(-1)
+    return (batch["advantages"][:, 1:] * valid).sum() / valid.sum()
+
+
+def test_select_training_samples_preserves_normalized_loss():
+    from nemo_rl.algorithms.grpo import select_training_samples
+
+    # Samples 0 and 2 carry signal; 1, 3, 4 are zero-advantage; 5 is masked out.
+    batch = _zero_adv_batch([0.5, 0.0, -1.5, 0.0, 0.0, 0.7], [1, 1, 1, 1, 1, 0])
+    kept, metrics = select_training_samples(batch, keep_fraction=0.5, dp_size=1)
+
+    # Zero-advantage candidates are [1, 3, 4, 5] (5 has no valid tokens);
+    # every 2nd one is kept for monitoring.
+    assert kept["agent"] == ["a0", "a1", "a2", "a4"]
+    assert metrics["zero_advantage_samples"] == 4.0
+    assert metrics["zero_advantage_samples_skipped"] == 2.0
+    # 4 of 5 valid samples kept -> scale 16/20.
+    assert metrics["train_tokens_kept_fraction"] == pytest.approx(0.8)
+    assert torch.allclose(kept["advantages"][0], batch["advantages"][0] * 0.8)
+    # The quantity the token-level loss normalizes is unchanged.
+    assert torch.allclose(_normalized_loss_sum(kept), _normalized_loss_sum(batch))
+
+
+def test_select_training_samples_pads_to_dp_and_never_empties():
+    from nemo_rl.algorithms.grpo import select_training_samples
+
+    batch = _zero_adv_batch([0.5, 0.0, -1.5, 0.0, 0.0, 0.0], [1] * 6)
+    kept, _ = select_training_samples(batch, keep_fraction=0.0, dp_size=4)
+    assert kept.size == 4 and kept["agent"][:2] == ["a0", "a1"]
+    assert torch.allclose(_normalized_loss_sum(kept), _normalized_loss_sum(batch))
+
+    all_zero = _zero_adv_batch([0.0] * 4, [1] * 4)
+    kept, metrics = select_training_samples(all_zero, keep_fraction=0.0, dp_size=1)
+    assert kept.size == 1
+    assert metrics["zero_advantage_samples_skipped"] == 3.0

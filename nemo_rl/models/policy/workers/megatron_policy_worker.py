@@ -773,6 +773,7 @@ class MegatronPolicyWorkerImpl(
         gbs: Optional[int] = None,
         mbs: Optional[int] = None,
         check_dim_skip_keys: Optional[Iterable[str]] = None,
+        lr_scheduler_increment: Optional[int] = None,
     ) -> dict[str, Any]:
         """Train the policy on a batch of data with a given loss function.
 
@@ -1086,7 +1087,13 @@ class MegatronPolicyWorkerImpl(
             # samples: NeMo init scales lr_warmup_steps by gbs internally, so
             # passing increment=gbs cancels that scaling and one tick == one
             # train() call regardless of batch size.
-            self.scheduler.step(increment=gbs)
+            # A caller training on a subset of its batch passes
+            # lr_scheduler_increment to keep one tick per step.
+            self.scheduler.step(
+                increment=gbs
+                if lr_scheduler_increment is None
+                else lr_scheduler_increment
+            )
 
         # Aggregate metrics across all microbatches
         mb_metrics, global_loss = aggregate_training_statistics(

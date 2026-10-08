@@ -278,6 +278,14 @@ class GRPOConfig(BaseModel, extra="allow"):
     # Legacy async config block; SC reads its async knobs from `async_rl` instead.
     async_grpo: AsyncGRPOConfig | None = Field(default_factory=AsyncGRPOConfig)
     overlong_filtering: bool = False
+    # Skip samples whose advantages are all zero in the training forward/backward
+    # (async GRPO). Their gradient is exactly zero, so the step keeps the full
+    # batch's loss normalization and lr schedule; unlike dynamic sampling, no
+    # extra rollouts are generated. See select_training_samples().
+    skip_zero_advantage_samples: bool = False
+    # Fraction of zero-advantage samples still trained (zero gradient) so in-loss
+    # metrics such as generation KL keep covering them.
+    zero_advantage_keep_fraction: float = 0.1
     # whether to enable dynamic sampling, i.e.
     # whether to discard prompts whose rewards have zero standard deviation
     use_dynamic_sampling: bool = False
@@ -412,6 +420,54 @@ def _validate_seq_logprob_error_in_loss(master_config: MasterConfig) -> None:
         )
 
 
+def _validate_skip_zero_advantage_samples(master_config: MasterConfig) -> None:
+    """Skipping is gradient-preserving only if every loss term scales with the advantage."""
+    grpo_cfg = master_config.grpo
+    if not grpo_cfg.skip_zero_advantage_samples:
+        return
+    if not 0.0 <= grpo_cfg.zero_advantage_keep_fraction <= 1.0:
+        raise ValueError("grpo.zero_advantage_keep_fraction must be in [0, 1]")
+    if grpo_cfg.async_grpo is None or not grpo_cfg.async_grpo.enabled:
+        raise ValueError(
+            "grpo.skip_zero_advantage_samples is implemented for async GRPO only"
+        )
+    loss = master_config.loss_fn
+    if not loss.force_on_policy_ratio or not loss.token_level_loss:
+        raise ValueError(
+            "grpo.skip_zero_advantage_samples requires force_on_policy_ratio=true "
+            "and token_level_loss=true (loss linear in the advantage)"
+        )
+    if loss.reference_policy_kl_penalty != 0 or loss.use_kl_in_reward:
+        raise ValueError(
+            "grpo.skip_zero_advantage_samples requires reference_policy_kl_penalty=0 "
+            "and use_kl_in_reward=false (a KL term has gradient at zero advantage)"
+        )
+    policy = master_config.policy
+    if "megatron_cfg" not in policy or not policy["megatron_cfg"]["enabled"]:
+        raise ValueError(
+            "grpo.skip_zero_advantage_samples requires the Megatron backend"
+        )
+    megatron_cfg = policy["megatron_cfg"]
+    draft = policy.get("draft")
+    draft_enabled = bool(
+        draft.get("enabled", False)
+        if isinstance(draft, dict)
+        else getattr(draft, "enabled", False)
+    )
+    if (
+        megatron_cfg.get("mtp_num_layers")
+        or draft_enabled
+        or loss.positive_example_nll_weight != 0
+        or opd_module.is_opd_enabled(master_config)
+        or megatron_cfg.get("moe_router_load_balancing_type") not in (None, "none")
+        or megatron_cfg.get("moe_z_loss_coeff")
+    ):
+        raise ValueError(
+            "grpo.skip_zero_advantage_samples does not support MTP, draft, "
+            "positive-example NLL, distillation, or MoE aux/z losses"
+        )
+
+
 def _validate_multimodal_dedup_capability(master_config: MasterConfig) -> None:
     """Reject configurations whose media transfer path is not qualified."""
     if not master_config.grpo.deduplicate_multimodal_data:
@@ -486,6 +542,7 @@ def setup(
         normalize_vllm_refit_config(cast(VllmConfig, generation_config))
     _validate_multimodal_dedup_capability(master_config)
     _validate_seq_logprob_error_in_loss(master_config)
+    _validate_skip_zero_advantage_samples(master_config)
 
     # Validation-only sampling is honored only on the NeMo-Gym vLLM rollout
     # path; everywhere else validation must sample exactly like training.
@@ -4095,6 +4152,50 @@ def validate(
     return val_metrics, timing_metrics
 
 
+def select_training_samples(
+    train_data: BatchedDataDict[ClippedPGLossDataDict],
+    keep_fraction: float,
+    dp_size: int,
+) -> tuple[BatchedDataDict[ClippedPGLossDataDict], dict[str, float]]:
+    """Drop zero-advantage samples from the training batch without changing the gradient.
+
+    A sample whose advantages are zero on every loss token contributes zero
+    gradient when every loss term scales with the advantage (checked by
+    ``_validate_skip_zero_advantage_samples``). The token-level loss divides by
+    the batch's valid-token count, so the kept samples' advantages are scaled by
+    ``kept_tokens / full_tokens``; their summed loss then equals the full batch's.
+    Exact unless in-loss sequence masking drops tokens of the skipped samples.
+
+    Every ``round(1 / keep_fraction)``-th zero-advantage sample is kept (zero
+    gradient) so in-loss metrics keep covering them, and more are added until
+    the kept count divides ``dp_size``. Returns the kept view and metrics.
+    """
+    valid = train_data["token_mask"][:, 1:] * train_data["sample_mask"].unsqueeze(-1)
+    has_signal = ((train_data["advantages"][:, 1:] != 0) & (valid > 0)).any(dim=1)
+    signal_idx = torch.nonzero(has_signal).flatten().tolist()
+    zero_idx = torch.nonzero(~has_signal).flatten().tolist()
+    stride = round(1 / keep_fraction) if keep_fraction > 0 else 0
+    monitor_idx = zero_idx[::stride] if stride else []
+    monitor_set = set(monitor_idx)
+    spare = [i for i in zero_idx if i not in monitor_set]
+    keep = sorted(signal_idx + monitor_idx)
+    while (len(keep) % dp_size != 0 or not keep) and spare:
+        keep.append(spare.pop(0))
+    keep.sort()
+
+    full_tokens = valid.sum()
+    kept_tokens = valid[keep].sum()
+    scale = (kept_tokens / full_tokens) if full_tokens > 0 else torch.ones(())
+    kept = train_data.select_indices(keep)
+    kept["advantages"] = kept["advantages"] * scale.to(kept["advantages"].dtype)
+    metrics = {
+        "zero_advantage_samples": float(len(zero_idx)),
+        "zero_advantage_samples_skipped": float(train_data.size - len(keep)),
+        "train_tokens_kept_fraction": float(scale),
+    }
+    return kept, metrics
+
+
 def aggregate_rollout_metrics(
     per_group_metrics: dict[str, list],
 ) -> dict[str, Any]:
@@ -4979,10 +5080,24 @@ def async_grpo_train(
 
                 print("▶ Training policy...")
                 with timer.time("policy_training"):
+                    train_view, lr_scheduler_increment = train_data, None
+                    zero_advantage_metrics: dict[str, float] = {}
+                    if master_config.grpo.skip_zero_advantage_samples:
+                        train_view, zero_advantage_metrics = select_training_samples(
+                            train_data,
+                            master_config.grpo.zero_advantage_keep_fraction,
+                            policy.sharding_annotations.get_axis_size("data_parallel"),
+                        )
+                        # One lr tick per step, as with the full batch.
+                        lr_scheduler_increment = master_config.policy[
+                            "train_global_batch_size"
+                        ]
                     train_results = policy.train(
-                        train_data,
+                        train_view,
                         loss_fn,
                         timer=timer,
+                        gbs=None if lr_scheduler_increment is None else train_view.size,
+                        lr_scheduler_increment=lr_scheduler_increment,
                     )
 
                 print("🔄 Synchronizing policy weights to trajectory collector…")
@@ -5144,6 +5259,7 @@ def async_grpo_train(
                     ].numpy()
                 metrics.update(train_results["all_mb_metrics"])
                 metrics.update(penalty_metrics)
+                metrics.update(zero_advantage_metrics)
                 for k, v in metrics.items():
                     if k in {"probs_ratio_min", "probs_ratio_clamped_min"}:
                         valid_values = [x for x in v if not np.isinf(x)]
