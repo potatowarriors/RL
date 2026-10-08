@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import re
 import shutil
 import tempfile
 from unittest.mock import MagicMock, call, patch
@@ -27,6 +28,7 @@ from nemo_rl.utils.logger import (
     SwanlabLogger,
     TensorboardLogger,
     WandbLogger,
+    filter_metrics_by_allowlist,
     flatten_dict,
     log_container_init_timing,
     print_message_log_samples,
@@ -370,6 +372,65 @@ class TestWandbLogger:
         mock_run = mock_wandb.init.return_value
         expected_metrics = {"train/loss": 0.5, "train/accuracy": 0.8}
         mock_run.log.assert_called_once_with(expected_metrics, step=step)
+
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_metric_allowlist_not_passed_to_wandb_init(self, mock_wandb, temp_dir):
+        """The allowlist is a NeMo RL control, not a wandb.init argument."""
+        WandbLogger(
+            {"project": "p", "metric_allowlist": ["train/loss"]}, log_dir=temp_dir
+        )
+        mock_wandb.init.assert_called_once_with(project="p", dir=temp_dir)
+
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_log_metrics_with_allowlist(self, mock_wandb):
+        """Only metrics whose prefixed name fully matches a pattern reach W&B."""
+        logger = WandbLogger(
+            {"metric_allowlist": ["train/loss", r"train/[^/]+/reward/mean"]}
+        )
+        metrics = {
+            "loss": 0.5,
+            "loss_extra": 1.0,
+            "mcqa_simple_agent/reward/mean": 0.4,
+            "mcqa_simple_agent/reward/max": 1.0,
+        }
+        logger.log_metrics(metrics, step=3, prefix="train")
+
+        mock_run = mock_wandb.init.return_value
+        mock_run.log.assert_called_once_with(
+            {"train/loss": 0.5, "train/mcqa_simple_agent/reward/mean": 0.4}, step=3
+        )
+
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_log_metrics_allowlist_drops_whole_step_metric_group(self, mock_wandb):
+        """A custom-step group with no allowed metric logs nothing, not just its step."""
+        logger = WandbLogger({"metric_allowlist": ["train/loss"]})
+        logger.log_metrics(
+            {"ray/node.0.gpu.0.util": 0.9, "ray/ray_step": 7},
+            step=7,
+            step_metric="ray/ray_step",
+        )
+
+        mock_wandb.init.return_value.log.assert_not_called()
+
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_log_metrics_allowlist_still_commits_finished_step(self, mock_wandb):
+        """step_finished commits the step even when every metric is filtered out."""
+        logger = WandbLogger({"metric_allowlist": ["train/loss"]})
+        logger.log_metrics({"timing/x": 1.0}, step=5, step_finished=True)
+
+        mock_wandb.init.return_value.log.assert_called_once_with(
+            {}, step=5, commit=True
+        )
+
+    def test_filter_metrics_by_allowlist_keeps_step_metric_with_survivors(self):
+        """The step metric survives alongside at least one allowed metric."""
+        allow = [re.compile(r"ray/node\.0\.gpu\.0\.util")]
+        kept = filter_metrics_by_allowlist(
+            {"ray/node.0.gpu.0.util": 0.9, "ray/node.0.mem_gb": 3, "ray/ray_step": 7},
+            allow,
+            step_metric="ray/ray_step",
+        )
+        assert kept == {"ray/node.0.gpu.0.util": 0.9, "ray/ray_step": 7}
 
     @patch("nemo_rl.utils.logger.wandb")
     def test_log_metrics_with_step_metric(self, mock_wandb):

@@ -54,6 +54,11 @@ class WandbConfig(TypedDict):
     # Log complete NeMo Gym result payloads as W&B Tables. These payloads can be
     # very large, so the recommended default is false.
     log_nemo_gym_full_result_tables: NotRequired[bool]
+    # Regex patterns (re.fullmatch on the prefixed metric name) selecting which
+    # metrics are sent to W&B. Absent or null sends every metric (default).
+    # Only the W&B backend filters; TensorBoard and other backends still receive
+    # every metric. A key used as `step_metric` is kept when its group survives.
+    metric_allowlist: NotRequired[list[str] | None]
 
 
 class SwanlabConfig(TypedDict):
@@ -212,6 +217,34 @@ class TensorboardLogger(LoggerInterface):
         self.writer.add_figure(name, figure, step)
 
 
+def filter_metrics_by_allowlist(
+    metrics: dict[str, Any],
+    allowlist: list[re.Pattern],
+    step_metric: Optional[str] = None,
+) -> dict[str, Any]:
+    """Keep only metrics whose full name matches one of the allowlist patterns.
+
+    The `step_metric` key is kept only when at least one other metric survives,
+    so a group that is filtered out entirely (e.g. GPU monitoring) logs nothing.
+
+    Args:
+        metrics: Metric name to value, names already prefixed.
+        allowlist: Compiled patterns, each matched with `fullmatch`.
+        step_metric: Name of the metric used as the custom step, if any.
+
+    Returns:
+        The filtered metrics dict.
+    """
+    kept = {
+        k: v
+        for k, v in metrics.items()
+        if k != step_metric and any(p.fullmatch(k) for p in allowlist)
+    }
+    if kept and step_metric is not None and step_metric in metrics:
+        kept[step_metric] = metrics[step_metric]
+    return kept
+
+
 class WandbLogger(LoggerInterface):
     """Weights & Biases logger backend."""
 
@@ -219,6 +252,10 @@ class WandbLogger(LoggerInterface):
         # NeMo RL logging controls are not valid wandb.init keyword arguments.
         wandb_init_config = dict(cfg)
         wandb_init_config.pop("log_nemo_gym_full_result_tables", None)
+        allowlist = wandb_init_config.pop("metric_allowlist", None)
+        self._metric_allowlist = (
+            [re.compile(pattern) for pattern in allowlist] if allowlist else None
+        )
         self.run = wandb.init(**wandb_init_config, dir=log_dir)
 
         if os.environ.get("RAY_BACKEND_LOG_LEVEL", "").lower() == "debug":
@@ -377,6 +414,13 @@ class WandbLogger(LoggerInterface):
                 f"{prefix}/{k}" if k != step_metric else k: v
                 for k, v in metrics.items()
             }
+
+        if self._metric_allowlist is not None:
+            metrics = filter_metrics_by_allowlist(
+                metrics, self._metric_allowlist, step_metric
+            )
+            if not metrics and not step_finished:
+                return
 
         # If step_metric is provided, use the corresponding value from metrics as step
         if step_metric and step_metric in metrics:
