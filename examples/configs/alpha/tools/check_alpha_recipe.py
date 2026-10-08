@@ -8,13 +8,17 @@ ERROR 가 하나라도 있으면 종료 코드 1. WARN 은 결정 대기·확인
 
 검사 항목 (괄호는 RLVR_READINESS.md 항목):
   GDN 재귀 상태 fp32 · R3 · turn_end 3 (CLAUDE.md 레시피 규약) · R3 + router fusion 금지 (H1) · 그룹 라우팅 덮어쓰기 금지 (낮음)
-  CP>1 의 packing·패딩 배수·chunk·defer_fp32_logits (H2) · Gym 파서·invalid tool call 벌점 순서 (H3) · Gym 의 judge 미배치 (H4)
+  CP>1 의 packing·패딩 배수·chunk·defer_fp32_logits (H2) · Gym 파서·invalid tool call 벌점 순서 (H3)
+  Gym judge 가 정책 자신을 가리킴 · Gym judge GPU 가 롤아웃 노드의 남은 GPU 를 넘음 (H4, RL_PLAN.md 결정 21)
+  데이터 행의 agent 가 Gym 설정에 없음 · ns_tools 행의 verifier_type 미등록
   prefix caching 명시 (M1) · async 배치 파라미터 명시 (M2) · async ⇒ IS 보정 (M7) · KL>0 + R3 (M6) · top_p 1.0 (낮음)
   GBS 나눗셈 (낮음) · Ultra 의 무효 키 (낮음) · reward_penalties token_ids 와 토크나이저 대조 · generation_config eos [3,0] (M9)
 """
 
+import collections
 import json
 import os
+import re
 import sys
 
 ERRORS: list[str] = []
@@ -33,9 +37,12 @@ def warn(msg: str) -> None:
 IGNORED_MEGATRON_KEYS = ["do_not_average_loss", "cp_normalize", "calculate_per_token_loss", "scale_loss_by_dp_cp_size",
                          "moe_router_enable_expert_bias", "moe_aux_loss_coeff", "first_last_layers_bf16",
                          "num_layers_at_start_in_bf16", "num_layers_at_end_in_bf16", "track_moe_metrics"]
-# judge 모델이 있어야 보상이 나오는 Gym 서버 설정 (H4)
-JUDGE_CONFIGS = ["genrm_compare", "abstention", "multichallenge", "jailbreak_detection", "equivalence_llm_judge", "terminus_judge"]
 SANDBOX_CONFIGS = ["ns_tools", "math_formal_lean"]
+# Gym config_paths 를 찾는 루트 — Gym 본체 다음 alpha 플러그인 (launch.sh 의 NEMO_GYM_EXTRA_ROOTS 와 같다)
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+GYM_ROOTS = [os.path.join(REPO, "3rdparty", "Gym-workspace", "Gym"), os.path.join(REPO, "examples", "configs", "alpha", "gym_plugins")]
+POLICY_MODELS = ("policy_model", "policy_model_reasoning_off")
+JUDGE_FIELDS = ("judge_model_server", "genrm_model_server")  # resources server 가 채점 모델을 가리키는 필드
 
 
 def check(cfg: dict) -> None:
@@ -177,10 +184,9 @@ def check(cfg: dict) -> None:
         ng = env.get("nemo_gym") or {}
         paths = ng.get("config_paths") or []
         for p in paths:
-            if any(f"/{name}/" in p for name in JUDGE_CONFIGS):
-                warn(f"judge 모델이 필요한 환경: {p} — judge 배치 결정(D1) 없이는 보상이 나오지 않는다")
             if any(f"/{name}/" in p for name in SANDBOX_CONFIGS):
-                warn(f"코드 sandbox 가 필요한 환경: {p} (D1)")
+                warn(f"코드 sandbox 가 필요한 환경: {p} — sandbox 가 떠 있어야 한다 (RL_DATA.md §5.9)")
+        check_gym_judges(cfg, ng, paths)
         pm = ((ng.get("policy_model") or {}).get("responses_api_models") or {}).get("vllm_model") or {}
         ctk = pm.get("chat_template_kwargs")
         if ctk and ctk.get("truncate_history_thinking") is False:
@@ -219,6 +225,95 @@ def check(cfg: dict) -> None:
                 err(f"generation_config eos_token_id={eos} — [3, 0] 이어야 한다")
     else:
         warn(f"policy.model_name={model} 이 로컬 디렉토리가 아니라 generation_config 를 확인하지 못했다")
+
+
+def _merge(base: dict, over: dict) -> dict:
+    """레시피 env.nemo_gym 이 Gym 설정 파일 값을 덮도록 재귀 병합한다."""
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def check_gym_judges(cfg: dict, ng: dict, paths: list[str]) -> None:
+    """H4·결정 21: judge 서버가 정책 자신을 가리키지 않는지, Gym local_vllm_model 이 롤아웃 노드의 남은 GPU 에 들어가는지.
+
+    데이터 행의 agent 가 Gym 설정에 있는지, ns_tools 행의 verifier_type 이 등록돼 있는지도 본다 (없으면 롤아웃·채점이 실패한다).
+    """
+    import yaml
+
+    merged: dict = {}
+    for p in paths:
+        full = next((os.path.join(r, p) for r in GYM_ROOTS if os.path.isfile(os.path.join(r, p))), None)
+        if full is None:
+            err(f"Gym 설정 파일을 찾지 못했다: {p}")
+            continue
+        with open(full) as f:
+            merged = _merge(merged, yaml.safe_load(f) or {})
+    merged = _merge(merged, {k: v for k, v in ng.items() if isinstance(v, dict)})
+    judge_gpus = 0
+    for inst, body in merged.items():
+        for stype, scfg in ((body or {}).get("resources_servers") or {}).items():
+            if not isinstance(scfg, dict) or scfg.get("should_use_judge") is False:
+                continue
+            for field in JUDGE_FIELDS:
+                name = (scfg.get(field) or {}).get("name")
+                if name in POLICY_MODELS:
+                    err(f"Gym {inst}.{field} 가 {name} 다 — 정책이 자기 응답을 채점한다. 레시피 env.nemo_gym 에서 judge 모델로 덮어쓴다")
+                elif name is not None and name not in merged:
+                    err(f"Gym {inst}.{field}={name} 인 모델 서버가 정의되지 않았다")
+        kw = (((body or {}).get("responses_api_models") or {}).get("local_vllm_model") or {}).get("vllm_serve_kwargs")
+        if kw:
+            judge_gpus += kw.get("tensor_parallel_size", 1) * kw.get("pipeline_parallel_size", 1) * kw.get("data_parallel_size", 1)
+    # Gym 은 local_vllm_model 을 Ray 의 남은 GPU 에 띄운다. 2노드 비-colocated 에서 남는 GPU 는 롤아웃 노드의 나머지뿐이다
+    gen, cl = cfg["policy"]["generation"], cfg["cluster"]
+    res = gen["colocated"].get("resources") or {}
+    free = 0
+    if not gen["colocated"]["enabled"] and cl["num_nodes"] > 1:
+        free = (cl["gpus_per_node"] - (res.get("gpus_per_node") or cl["gpus_per_node"])) * (res.get("num_nodes") or 1)
+    if judge_gpus > free:
+        err(f"Gym local_vllm_model 이 GPU {judge_gpus} 장을 쓰는데 남는 GPU 는 {free} 장이다 — judge placement group 이 기동에서 끝없이 기다린다")
+    elif free > judge_gpus:
+        warn(f"롤아웃 노드 GPU {free - judge_gpus} 장이 논다 (남는 {free} · Gym local_vllm_model {judge_gpus})")
+    check_gym_data_agents(cfg, merged)
+
+
+AGENT_NAME = re.compile(r'"agent_ref":\s*\{[^{}]*?"name":\s*"([^"]+)"')
+VERIFIER_TYPE = re.compile(r'"verifier_type":\s*"([^"]+)"')
+
+
+def check_gym_data_agents(cfg: dict, merged: dict) -> None:
+    """데이터 행의 agent_ref 가 Gym 설정에 있는지, ns_tools 행의 verifier_type 이 ns_tools.verifiers 에 있는지 (2026-10-08 rdkit 사례)."""
+    agents = collections.Counter()
+    verifiers = collections.defaultdict(collections.Counter)  # agent -> verifier_type -> 행 수
+    data = cfg.get("data") or {}
+    for split in ("train", "validation"):
+        path = (data.get(split) or {}).get("data_path")
+        if not path or not os.path.isfile(path):
+            continue
+        with open(path) as f:
+            for line in f:
+                m = AGENT_NAME.search(line)
+                if not m:
+                    continue
+                agents[m.group(1)] += 1
+                v = VERIFIER_TYPE.search(line)
+                if v:
+                    verifiers[m.group(1)][v.group(1)] += 1
+    for name, n in sorted(agents.items()):
+        body = merged.get(name) or {}
+        agent_cfgs = list((body.get("responses_api_agents") or {}).values())
+        if not agent_cfgs:
+            err(f"데이터의 agent {name} ({n}행)가 Gym 설정에 없다 — 롤아웃이 실패한다 (config_paths 에 서버 설정을 넣거나 행을 뺀다)")
+            continue
+        rs_name = ((agent_cfgs[0] or {}).get("resources_server") or {}).get("name")
+        ns = ((merged.get(rs_name) or {}).get("resources_servers") or {}).get("ns_tools")
+        if ns is None:
+            continue
+        known = set((ns.get("verifiers") or {}).keys())
+        for vt, k in verifiers[name].items():
+            if vt not in known:
+                err(f"{name} 행 {k}개의 verifier_type={vt} 가 {rs_name}.verifiers 에 없다 — 'Unknown verifier' 로 채점이 실패한다")
 
 
 def main() -> int:
