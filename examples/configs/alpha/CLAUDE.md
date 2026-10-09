@@ -45,6 +45,8 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - 저장하는 레시피는 `megatron_cfg.scheduler.max_steps` 를 둔다 (≥ 실효 train_iters). 없으면 스텝 수를 바꿔 재개할 때 스케줄러 assert 로 멈춘다 (G7).
 - Muon(`dist_muon`): 필드명·기본값이 Pai SFT 와 다르다 — `muon_nesterov`(기본 False), `muon_extra_scale_factor`(기본 1.0 = SFT 의 5배)를
   명시한다. "필수 off" 4개를 끄지 않으면 셋업이 실패한다 (`grpo_alpha_smoke_muon.yaml` 헤더).
+- **lr: 1차 teacher 레시피는 `megatron_cfg.optimizer.lr`·`min_lr` 를 5e-6 으로 덮어쓴다** (결정 23, 도구 사용 teacher 만 3e-6).
+  부모 `student_rlvr1_alpha.yaml` 의 1e-6 은 bf16 가중치에 갱신의 12% 만 반영된다. 새 lr 런은 step 50 에서 `tools/measure_bf16_delivery.py` 로 잰다.
 
 ## Quick Commands
 

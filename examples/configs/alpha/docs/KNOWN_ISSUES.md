@@ -27,7 +27,7 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
   학습 forward 와 vLLM refit 이 모두 bf16 을 쓰므로 정책이 거의 그대로였다. 2스텝 묵은 롤아웃의 gen KL 이 같은 가중치 게이트값과 같다 (2스텝 드리프트 < 1e-4).
   norm·A_log 처럼 값이 큰 파라미터는 경계까지 수천~수만 스텝이 걸린다.
 - **대응**: lr 3e-6 (사용자 결정 2026-10-08, `RL_PLAN.md` 결정 22, `b3115c226`). 같은 방향 1차 추정으로 누적 갱신이 3배면 반영 계수 0.34, 같은 스텝 실제 반영량은 약 8.5배다 (8배면 0.71).
-  1e-6 런은 55스텝을 마치고 56스텝 중에 멈췄다 (23:23). 체크포인트는 `results/alpha/teacher_tool/ckpt_lr1e6_main/` (step_40·50) 에 보관했다.
+  1e-6 런은 55스텝을 마치고 56스텝 중에 멈췄다 (23:23). 체크포인트는 `results/alpha/teacher_tool/ckpt_lr1e6_main/` (step_40·50) 에 보관했다가 10-09 검증 뒤 지웠다.
 - **검증 도구**: `tools/measure_bf16_delivery.py <ckpt>/step_N <hfmodel>` (CPU 11 s). 1e-6 런 step_50 에서 위 수치를 재현한다.
 - **검증 결과 (2026-10-09, lr 3e-6 런 `lr3e6`)**: 예측대로다. 보상 이득은 작다.
 
