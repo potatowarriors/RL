@@ -28,6 +28,10 @@ policy:
       resources:
         gpus_per_node: 6                # 롤아웃 노드의 나머지 2장은 Gym judge (결정 21)
         num_nodes: 1
+  megatron_cfg:
+    optimizer:
+      lr: 5.0e-6                        # 결정 23 — 부모 1e-6 의 5배, 도구 teacher 3e-6 보다 공격적
+      min_lr: 5.0e-6                    # warmup 10 (1e-7 → 5e-6) 은 부모 그대로
 
 env:
   _override_: true
