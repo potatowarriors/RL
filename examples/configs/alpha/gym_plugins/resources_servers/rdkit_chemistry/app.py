@@ -5,7 +5,7 @@ r"""alpha Gym 플러그인 — resources_servers/rdkit_chemistry. Gym 0.6.0 에�
 use_box_format 이면 \boxed{N}, 아니면 ((N)).
 채점: 최종 답 텍스트에서 지시한 형식의 마지막 값을 정수로 읽어 정답과 같으면 1, 아니면 0. 형식을 어기면 0 이다.
 예/아니오 행 (property_type bool · presence, 블렌드 172행): 질문은 "Does this molecule …?" 인데 형식 예시는 ((42)) 라 모델이 ((No)) 로 답한다.
-이 행만 yes · true → 1, no · false → 0 으로도 읽는다 — 정수만 읽으면 맞는 답이 0 점이다 (J1 j1c 2026-10-10, 예/아니오 표본 96개 중 맞는 답 48개가 0 점이었다).
+이 행만 yes · true → 1, no · false → 0 으로도 읽는다 — 정수만 읽으면 맞는 답이 0 점이다 (J1 j1c 2026-10-10, 예/아니오 표본 48개 중 맞는 답 24개가 0 점이었다).
 """
 
 import re
