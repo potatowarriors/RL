@@ -130,7 +130,7 @@ env:
       resources_servers:
         ns_tools:
           sandbox_host: 10.0.37.4       # main1 터널 → gpu06 alpha-eval NeMo-Skills sandbox (RL_DATA.md §5.9)
-          sandbox_port: 6000
+          sandbox_port: "6000"          # NSToolsConfig.sandbox_port 는 str — 정수면 ns_tools 가 기동에서 죽는다 (J1 2026-10-10)
           verifiers:                    # Science-v1 python 도구 행의 verifier_type 은 equivalence_llm_judge 다 — 없으면 "Unknown verifier"
             equivalence_llm_judge:
               type: resources_servers
