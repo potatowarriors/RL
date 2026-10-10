@@ -5,6 +5,31 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## J1 첫 기동 실패 — ns_tools `sandbox_port` 타입 · judge Gym venv 의 torch CUDA 불일치 (2026-10-10 ✅ 둘 다 수정, j1b 재기동)
+
+- **증상**: J1 (`teacher_stem` case `j1`, 14:47) 이 Gym 기동 중 rc=1 로 끝났다 — `RuntimeError: Process ns_tools finished unexpectedly!`
+  (`ValidationError: NSToolsConfig sandbox_port — Input should be a valid string, input_value=6000`). 판정 분할 본체 수정은 의도대로 동작했다
+  (롤아웃 노드 GPU 0~5 vLLM, 6·7 은 judge 몫으로 비움 — "2 GPUs per inference node left free for NeMo Gym GPU services").
+- **원인 1**: 레시피가 `sandbox_port: 6000` (정수) 을 줬다. Gym 서버 설정은 기동 때 각 서버 venv 의 pydantic 클래스로 검증되므로 레시피 검사기가 보지 못했다.
+  → `sandbox_port: "6000"` (`40a392280`). 검사기에 이 타입 검사를 넣었다.
+- **원인 2 (같은 기동에서 발견)**: judge 서버(`local_vllm_model`)의 Gym venv 는 이번에 처음 만들어졌다. 그 서버의 `pyproject.toml` 은
+  `[tool.uv.pip] torch-backend = "auto"` 라 uv 가 드라이버(535, CUDA 13.2 는 forward-compat)를 보고 `torch 2.11.0+cu129` 를 골랐는데
+  `vllm 0.25.1` 은 cu13 빌드라 `import vllm` 이 `libcudart.so.13` 에서 죽는다 (NeMo-RL 본체도 같은 이유로 `pytorch-cu130` 인덱스를 고정한다, `pyproject.toml:113`).
+  ns_tools 가 먼저 죽어 이 오류는 드러나지 않았지만, 설치가 중간에 끊긴 venv 는 `skip_venv_if_present` 로 다음 기동에 그대로 쓰인다 (Gym `cli/env.py:522-530` 이 경고하는 경우).
+  → 끊긴 venv 를 `.venv.broken-cu129-20261010` 로 옮기고 Gym 과 같은 명령에 `UV_TORCH_BACKEND=cu130` 만 더해 다시 만들었다 (33 s, uv 캐시):
+
+  ```bash
+  cd 3rdparty/Gym-workspace/Gym/responses_api_models/local_vllm_model
+  V=$NRL_ROOT/gates/gym_smoke/gym_venvs/responses_api_models/local_vllm_model/.venv
+  export UV_CACHE_DIR=$NRL_ROOT/uv-cache UV_PYTHON_INSTALL_DIR=$NRL_ROOT/uv-python UV_TORCH_BACKEND=cu130 PATH=$NRL_ROOT/bin:$PATH
+  uv venv --seed --allow-existing --python 3.13.14 $V && source $V/bin/activate \
+    && uv pip install '-e .' 'ray[default]==2.56.1' 'openai==2.44.0'     # head_server_deps = 드라이버의 ray · openai 버전
+  ```
+
+  검증: `torch 2.11.0+cu130` · `vllm 0.25.1` · `from vllm.entrypoints.openai.api_server import run_server` OK.
+- **기동 전 검증**: 병합한 ns_tools · judge_model 설정을 각 서버 venv 에서 Gym 설정 클래스(`NSToolsConfig` · `LocalVLLMModelConfig`)로 검증해 둘 다 OK,
+  정수 포트 대조는 같은 오류를 재현했다. Gym 이 기동에서 만드는 서버 venv 는 새 서버를 처음 쓸 때 위처럼 따로 만들어 확인한다.
+
 ## Science-v1 정답이 자기 `output_regex` 에서 잘린다 — STEM 블렌드 636행 (2026-10-10 ✅ 교체 + 재판정 켬)
 
 - **발견**: P0-4 judge 검증 중. Science-v1 행은 최종 답을 감쌀 형식(`(Answer: …)` · `((…))` · `[Answer: …]` 등)을 지시하고, Gym 은 그 행의
