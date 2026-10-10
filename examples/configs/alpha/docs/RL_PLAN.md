@@ -19,6 +19,7 @@ Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는
 
 - 1차 teacher 블렌드·규모·sandbox 는 [`RL_DATA.md`](RL_DATA.md) §5 (결정 현황 §5.0).
 - PivotRL 은 2차 agentic teacher 단계의 방법 후보로 다시 본다 — 방법·검증기 매핑은 [`study/pivotrl_study.md`](study/pivotrl_study.md) §5.
+- **2차 agentic 보상 설계 과제 (2026-10-10, 도구 teacher τ³ 에서)**: 단일 스텝 피벗(정답 이력 + 다음 행동 일치)은 행동 정확도를 올리지만 "사용자가 조를 때 정책대로 거절"을 가르치지 못한다 — 금지 쓰기가 학습 후반에 늘었다 (airline 35 → 48/96, `STATUS.md`). 2차 단계에는 (1) 사용자 시뮬레이터 다중 턴 환경 + 최종 DB 상태 채점, (2) 정책 위반 쓰기에 다른 실수보다 큰 음의 보상, (3) 피벗을 쓰면 '거절 뒤에도 조르는' 상태를 넣고 메시지 보상이 실제 거절인지 검사 (현재 Gym 은 아무 메시지나 1, `verification_utils.py:162-175`) 를 넣는다. τ³ 의 airline · retail 은 학습에 쓰지 않는다 (벤치 오염). 이득 상한: 거절 과제가 2862 수준이면 τ³ 평균 +2.5, 2862 의 금지 쓰기까지 없애면 약 +6.
 - 레시피 파일과 작성 여부는 [`../README.md`](../README.md) "레시피" 표.
 
 ## 2. 설계 결정 (현행)
