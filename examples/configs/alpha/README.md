@@ -34,6 +34,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
 | `tools/measure_train_memory.py` | 학습 스텝 메모리·처리량 실측 (R4·R5) — Ray 없이 torchrun 으로 `MegatronPolicyWorkerImpl` 을 직접 만든다. recompute 변형·합성 R3 route·스텝당 마이크로배치 수 |
 | `tools/measure_bf16_delivery.py` | 학습 체크포인트의 fp32 갱신이 bf16 가중치에 반영된 비율 (CPU, 시작점 HF 대비). 보상이 평탄할 때 lr 이 반올림 경계에 막혔는지 잰다 (`docs/KNOWN_ISSUES.md` 2026-10-08) |
+| `tools/measure_judge_p04.py` | judge 검증 (P0-4) — 생산 Gym judge 코드(equivalence · math_with_judge)를 살아 있는 judge 서버에 그대로 호출해 양성·음성 쌍의 수용·거부율, 판정 파싱 실패, 처리량을 잰다 |
 | `tools/gen_hf_reference_logits.py` | M2·M4 의 HF 참조 로짓 생성 (Pai 환경 전용) |
 | `tools/analyze_rollout_logprob_gap.py` | rollout-vs-train logprob 어긋남 분해 (CPU) — R1 진단 |
 | `tools/analyze_vllm_request_trace.py` | vLLM 요청별 시각 기록(`NRL_VLLM_REQUEST_TRACE_DIR`) 분석 (CPU) — rollout 긴 꼬리를 대기·prefill·디코딩으로 분해, 긴 요청의 대기 비중·속도, 구간별 동시 실행 수 |
