@@ -39,8 +39,34 @@ def test_extract_answer(text, use_box_format, expected):
     assert extract_answer(text, use_box_format) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "use_box_format", "expected"),
+    [
+        ("there is no C(=O)N group.\n\n((No))", False, 0),
+        ("((NO))", False, 0),
+        ("((yes.))", False, 1),
+        ("\\boxed{Yes}", True, 1),
+        ("\\boxed{\\text{False}}", True, 0),
+        ("((**No**))", False, 0),
+        ("((1))", False, 1),  # 정수 0/1 도 그대로 읽는다
+        ("((maybe))", False, None),
+        ("\\boxed{No}", False, None),  # 지시는 ((N))
+        ("No.", False, None),  # 형식 없음
+    ],
+)
+def test_extract_answer_yes_no(text, use_box_format, expected):
+    assert extract_answer(text, use_box_format, yes_no=True) == expected
+
+
+def test_yes_no_only_for_yes_no_rows():
+    assert extract_answer("((No))", False) is None
+
+
 def _request(
-    text: str, expected_answer: str, use_box_format: bool
+    text: str,
+    expected_answer: str,
+    use_box_format: bool,
+    property_type: str = "fragment",
 ) -> RDKitChemistryVerifyRequest:
     response = NeMoGymResponse(
         id="resp_test",
@@ -68,27 +94,33 @@ def _request(
         expected_answer=expected_answer,
         use_box_format=use_box_format,
         property="fr_amide",
-        property_type="fragment",
+        property_type=property_type,
         smiles="CC(=O)NC",
     )
 
 
 @pytest.mark.parametrize(
-    ("text", "expected_answer", "use_box_format", "reward"),
+    ("text", "expected_answer", "use_box_format", "reward", "property_type"),
     [
-        ("((1))", "1.0", False, 1.0),
-        ("((2))", "1.0", False, 0.0),
-        ("\\boxed{0}", "0.0", True, 1.0),
-        ("((0))", "0.0", True, 0.0),
+        ("((1))", "1.0", False, 1.0, "fragment"),
+        ("((2))", "1.0", False, 0.0, "fragment"),
+        ("\\boxed{0}", "0.0", True, 1.0, "fragment"),
+        ("((0))", "0.0", True, 0.0, "fragment"),
+        ("((No))", "0.0", False, 1.0, "bool"),
+        ("\\boxed{Yes}", "1.0", True, 1.0, "presence"),
+        ("\\boxed{Yes}", "0.0", True, 0.0, "presence"),
+        ("((Yes))", "1.0", False, 0.0, "count"),  # 개수 행은 정수만
     ],
 )
-async def test_verify(text, expected_answer, use_box_format, reward):
+async def test_verify(text, expected_answer, use_box_format, reward, property_type):
     server = RDKitChemistryResourcesServer(
         config=RDKitChemistryResourcesServerConfig(
             host="0.0.0.0", port=8080, entrypoint="", name=""
         ),
         server_client=MagicMock(spec=ServerClient),
     )
-    result = await server.verify(_request(text, expected_answer, use_box_format))
+    result = await server.verify(
+        _request(text, expected_answer, use_box_format, property_type)
+    )
     assert result.reward == reward
     assert result.expected_answer == expected_answer

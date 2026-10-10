@@ -4,6 +4,8 @@ r"""alpha Gym 플러그인 — resources_servers/rdkit_chemistry. Gym 0.6.0 에�
 정답 expected_answer 는 모두 정수다 ("13.0" 처럼 소수점 표기). 답 형식은 프롬프트가 정한다 —
 use_box_format 이면 \boxed{N}, 아니면 ((N)).
 채점: 최종 답 텍스트에서 지시한 형식의 마지막 값을 정수로 읽어 정답과 같으면 1, 아니면 0. 형식을 어기면 0 이다.
+예/아니오 행 (property_type bool · presence, 블렌드 172행): 질문은 "Does this molecule …?" 인데 형식 예시는 ((42)) 라 모델이 ((No)) 로 답한다.
+이 행만 yes · true → 1, no · false → 0 으로도 읽는다 — 정수만 읽으면 맞는 답이 0 점이다 (J1 j1c 2026-10-10, 예/아니오 표본 96개 중 맞는 답 48개가 0 점이었다).
 """
 
 import re
@@ -20,6 +22,8 @@ from nemo_gym.base_resources_server import (
 DOUBLE_PAREN = re.compile(r"\(\(\s*([^()]*?)\s*\)\)")
 LATEX_WRAP = re.compile(r"\\(?:text|textbf|mathbf|mathrm)\{([^{}]*)\}")
 INTEGER = re.compile(r"[-+]?\d+(?:\.0*)?")
+YES_NO = {"yes": 1, "true": 1, "no": 0, "false": 0}
+YES_NO_TYPES = ("bool", "presence")
 
 
 class RDKitChemistryResourcesServerConfig(BaseResourcesServerConfig):
@@ -57,8 +61,10 @@ def _boxed_contents(text: str) -> list[str]:
     return out
 
 
-def extract_answer(text: str, use_box_format: bool) -> Optional[int]:
-    """지시한 형식의 마지막 값을 정수로 읽는다. 값이 없거나 정수 하나가 아니면 None."""
+def extract_answer(
+    text: str, use_box_format: bool, yes_no: bool = False
+) -> Optional[int]:
+    """지시한 형식의 마지막 값을 정수로 읽는다. 값이 없거나 정수 하나가 아니면 None. yes_no 면 yes/true/no/false 도 1/0 으로 읽는다."""
     found = _boxed_contents(text) if use_box_format else DOUBLE_PAREN.findall(text)
     if not found:
         return None
@@ -66,6 +72,9 @@ def extract_answer(text: str, use_box_format: bool) -> Optional[int]:
     while LATEX_WRAP.search(value):
         value = LATEX_WRAP.sub(r"\1", value)
     value = value.strip().strip("$").strip()
+    word = value.strip("*").rstrip(".").strip().lower()
+    if yes_no and word in YES_NO:
+        return YES_NO[word]
     if not INTEGER.fullmatch(value):
         return None
     return int(float(value))
@@ -77,7 +86,11 @@ class RDKitChemistryResourcesServer(SimpleResourcesServer):
     async def verify(
         self, body: RDKitChemistryVerifyRequest
     ) -> RDKitChemistryVerifyResponse:
-        pred = extract_answer(body.response.output_text, body.use_box_format)
+        pred = extract_answer(
+            body.response.output_text,
+            body.use_box_format,
+            body.property_type in YES_NO_TYPES,
+        )
         gold = int(float(body.expected_answer))
         return RDKitChemistryVerifyResponse(
             **body.model_dump(),

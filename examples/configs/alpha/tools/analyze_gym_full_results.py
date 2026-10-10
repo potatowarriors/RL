@@ -7,6 +7,8 @@ r"""Gym 전체 결과(W&B 표)로 judge 판정 파싱 실패 · 재판정 · rdk
 판정 (Gym equivalence_llm_judge app.py `_generate_judge_evaluation`):
   - 파싱 실패 = judge 출력에 `[[A=B]]` · `[[A!=B]]` 가 둘 다 없음 (`verdict_label` None → 같지 않음으로 처리)
   - 재판정 = 첫 판정이 같지 않고 행에 `output_regex` 가 있어 최종 응답 전체로 한 번 더 판정 (평가 2개). 맞으면 보상 0.5
+  - 재판정 종류: 첫 판정에 보낸 추출문이 최종 응답 전체 안에서 닫는 문자(`)` `]` `}` `**` `$` `\` `.`)만 남기고 끝나면 "완전 추출" —
+    잘린 답을 살린 것이 아니라 같은 답을 문맥과 함께 다시 물어 판정이 뒤집힌 것이다. 추출문 뒤에 답이 더 이어지면 "잘린 추출" (결정 25 가 겨냥한 경우)
   - ns_tools 행은 `delegated_response` 안의 equivalence_llm_judge 결과를 본다
 rdkit (alpha 플러그인): `extracted_answer` None = 지시한 형식(\boxed{N} · ((N)))의 정수를 못 읽음. 최종 답 본문이 비면 생성 상한 잘림으로 본다.
 """
@@ -15,6 +17,7 @@ import collections
 import glob
 import json
 import os
+import re
 
 JUDGE_AGENTS = ("equivalence_llm_judge_simple_agent", "ns_tools_simple_agent")
 
@@ -39,6 +42,22 @@ def output_text(r):
 
 def bucket(x):
     return {0.0: "0", 0.5: "0.5", 1.0: "1"}.get(round(float(x), 6), "other")
+
+
+CLOSE_ONLY = re.compile(r"^[\s\)\]\}\.\*\$\\]*$")
+
+
+def judge_candidate(ev):
+    c = ev["responses_create_params"]["input"][-1]["content"]
+    return (c if isinstance(c, str) else json.dumps(c)).split("CANDIDATE:")[-1].strip()
+
+
+def rescue_kind(ev1, ev2):
+    ext, full = judge_candidate(ev1), judge_candidate(ev2)
+    i = full.rfind(ext)
+    if i < 0:
+        return "추출문 미발견"
+    return "완전 추출(판정 뒤집힘)" if CLOSE_ONLY.match(full[i + len(ext):]) else "잘린 추출"
 
 
 def judge_view(r):
@@ -67,17 +86,17 @@ def main():
                 ev = j["judge_evaluations"]
                 calls += len(ev)
                 fails += sum(e.get("verdict_label") is None for e in ev)
-                has_re = bool((r.get("template_metadata") or {}).get("output_regex"))
                 if len(ev) == 2:
+                    ok = bucket(j["reward"]) == "0.5"
                     resc["시도"] += 1
-                    resc["성공(0.5)" if bucket(j["reward"]) == "0.5" else "실패"] += 1
+                    resc["성공(0.5)" if ok else "실패"] += 1
+                    resc[f"{'성공' if ok else '실패'} · {rescue_kind(*ev)}"] += 1
                     if bucket(j["reward"]) == "0.5" and shown < a.show:
                         shown += 1
                         first = ev[0]["responses_create_params"]["input"][-1]["content"]
                         print(f"  [재판정 성공 표본] 정답={j['expected_answer'][:120]!r}\n    첫 판정 입력 끝: {str(first)[-300:]!r}")
-                resc["regex 행"] += has_re
             print(f"  judge 호출 {calls} · 파싱 실패 {fails} ({100 * fails / max(calls, 1):.2f}%) · judge 결과 없음 {no_view}")
-            print(f"  재판정 {dict(resc)}")
+            print(f"  재판정 {dict(sorted(resc.items()))}")
         if agent == "rdkit_chemistry_agent":
             kinds = collections.Counter()
             shown = 0
