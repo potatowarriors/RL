@@ -23,11 +23,15 @@ JUDGE_AGENTS = ("equivalence_llm_judge_simple_agent", "ns_tools_simple_agent")
 
 
 def load(root):
-    rows = collections.defaultdict(list)
+    """표 파일의 결과를 agent 별로 모은다. 같은 결과가 두 표 파일에 한 번씩 기록되므로 (j1c 실측 — 모든 표본이 정확히 2번) 문자열이 같은 행은 한 번만 센다."""
+    rows, seen = collections.defaultdict(list), set()
     for f in sorted(glob.glob(os.path.join(root, "**", "*.table.json"), recursive=True)):
         agent = os.path.basename(os.path.dirname(f))
         t = json.load(open(f))
         for row in t["data"]:
+            if (agent, row[0]) in seen:
+                continue
+            seen.add((agent, row[0]))
             rows[agent].append(json.loads(row[0]))
     return rows
 
