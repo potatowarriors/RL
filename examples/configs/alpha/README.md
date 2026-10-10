@@ -17,8 +17,10 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `grpo_alpha_smoke.yaml` | 8-GPU 1노드 GRPO 드라이런 + KL 게이트(R1). **alpha RL 기본값 포함** — vLLM GDN 재귀 상태 fp32(`generation.vllm_kwargs.mamba_ssm_cache_dtype`) + R3(`router_replay`) + 멀티턴 경계 `<\|im_end\|>`(`generation.vllm_cfg.turn_end_token_id: 3`). 이후 alpha 레시피는 이 파일을 상속 | 게이트 결과 `docs/GATES.md` R1·R3 |
 | `grpo_alpha_smoke_muon.yaml` | 위 + Muon(`dist_muon`, SFT 동역학 정렬: nesterov · extra_scale 0.2 · beta2 0.95 · 필수 off 4개) | 게이트 결과 R1·R2 |
 | `student_rlvr1_alpha.yaml` | RLVR 1단계 골격 (GRPO + Gym, 최대 128K, 2노드). Ultra `student_rlvr1` + alpha 기본값 + 위험 가드 | 결정 D1~D7·16·17 반영 (생성 상한 64K·loss 안 마스킹). 게이트 G1~G3·G5~G8 PASS, E1 레버(chunked prefill·age 2) 채택. 1단계 학습 전 차단 과제(GenRM·judge·sandbox·code_gen 긴 응답)와 rollout 속도 작업 진행 중 (`docs/STATUS.md`) |
+| `teacher_tool_alpha.yaml` | 1차 도구 사용 warm-up teacher — Gym 단일 스텝 도구 호출 3종, 400 스텝, Muon lr 3e-6 | 결정 19·20·22. 2026-10-10 완료, teacher 체크포인트는 τ³ 로 고른다 (`docs/STATUS.md`) |
+| `teacher_stem_alpha.yaml` | 1차 STEM teacher — 롤아웃 6장 + Gemma judge 2장 (`grpo.py` 부분 노드 배치), 820 스텝, lr 5e-6 | 결정 18·19·21·23·24. 게이트 J1 대기 |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
-| `ifbench_teacher.yaml` 등 | 전문 teacher RL (2~3개로 축소 예정) | 미작성 |
+| `teacher_code_math_alpha.yaml` · `teacher_general_alpha.yaml` | 1차 Code·Math · General teacher | 미작성 (lr 5e-6, 결정 23) |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
 
 ## 디렉토리
@@ -45,6 +47,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/analyze_reward_penalties.py` | Ultra reward_penalties 4종을 롤아웃에 오프라인으로 적용해 발동률·오탐(보상 > 0 이 0 으로 깎이는 수)을 잰다 (CPU) |
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |
 | `tools/inject_identity_blend.py` | RL 블렌드 identity 주입 (`docs/RL_DATA.md` §2) |
+| `gym_plugins/resources_servers/rdkit_chemistry/` | Gym 0.6.0 에 없는 Ultra rdkit 화학 행 채점 서버 (정수 정답 일치, 테스트 17건). STEM 레시피가 `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |
 | `gym_plugins/responses_api_models/alpha_vllm_model/` | Gym 정책 서버 플러그인 — 도구 정의의 `strict` 를 유지한다 (결정 13). `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |
 | `docs/` | 문서 — 색인 [`docs/README.md`](docs/README.md) |
 | `skills/alpha-rl/` | Claude Code skill — 작업 유형별 문서 지도. `.claude/skills/alpha-rl` 링크로 등록, upstream 훅의 "skill 먼저"를 받는다 |
