@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-10 | judge 를 쓴 런 뒤 GPU 2장이 judge vLLM 에 잡힌 채 남아 다음 기동이 GPU 점유 검사에서 멈춤 · `should_log_nemo_gym_responses: true` 게이트는 judge 판정 기록을 남기지 않음 | judge vLLM 은 Gym 서버 소유 Ray 액터 → `launch.sh` 가 런 액터 0 일 때 Gym 정리 뒤 GPU 검사. 판정 기록은 `WANDB_MODE=offline` + 표 켬 → `tools/analyze_gym_full_results.py` |
 | 10-10 | J1 이 Gym 기동에서 rc=1 — `ns_tools finished unexpectedly` (`sandbox_port` 정수), 같은 기동에서 judge Gym venv 의 `import vllm` 이 `libcudart.so.13` 실패 | Gym 서버 설정은 서버 venv 의 pydantic 이 검증한다 → 문자열 필드는 따옴표 (검사기 ERROR). `local_vllm_model` venv 는 `torch-backend=auto` 가 cu129 를 골라 vLLM(cu13)과 어긋난다 → `UV_TORCH_BACKEND=cu130` 으로 따로 빌드 (`docs/KNOWN_ISSUES.md` 2026-10-10) |
 | 10-10 | STEM 블렌드 Science-v1 636행은 완벽한 답도 보상 0 이 대부분 (탐침 14/60) | 비탐욕 `output_regex` 가 정답 속 닫는 문자(괄호 · LaTeX `\)` · `]`)에서 끊고, Gym 설정 파일이 재판정을 끈다 → 교체(v2) + 레시피 `check_full_generation_on_fail: true` (결정 25). judge 블렌드는 `check_alpha_recipe.py <recipe> data.train.data_path=<blend>` 로 정답 잘림을 검사한다 |
 | 10-08 | 도구 사용 teacher(lr 1e-6)가 42스텝 동안 보상 평탄 — 정합 지표·학습 경로는 정상 | 스텝당 갱신 2e-7 이 bf16 반올림 경계(6e-5)보다 작아 50스텝 누적의 12% 만 bf16 에 반영 → lr 3e-6 (결정 22). 보상이 평탄하면 `tools/measure_bf16_delivery.py` 로 반영률을 잰다 |

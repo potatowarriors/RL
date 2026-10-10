@@ -5,6 +5,22 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## judge 가 런 뒤 GPU 를 잡은 채 남는다 · J1 이 judge 판정 기록을 남기지 않았다 (2026-10-10 ✅ 실행기 순서 수정, j1c 로 보충)
+
+- **증상 1**: j1b (rc 0, 16:19) 뒤 main1 GPU 6·7 에 75 GB 씩 남았다. 살아 있는 Ray 액터는 `LocalVLLMModelActor` · `EngineCoreActor` · `RayWorkerProc` 2개와
+  배치 그룹 `judge_model_dp_rank_0` 뿐이었다 (NeMo-RL 런 액터 0). 실행기가 GPU 점유 검사 → Gym 서버 정리 순서라 다음 기동이 `BUSY_GPUS=2` 로 막힌다.
+- **원인 1**: judge(`local_vllm_model`)의 vLLM 은 Gym judge 서버 프로세스(`python app.py`)가 띄운 Ray 액터다. Gym 서버는 별도 Ray 작업이라 드라이버가 끝나도 남고
+  (2026-10-08 항목), judge 서버는 GPU 를 쥔 첫 Gym 서버다.
+  → 실행기 순서를 바꿨다: 살아 있는 NeMo-RL 런 액터가 0 일 때만 (`runs/gpu_check.py` `NRL_RUN_ACTORS`) `gym_cleanup.py kill` → GPU 점유 검사 (60 초까지 재시도).
+  런 액터가 있으면 정리하지 않고 기동을 멈춘다. 실측: sub1 Gym 서버 15개를 정리하자 GPU 가 10 초 안에 풀리고 남은 액터 0.
+- **증상 2**: J1 판정 기준 중 "judge 판정 파싱 실패 ≤ 2%" · "재판정이 실제로 일어남" 을 j1b 산출물로 잴 수 없었다.
+- **원인 2**: `env.should_log_nemo_gym_responses: true` (부모 레시피) 면 NeMo-RL 이 `train_data_step*.jsonl` 덤프를 건너뛰고, Gym 전체 결과는
+  `logger.wandb.log_nemo_gym_full_result_tables` 를 켠 W&B 표로만 남는다 (`grpo.py` `_should_log_nemo_gym_responses` · `utils/logger.py:101`). 게이트는 W&B 를 끄고,
+  부모의 `metric_allowlist` 도 표를 거른다. TensorBoard 의 agent 별 지표는 응답의 숫자 필드만 담는데, judge 응답에는 판정 · 재판정을 나타내는 숫자 필드가 없다.
+  → 보충 스모크 j1c: `EXTRA_ENV="WANDB_MODE=offline"` (업로드 없음) + `logger.wandb.metric_allowlist=null` + `++logger.wandb.log_nemo_gym_full_result_tables=true`,
+  smoke_v3 의 judge 행 128 + rdkit 행 64 (`teacher_stem_smoke_v3_j1c.jsonl`) 3스텝. `tools/analyze_gym_full_results.py` 가 오프라인 표에서
+  파싱 실패 · 재판정 · rdkit 추출 실패를 센다. 본 런(820 스텝)은 표를 켜지 않는다 — 스텝당 1,024 개 전체 응답(평균 생성 17K 토큰)이라 크다.
+
 ## J1 첫 기동 실패 — ns_tools `sandbox_port` 타입 · judge Gym venv 의 torch CUDA 불일치 (2026-10-10 ✅ 둘 다 수정, j1b 재기동)
 
 - **증상**: J1 (`teacher_stem` case `j1`, 14:47) 이 Gym 기동 중 rc=1 로 끝났다 — `RuntimeError: Process ns_tools finished unexpectedly!`

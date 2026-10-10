@@ -1,6 +1,9 @@
 """Ray 클러스터 두 노드에 남은 NeMo-Gym 서버 프로세스(`python app.py`)를 찾아(인자 kill 이면 종료) 출력한다 (2026-10-08).
+
 Gym 서버는 별도 Ray 작업으로 떠서 NeMo-RL 드라이버가 끝나도 남는다 — 첫 런 전까지 G5·G7 런의 잔여 132개가 쌓였다.
-runs/launch.sh 는 GPU 점유 검사(런 없음)를 통과한 뒤에만 이걸 kill 로 부른다."""
+runs/launch.sh 는 살아 있는 NeMo-RL 런 액터가 없을 때(gpu_check.py NRL_RUN_ACTORS 0)만 이걸 kill 로 부른다 — 그 뒤 GPU 점유를 본다.
+Gym judge(local_vllm_model)의 vLLM 액터는 judge 서버 프로세스 소유라, 서버를 죽이면 GPU 가 10초 안에 풀린다 (2026-10-10 실측).
+"""
 import os, signal, subprocess, sys
 import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy

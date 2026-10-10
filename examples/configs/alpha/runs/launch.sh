@@ -9,7 +9,7 @@
 #            CKPT (기본: results/alpha/<campaign>/ckpt — 같은 CKPT 로 다시 띄우면 최신 step 에서 재개, G7)
 #            R3_TRACE (기본 1) · WANDB (기본 1, 0 이면 끈다)
 #            EXTRA_ENV (공백으로 나눈 VAR=값 목록 — clean_run.sh 화이트리스트를 거쳐 드라이버에 넘긴다. 예: NRL_REQUEST_PRIORITY_LONG_AGENTS=a,b)
-# 기동 전에 GPU 점유(1 GiB)를 검사하고, 지난 런이 남긴 Gym 서버를 정리한다 (KNOWN_ISSUES 2026-10-08).
+# 기동 전에 다른 런이 없으면 지난 런이 남긴 Gym 서버(judge 포함)를 정리하고 GPU 점유(1 GiB)를 검사한다 (KNOWN_ISSUES 2026-10-08 · 10-10).
 # 이 스크립트는 실행 중에 편집하지 않는다 — bash 는 스크립트를 오프셋으로 읽는다.
 set -u
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd)
@@ -24,10 +24,18 @@ CKPT=${CKPT:-$OUT/ckpt}
 mkdir -p $OUT/$tag
 cd $REPO
 ray_py() { $NRL/clean_run.sh /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 $NRL/venv-driver/bin/python -I "$@" </dev/null 2>/dev/null; }
-busy=$(ray_py $HERE/gpu_check.py | awk '/BUSY_GPUS/{print $2}')
-[ "$busy" = "0" ] || { echo "[$(date '+%F %T')] case=$tag GPU 점유 검사 실패 (BUSY_GPUS=$busy) — 기동 중단" | tee -a $OUT/runs.log; exit 1; }
+# 순서: 살아 있는 런 액터가 없을 때만 남은 Gym 서버를 정리하고, 그 뒤 GPU 점유를 본다. Gym judge(local_vllm_model)는 Gym 서버가 띄운
+# Ray 액터라 런이 끝나도 GPU 를 잡고 남는다 — 정리 전에 GPU 를 보면 기동이 막힌다 (KNOWN_ISSUES 2026-10-10).
+run_actors=$(ray_py $HERE/gpu_check.py | awk '/NRL_RUN_ACTORS/{print $2}')
+[ "$run_actors" = "0" ] || { echo "[$(date '+%F %T')] case=$tag 다른 NeMo-RL 런 진행 중 (NRL_RUN_ACTORS=${run_actors:-?}) — 기동 중단" | tee -a $OUT/runs.log; exit 1; }
 gym_left=$(ray_py $HERE/gym_cleanup.py kill | awk '/GYM_LEFTOVER_TOTAL/{print $2}')
 echo "[$(date '+%F %T')] case=$tag 남은 Gym 서버 정리: ${gym_left:-?}개" | tee -a $OUT/runs.log
+for i in 1 2 3 4 5 6; do
+  busy=$(ray_py $HERE/gpu_check.py | awk '/BUSY_GPUS/{print $2}')
+  [ "$busy" = "0" ] && break
+  sleep 10
+done
+[ "$busy" = "0" ] || { echo "[$(date '+%F %T')] case=$tag GPU 점유 검사 실패 (BUSY_GPUS=$busy, Gym 정리 60초 뒤) — 기동 중단" | tee -a $OUT/runs.log; exit 1; }
 TRACE_ENV=""
 [ "${R3_TRACE:-1}" = "1" ] && TRACE_ENV="NRL_R3_TRACE=1 NRL_R3_TRACE_DIR=$OUT/$tag/r3_trace"
 WANDB_ARGS=""

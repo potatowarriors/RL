@@ -28,7 +28,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | 경로 | 내용 |
 |---|---|
 | `vllm_alpha_plugin/` | vLLM 플러그인 패키지 (커밋 `599b58ac3`, pyproject 의 vllm extra + uv source 로 연결). `vllm.general_plugins` 엔트리포인트로 stock 0.25.1 휠에 `AlphaForCausalLM` 등록. qwen3_next 서브클래스 + 표준 RMSNorm 전면 교체(융합 QK-norm 커널은 zero-centered +1.0 하드코딩이라 비활성화) + FusedMoE DSV3 인자(`apply_routed_scale_to_output=False` 의도적) |
-| `runs/launch.sh` | RLVR 런 실행기 (2026-10-08): `launch.sh <campaign> <tag> [override]`. 산출물은 리포 워크스페이스의 `results/alpha/<campaign>/` (gitignored: 로그 디렉토리·드라이버 로그·`runs.log`·`ckpt/`), wandb 는 RL 전용 프로젝트 `alpha-rl` (group = campaign). 기동 전 GPU 점유 검사(`runs/gpu_check.py`)·남은 Gym 서버 정리(`runs/gym_cleanup.py`). 이전 런(v1·E0·E1·v2 구간 A)은 `$NRL_ROOT/runs/` 에 남아 있다. 레시피는 `student_rlvr1_alpha.yaml` 고정이다 |
+| `runs/launch.sh` | RLVR 런 실행기 (2026-10-08): `launch.sh <campaign> <tag> [override]`. 산출물은 리포 워크스페이스의 `results/alpha/<campaign>/` (gitignored: 로그 디렉토리·드라이버 로그·`runs.log`·`ckpt/`), wandb 는 RL 전용 프로젝트 `alpha-rl` (group = campaign). 기동 전: 살아 있는 런 액터 없음 확인(`runs/gpu_check.py` `NRL_RUN_ACTORS`) → 남은 Gym 서버 정리(`runs/gym_cleanup.py`, GPU 를 쥔 judge 포함) → GPU 점유 검사 (2026-10-10 순서 변경). 이전 런(v1·E0·E1·v2 구간 A)은 `$NRL_ROOT/runs/` 에 남아 있다. 레시피는 `RECIPE` (기본 `student_rlvr1_alpha.yaml`) |
 | `tools/verify_*.py` | 검증 게이트 (`docs/GATES.md` M1·M2·M4·R2·R3·D1·G1·G7). `verify_chat_render_parity.py` 는 CPU 전용 렌더 패리티(R3), `verify_packing_isolation.py` 는 packing 상태 누출(G1), `verify_optimizer_resume.py` 는 재개 전후 옵티마이저 상태 연속성(G7, CPU) |
 | `tools/check_alpha_recipe.py` | 레시피 실행 전 검사 (CPU) — R3+router fusion·파서·Ultra token id·GBS 나눗셈·CP 패딩·eos 등 |
 | `tools/engine_parity_*.py` | SFT 엔진(Pai)↔RL 엔진(NeMo-RL) forward·gradient 동등성 (M5). `_pai` 는 Pai 환경, `_nemorl` 은 NeMo-RL 워커 venv, `_hf` 는 제3 기준, `_compare` 가 판정 |
@@ -46,6 +46,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/export_rl_hf.sh` | **RL 체크포인트 → Pai 호환 HF 반출은 이것으로만** (G6). 변환 → 메타데이터 시작점 복사 → `compare_hf_weights.py` 대조. 변환기 출력 그대로는 Pai 가 토크나이저를 못 읽는다 |
 | `tools/compare_hf_weights.py` · `tools/compare_hf_forward.py` | 반출 HF ↔ 시작점 대조: 텐서·동결·dtype (CPU) · Pai 환경 config·토크나이저·forward + 잡음 바닥 통제 (G6) |
 | `tools/export_watch.sh` | 본 런 체크포인트를 N 스텝마다 `export_rl_hf.sh` 로 반출하는 감시 루프 (keep_top_k 가 지우기 전에) |
+| `tools/analyze_gym_full_results.py` | Gym 전체 결과(오프라인 W&B 표)에서 judge 판정 파싱 실패율 · 재판정(`check_full_generation_on_fail`) 시도·성공 · rdkit 추출 실패를 센다 (CPU, J1). `should_log_nemo_gym_responses: true` 레시피는 덤프를 안 남기므로 게이트에서 `WANDB_MODE=offline` + 표 켬으로 남긴다 |
 | `tools/analyze_reward_penalties.py` | Ultra reward_penalties 4종을 롤아웃에 오프라인으로 적용해 발동률·오탐(보상 > 0 이 0 으로 깎이는 수)을 잰다 (CPU) |
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |
 | `tools/inject_identity_blend.py` | RL 블렌드 identity 주입 (`docs/RL_DATA.md` §2) |
