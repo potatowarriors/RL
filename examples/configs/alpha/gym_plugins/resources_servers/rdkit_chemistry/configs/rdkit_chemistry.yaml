@@ -1,0 +1,18 @@
+# alpha Gym 플러그인 (NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins). Ultra RL 블렌드의 rdkit_chemistry_agent 행을 채점한다.
+rdkit_chemistry:
+  resources_servers:
+    rdkit_chemistry:
+      entrypoint: app.py
+      domain: knowledge
+      verified: false
+      description: RDKit molecular property questions with integer answers (counts and 0/1), exact match in the instructed format
+rdkit_chemistry_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: rdkit_chemistry
+      model_server:
+        type: responses_api_models
+        name: policy_model

@@ -2211,6 +2211,123 @@ def test_noncolocated_inference_requires_explicit_gpus_per_node_multi_node(
         setup(master_config, tokenizer, dataset, None)
 
 
+class _StopSetup(Exception):
+    """Raised by a mock to stop grpo.setup() once cluster placement is decided."""
+
+
+def _two_node_noncolocated_config(master_config, inference_gpus_per_node):
+    """One training node and one inference node with 8 GPUs each."""
+    master_config.policy["generation"]["colocated"] = {
+        "enabled": False,
+        "resources": {"gpus_per_node": inference_gpus_per_node, "num_nodes": 1},
+    }
+    master_config.grpo.val_period = 0
+    master_config.grpo.batch_multiplier = 1
+    master_config.cluster["num_nodes"] = 2
+    master_config.cluster["gpus_per_node"] = 8
+    master_config.data["shuffle"] = False
+    master_config.data["num_workers"] = 1
+    return master_config
+
+
+def _run_setup_until_inference_cluster(master_config):
+    """Run grpo.setup() on mocked Ray clusters until the inference cluster is built.
+
+    Returns the cluster events in order as (event, cluster name, constructor kwargs).
+    """
+    from nemo_rl.algorithms.grpo import setup
+
+    events = []
+
+    def make_cluster(**kwargs):
+        name = kwargs["name"]
+        events.append(("create", name, kwargs))
+        if name == "grpo_inference_cluster":
+            raise _StopSetup
+        cluster = MagicMock()
+        cluster.get_placement_groups.side_effect = lambda: events.append(
+            ("placement_groups", name, {})
+        )
+        return cluster
+
+    dataset = MagicMock()
+    dataset.__len__ = MagicMock(return_value=10)
+    with (
+        patch("nemo_rl.algorithms.grpo.Logger"),
+        patch("nemo_rl.algorithms.grpo.CheckpointManager") as mock_checkpointer,
+        patch("nemo_rl.algorithms.grpo.StatefulDataLoader"),
+        patch("nemo_rl.algorithms.grpo.RayVirtualCluster", side_effect=make_cluster),
+        pytest.raises(_StopSetup),
+    ):
+        mock_checkpointer.return_value.get_latest_checkpoint_path.return_value = None
+        setup(master_config, MagicMock(), dataset, None)
+    return events
+
+
+def test_noncolocated_partial_inference_node_reserves_training_first(
+    mock_grpo_components,
+):
+    """Inference may leave GPUs of its node free; training then claims its node first.
+
+    NeMo Gym places its GPU services (e.g. an LLM judge) on the free GPUs while the
+    policy initializes, so the training placement group must exist before that.
+    """
+    master_config = _two_node_noncolocated_config(
+        mock_grpo_components["master_config"], inference_gpus_per_node=6
+    )
+
+    events = _run_setup_until_inference_cluster(master_config)
+
+    assert [(event, name) for event, name, _ in events] == [
+        ("create", "grpo_train_cluster"),
+        ("placement_groups", "grpo_train_cluster"),
+        ("create", "grpo_inference_cluster"),
+    ]
+    train_kwargs, inference_kwargs = events[0][2], events[2][2]
+    assert train_kwargs["bundle_ct_per_node_list"] == [8]
+    assert inference_kwargs["bundle_ct_per_node_list"] == [6]
+    assert inference_kwargs["num_gpus_per_node"] == 6
+
+
+def test_noncolocated_full_inference_node_keeps_lazy_placement(mock_grpo_components):
+    """Full inference nodes keep creating placement groups lazily, as before."""
+    master_config = _two_node_noncolocated_config(
+        mock_grpo_components["master_config"], inference_gpus_per_node=8
+    )
+
+    events = _run_setup_until_inference_cluster(master_config)
+
+    assert [(event, name) for event, name, _ in events] == [
+        ("create", "grpo_train_cluster"),
+        ("create", "grpo_inference_cluster"),
+    ]
+
+
+@pytest.mark.parametrize("inference_gpus_per_node", [0, 9])
+def test_noncolocated_inference_gpus_per_node_must_fit_one_node(
+    mock_grpo_components, inference_gpus_per_node
+):
+    """Multi-node inference takes between 1 GPU and a whole node per inference node."""
+    from nemo_rl.algorithms.grpo import setup
+
+    master_config = _two_node_noncolocated_config(
+        mock_grpo_components["master_config"], inference_gpus_per_node
+    )
+    dataset = MagicMock()
+    dataset.__len__ = MagicMock(return_value=10)
+    with (
+        patch("nemo_rl.algorithms.grpo.Logger"),
+        patch("nemo_rl.algorithms.grpo.CheckpointManager") as mock_checkpointer,
+        patch("nemo_rl.algorithms.grpo.StatefulDataLoader"),
+        pytest.raises(
+            AssertionError,
+            match=r"must be explicitly set to a value in \[1, cluster.gpus_per_node\]",
+        ),
+    ):
+        mock_checkpointer.return_value.get_latest_checkpoint_path.return_value = None
+        setup(master_config, MagicMock(), dataset, None)
+
+
 def test_noncolocated_opd_teacher_must_fit_on_one_cluster_node(
     mock_grpo_components,
 ):
