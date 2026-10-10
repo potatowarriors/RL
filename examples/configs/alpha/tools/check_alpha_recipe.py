@@ -10,7 +10,7 @@ ERROR 가 하나라도 있으면 종료 코드 1. WARN 은 결정 대기·확인
   GDN 재귀 상태 fp32 · R3 · turn_end 3 (CLAUDE.md 레시피 규약) · R3 + router fusion 금지 (H1) · 그룹 라우팅 덮어쓰기 금지 (낮음)
   CP>1 의 packing·패딩 배수·chunk·defer_fp32_logits (H2) · Gym 파서·invalid tool call 벌점 순서 (H3)
   Gym judge 가 정책 자신을 가리킴 · Gym judge GPU 가 롤아웃 노드의 남은 GPU 를 넘음 (H4, RL_PLAN.md 결정 21)
-  데이터 행의 agent 가 Gym 설정에 없음 · ns_tools 행의 verifier_type 미등록
+  데이터 행의 agent 가 Gym 설정에 없음 · ns_tools 행의 verifier_type 미등록 · judge 행 정답이 자기 output_regex 에 잘림 · 재판정 꺼짐 (KNOWN_ISSUES 10-10)
   prefix caching 명시 (M1) · async 배치 파라미터 명시 (M2) · async ⇒ IS 보정 (M7) · KL>0 + R3 (M6) · top_p 1.0 (낮음)
   GBS 나눗셈 (낮음) · Ultra 의 무효 키 (낮음) · reward_penalties token_ids 와 토크나이저 대조 · generation_config eos [3,0] (M9)
 """
@@ -282,10 +282,31 @@ AGENT_NAME = re.compile(r'"agent_ref":\s*\{[^{}]*?"name":\s*"([^"]+)"')
 VERIFIER_TYPE = re.compile(r'"verifier_type":\s*"([^"]+)"')
 
 
+def _equivalence_server(merged: dict, agent: str, verifier_type: str | None) -> str | None:
+    """데이터 agent 행이 채점받는 equivalence_llm_judge 서버 이름 (직접 또는 ns_tools 의 verifier 경유). 아니면 None."""
+    cfgs = list(((merged.get(agent) or {}).get("responses_api_agents") or {}).values())
+    if not cfgs:
+        return None
+    rs = ((cfgs[0] or {}).get("resources_server") or {}).get("name")
+    servers = (merged.get(rs) or {}).get("resources_servers") or {}
+    if isinstance(servers.get("equivalence_llm_judge"), dict):
+        return rs
+    ns = servers.get("ns_tools")
+    if isinstance(ns, dict):
+        tgt = ((ns.get("verifiers") or {}).get(verifier_type or ns.get("default_verifier")) or {}).get("name")
+        if isinstance(((merged.get(tgt) or {}).get("resources_servers") or {}).get("equivalence_llm_judge"), dict):
+            return tgt
+    return None
+
+
 def check_gym_data_agents(cfg: dict, merged: dict) -> None:
     """데이터 행의 agent_ref 가 Gym 설정에 있는지, ns_tools 행의 verifier_type 이 ns_tools.verifiers 에 있는지 (2026-10-08 rdkit 사례)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from measure_judge_p04 import gold_regex_defect
+
     agents = collections.Counter()
     verifiers = collections.defaultdict(collections.Counter)  # agent -> verifier_type -> 행 수
+    extraction = collections.defaultdict(collections.Counter)  # (split, agent, verifier_type) -> gold_regex_defect 상태 -> 행 수
     data = cfg.get("data") or {}
     for split in ("train", "validation"):
         path = (data.get(split) or {}).get("data_path")
@@ -300,6 +321,32 @@ def check_gym_data_agents(cfg: dict, merged: dict) -> None:
                 v = VERIFIER_TYPE.search(line)
                 if v:
                     verifiers[m.group(1)][v.group(1)] += 1
+                if '"output_regex"' in line:
+                    row = json.loads(line)
+                    rx = (row.get("template_metadata") or {}).get("output_regex")
+                    if rx and row.get("expected_answer") is not None:
+                        key = (split, m.group(1), v.group(1) if v else None)
+                        extraction[key][gold_regex_defect(rx, str(row["expected_answer"]))[0]] += 1
+    # 정답 추출 (KNOWN_ISSUES 2026-10-10): equivalence_llm_judge 로 채점하는 행은 정답을 요청 형식으로 감싸면 그 행의 정규식이
+    # 정답 전체를 돌려줘야 한다. mcqa 같은 다른 채점기의 output_regex 는 보지 않는다.
+    judged = collections.defaultdict(collections.Counter)
+    eq_servers = set()
+    for (split, name, vt), c in extraction.items():
+        server = _equivalence_server(merged, name, vt)
+        if server:
+            judged[split].update(c)
+            eq_servers.add(server)
+    for split, c in judged.items():
+        if c["truncated"]:
+            err(f"{split} 데이터의 judge 행 {c['truncated']}개는 정답이 자기 output_regex 에서 잘린다 — 맞는 답도 보상 0 "
+                "(tools/fix_stem_sci_regex.py 로 교체)")
+        if c["unknown_format"]:
+            warn(f"{split} 데이터의 judge 행 {c['unknown_format']}개는 output_regex 가 measure_judge_p04.WRAPPERS 에 없는 형식이라 "
+                 "정답 추출을 검사하지 못했다")
+    for server in sorted(eq_servers):
+        eq = merged[server]["resources_servers"]["equivalence_llm_judge"]
+        if not eq.get("check_full_generation_on_fail"):
+            warn(f"{server}.check_full_generation_on_fail 가 꺼져 있다 — 모델 답 속 닫는 문자에서 추출이 잘린 정답도 보상 0 (결정 25)")
     for name, n in sorted(agents.items()):
         body = merged.get(name) or {}
         agent_cfgs = list((body.get("responses_api_agents") or {}).values())

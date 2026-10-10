@@ -69,6 +69,35 @@ def wrap_for(regex: str | None, answer: str) -> str | None:
     return None
 
 
+_PLACEHOLDER = "ANSWER_PLACEHOLDER_7d1c"
+
+
+def gold_regex_defect(regex: str | None, answer: str) -> tuple[str, str | None]:
+    """Does the gold answer, written in the row's own requested format, reach the judge whole?
+
+    Returns (status, what the judge sees):
+      ok             - extraction returns the answer (or differs only by `**` markers / a trailing period)
+      fallback       - the regex does not match at all, so Gym judges the whole message (not a truncation)
+      truncated      - the regex matches but returns a fragment (closing char inside the answer; KNOWN_ISSUES 2026-10-10)
+      unknown_format - no wrapper in WRAPPERS produces this regex's format
+    """
+    if not regex:
+        return "ok", answer
+    own = next((w for w in WRAPPERS if extract_like_gym(w % _PLACEHOLDER, regex) == _PLACEHOLDER), None)
+    if own is None:
+        return "unknown_format", None
+    a = clean_answer(answer)
+    text = "The final answer is below.\n\n" + (own % a)
+    if not re.search(regex, text, flags=re.MULTILINE | re.DOTALL):
+        return "fallback", text
+    got = extract_like_gym(text, regex)
+
+    def loose(s: str) -> str:
+        return s.replace("**", "").strip().rstrip(".").strip()
+
+    return ("ok" if got == a or loose(got) == loose(a) else "truncated"), got
+
+
 def norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
