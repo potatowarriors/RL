@@ -5,17 +5,44 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
-## Science-v1 정답이 자기 `output_regex` 를 통과하지 못한다 — STEM 블렌드 662행 (2026-10-10, 처리 결정 대기)
+## Science-v1 정답이 자기 `output_regex` 에서 잘린다 — STEM 블렌드 636행 (2026-10-10 ✅ 교체 + 재판정 켬)
 
-- **발견**: P0-4 judge 검증 중. `teacher_stem_v1.jsonl` 의 Science-v1 7,909행 중 662행 (블렌드의 1.26%) 은 정답 문자열이 그 행의 추출 정규식의
-  닫는 문자를 포함한다. 비탐욕 정규식이 첫 닫는 문자에서 끊어, 요청한 형식 그대로 쓴 완벽한 답도 잘린 채 judge 에게 간다.
-- **규모** (CPU 재집계, `tools/measure_judge_p04.py` 의 `wrap_for`): `\(Answer:\s*(.+?)\)` 466행이 대부분이다 — LaTeX `\)` 의 `)` 에서 끊긴다.
-  나머지는 `((…))` 63 · `Answer is [ ]` 40 · `[Answer: ]` 37 · `**…**` 30 · `\boxed{}` 25 · `||…||` 1. ns_tools(python 도구) 행과 주관식 행 모두 해당한다.
-- **영향**: 완벽한 답을 형식대로 넣은 탐침에서 보상 14/60 (`$NRL_ROOT/gates/p04_judge/truncation_probe.json`). 그룹 대부분이 전부 0 이라 기울기는 거의 없고,
-  보상이 나오는 경우는 답에 닫는 문자가 우연히 없을 때라 잘못된 신호가 섞인다. judge 자체는 정상이다 (양성 100/100 · 음성 100/100).
-- **처리 (결정 대기)**: 블렌드 변경이라 사용자 승인이 필요하다. 권고는 같은 출처·같은 유형의 결함 없는 Science-v1 행으로 바꿔 52,500행과 비율을 유지하는 것이다
-  (풀: ns_tools 90,566 · equivalence 60,078).
-- **교훈**: judge 를 쓰는 행은 "정답을 요청 형식으로 감싸면 그 행의 정규식이 정답 전체를 돌려주는가"를 블렌드 게이트로 검사한다.
+- **발견**: P0-4 judge 검증 중. Science-v1 행은 최종 답을 감쌀 형식(`(Answer: …)` · `((…))` · `[Answer: …]` 등)을 지시하고, Gym 은 그 행의
+  `template_metadata.output_regex` 로 마지막 일치를 꺼내 judge 에게 보낸다 (`equivalence_llm_judge/app.py:144-200`). 정규식이 비탐욕(`.+?`)이라
+  **첫 닫는 문자에서 멈춘다.** 정답 자체에 그 문자가 있으면 정답과 같은 표기로 쓴 맞는 답도 조각만 judge 에게 간다.
+
+  | 정답 | judge 가 받는 것 |
+  |---|---|
+  | `…chain rule to \(U(N,T,V)=U(z,T,V)\).` | `…chain rule to \(U(N,T,V` |
+  | `\([PXP,P]=i\hbar P^{2}=…\)` (`Answer is […]`) | `\([PXP,P` |
+  | `\(U = \dfrac{m g h}{2}\) (because … at \(h/2\)).` (`((…))`) | `… at \(h/2\` |
+
+- **실제 학습 경로에서 그대로다**: Gym 코드의 구제 장치 두 개(정답 120자 초과면 추출 생략 · 추출 판정 실패 시 응답 전체로 재판정 0.5점)는
+  파이썬 기본값으로는 켜져 있지만 `equivalence_llm_judge.yaml` 이 끈다 (`null` · `false` · `0.0`). ns_tools 행도 행 전체를 equivalence judge 로
+  넘겨 같은 경로를 탄다 (`ns_tools/app.py:437-441`). 정답을 요청 형식 그대로 넣은 탐침 60개 중 보상 14개 (`$NRL_ROOT/gates/p04_judge/truncation_probe.json`, 보상 0/1 만 — 재판정 꺼짐과 일치).
+- **규모** (`teacher_stem_v1.jsonl` Science-v1 7,909행, `measure_judge_p04.gold_regex_defect`): 잘림 **636행** (python 도구 421 · 주관식 215).
+  처음 집계한 662행 중 26행은 결함이 아니었다 — 중괄호가 너무 깊어 `\boxed{}` 정규식이 매치되지 않는 25행은 Gym 이 응답 전체를 판정하고, `400 J**.` 1행은 `400 J` 로 같다.
+
+  | 원인 | 행 | 모델이 피할 수 있나 |
+  |---|---|---|
+  | `(Answer: …)` 안의 문장 괄호 | 257 | 문장을 바꾸면 |
+  | `(Answer: …)` 안의 LaTeX `\)` | 157 | `$…$` 로 쓰면 |
+  | `(Answer: …)` 안의 함수 괄호 `f(x)` · `U(N,T,V)` | 52 | 거의 불가 |
+  | `[Answer: …]` · `Answer is […]` 안의 `]` (`\]` · `[A,B]` · 농도 `[A]`) | 77 | 거의 불가 |
+  | `((…))` 안의 `))` | 63 | 일부 |
+  | `**…**` 안의 굵은 글씨 · `\|\|…\|\|` | 29 · 1 | 쉬움 |
+
+- **영향**: 0점이 확정되지는 않는다 — 모델이 닫는 문자를 피하면 보상을 받는다. 그래서 이 행의 기울기는 정답성보다 "괄호·LaTeX 를 피하라"를 가르치고,
+  피할 수 없는 행(`f(x)` · `[A,B]`)은 늘 0 에 가깝다. 정답에 닫는 문자가 없는 행도 모델 답에 들어가면 똑같이 잘린다 — 데이터 교체로는 막지 못한다.
+  NVIDIA 도 이 행들을 Ultra 에 썼지만 (`used_in: ultra_v3`) 그때의 judge 설정은 모른다.
+- **수정 (사용자 결정 2026-10-10, `RL_PLAN.md` 결정 25)**:
+  1. 636행을 같은 agent · 분야 · 정답 형식의 결함 없는 Science-v1 행으로 교체 — `teacher_stem_v2.jsonl` · `v2_val` (6행) · `smoke_v3` (16행),
+     자리 · 행 수 · 비율 그대로 (`tools/fix_stem_sci_regex.py`). 교체 후보 2,609개는 벤치 12,612문항과 오염 검사 0건.
+     독립 검증: 바뀐 줄 = 잘림 줄 (636/6/16) · 교체 행 = 원천 행 · agent · 분야 · verifier 분포 동일 · 세 파일 간 겹침 0 · D1 OK · 최대 프롬프트 9,352 토큰.
+  2. 레시피 `teacher_stem_alpha.yaml` 에 `check_full_generation_on_fail: true` · `reward_if_full_generation_succeeds: 0.5` — 모델 답 쪽 잘림을 살린다.
+     정규식이 없는 행(Ultra reasoning · ExamQA)에는 걸리지 않는다. judge 호출은 실패한 Science-v1 응답마다 1회 늘어난다 (스텝당 최대 약 150회).
+     위험: 여러 답을 늘어놓은 응답이 전체 판정에서 통과할 수 있다 (상한 0.5) — J1 · 첫 스텝들에서 재판정 횟수와 0.5 보상 표본을 본다.
+- **검사기**: `check_alpha_recipe.py` 가 데이터를 받으면 equivalence judge 로 채점되는 행의 정답 잘림을 ERROR, 재판정 꺼짐을 WARN 으로 낸다 (v1 ERROR 636·6 · v2 ERROR 0 · 재판정 끈 대조 WARN).
 
 ## bf16 가중치에 갱신이 반영되지 않는다 — lr 1e-6 도구 사용 teacher 의 보상 평탄 (2026-10-08 ✅ lr 3e-6 재시작, 10-09 반영 계수 0.33 확인)
 
