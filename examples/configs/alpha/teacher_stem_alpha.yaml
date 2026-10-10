@@ -110,11 +110,11 @@ env:
             input: []
             temperature: 0.0
             max_output_tokens: 2048
-          # 재판정 (결정 25, KNOWN_ISSUES 2026-10-10): 행별 output_regex(Science-v1)로 꺼낸 답이 틀리면 최종 응답 전체로 한 번 더
-          # 판정해 맞으면 0.5. 모델 답 속 닫는 문자(`\)`·`f(x)`·`]`)에서 추출이 잘린 정답을 살린다. Gym 설정 파일은 끈다(false · 0.0).
-          # 정규식이 없는 행(Ultra reasoning · ExamQA)에는 걸리지 않는다. 길이 기준(extraction_length_threshold)은 Gym 설정대로 null.
-          check_full_generation_on_fail: true
-          reward_if_full_generation_succeeds: 0.5
+          # 재판정 끔 (사용자 결정 2026-10-10, RL_PLAN.md 결정 27 — 결정 25 의 재판정 철회). J1 보충 j1c 에서 0.5 보상 78 중 잘린 추출 복구는 26,
+          # 52 는 이미 완전한 추출문을 응답 전체 문맥과 함께 다시 물어 판정이 뒤집힌 것이었다 (일부 오답, KNOWN_ISSUES 2026-10-10 j1c).
+          # Gym 설정 파일 기본값과 같다. 2026-10-10 17:32 기동한 본 런 main 은 켠 상태(true · 0.5)로 돈다.
+          check_full_generation_on_fail: false
+          reward_if_full_generation_succeeds: 0.0
     math_with_judge:
       resources_servers:
         math_with_judge:
