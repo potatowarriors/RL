@@ -5,6 +5,26 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## STEM 본 런 `main2` 가 step 22 refit 에서 멈췄다 — vLLM 엔진 하나가 생성 일시정지에 답하지 않음 (2026-10-10, 10-08 7스텝 정지의 재발)
+
+**발견 경위**: 정체 감시(30분)가 23:25 에 걸렸다. 드라이버 로그는 22:55:42 이후 한 줄도 없었다. 오류·경고도 없었다.
+
+**관찰** (런을 멈추기 전, 읽기만으로):
+- step 22 의 학습은 끝났다. main1 학습 GPU 8장은 0% 였다. 드라이버의 print 는 flush 하지 않는 것이 있어 로그 마지막 줄 ("Computing advantages") 은 실제 위치가 아니다.
+- Ray 상태 API 에서 `AsyncTrajectoryCollector.prepare_for_refit` 와 `VllmAsyncGenerationWorker.pause_generation_async` 가 34분째 RUNNING 이었다.
+  refit 전에 vLLM 엔진 6개에 `pause_generation(mode="keep")` 을 보냈고, 하나가 돌아오지 않았다 (`nemo_rl/models/generation/vllm/vllm_worker_async.py:1648`).
+- sub1 GPU 8장 중 GPU 2 만 사용률 100% 이고 7장은 0% 였다. 롤아웃 수집도 690/1024 에서 함께 멈췄다.
+- sub1 의 vLLM HTTP 포트별 ESTABLISHED 연결은 160 · 134 · 39 · 36 · 34 · 33 이었다. vLLM 워커 로그는 모두 기동 직후 (18:5x) 가 마지막이었다.
+- py-spy 는 이번에도 ptrace 제한으로 "Permission Denied" 였다. 엔진 내부 스택은 보지 못했다.
+
+**해석 (미확인)**: 10-08 사고와 증상이 같다 (엔진 하나만 GPU 100%, 진척 0, 오류 없음). 그때 이식한 원인 후보 수정 (교차 스레드 AsyncLLM · 문맥 초과 무응답) 뒤에도 재발했다.
+GPU 를 100% 쓰면서 진척이 없으므로 끝나지 않는 GPU 연산 쪽이 더 유력하다. 일시정지는 엔진의 현재 스텝이 끝나야 돌아온다.
+
+**대응**: 사용자 결정 (2026-10-10 23:35 무렵) 으로 중단하고 `ckpt/step_20` 에서 재개한다 (G7 경로, 태그 `main2r1` — 같은 태그는 `main2.log` 를 덮어쓴다). step 21~22 는 버린다.
+중단은 2026-10-11 01:15:09 (rc 134, 사용자가 `kill -TERM` 실행 — Claude Code 자동 권한 분류기가 중단·기동 명령을 막았다). 정지 22:55 → 중단 01:15, GPU 16장 유휴 2시간 20분.
+중단 뒤 런 액터 0, 멈춘 엔진의 GPU 2 점유도 풀렸다 (judge GPU 2장만 남음 — 실행기가 정리).
+정체 감시를 20분으로 줄인다. 원인 조사는 재개 뒤 GPU 를 쓰지 않는 방법으로 병행한다 (upstream vLLM 의 같은 증상 수정 검색).
+
 ## J1 보충 j1c — rdkit 예/아니오 행이 맞는 답에 0 점 · 재판정 성공의 2/3 는 같은 답의 판정 뒤집힘 (2026-10-10 rdkit ✅ 수정 · 재판정 끔, 결정 27)
 
 - **측정**: j1c (judge 128 + rdkit 64 행, W&B 오프라인 표, `tools/analyze_gym_full_results.py`) 의 첫 수집분 — equivalence 352 · ns_tools 368 · rdkit 304 표본. 표 파일은 같은 결과를 두 번씩 담는다 — 중복을 빼고 센 값이다 (처음 보고한 수치는 2배였다, 10-10 18:40 정정).
