@@ -160,7 +160,7 @@ judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없
 nvarc(ARC-AGI)는 라이선스 확인 전까지 뺀다. Science-v1 은 CC BY-SA 4.0 이다.
 knowledge-mcqa 의 Qwen3-30B-A3B pass_rate 1.0 행(364,853)도 alpha 에게는 (0,1) 일 수 있다 — P0 표본으로 확인한다.
 
-**최종 후보 `teacher_stem_v1.jsonl` (2026-10-08, 비율 승인 대기)** — 52,500행 (= 820 스텝 × 64) + 검증 666, D1 OK. 위 표에 sandbox 결정(§5.9) 뒤
+**최종 `teacher_stem_v1.jsonl` (2026-10-08 작성, 비율 승인 2026-10-10 사용자 — `RL_PLAN.md` 결정 24)** — 52,500행 (= 820 스텝 × 64) + 검증 666, D1 OK. 위 표에 sandbox 결정(§5.9) 뒤
 python 도구 과학을 넣고 주관식·객관식을 줄였다. 레시피 `teacher_stem_alpha.yaml` (`alpha/judge-split`, 결정 21)
 
 | 구성 | agent (채점) | 학습 행 | 비중 | 원천 (참조 pass_rate) |

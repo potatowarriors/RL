@@ -1,8 +1,10 @@
 # teacher_stem_alpha.yaml — 1차 STEM teacher (RL_PLAN.md 결정 18·19·21, docs/RL_DATA.md §5.4).
 #
-# 검증된 RLVR 설정(student_rlvr1_alpha.yaml: 2노드 분리 · async age 2 · chunked prefill · Muon lr 1e-6 warmup 10 · GBS 1,024 ·
+# 검증된 RLVR 설정(student_rlvr1_alpha.yaml: 2노드 분리 · async age 2 · chunked prefill · Muon warmup 10 · GBS 1,024 ·
 # 128K/CP8 · R3 · GDN 상태 fp32 · strict 도구 유지 · KL 0 + threshold 2 · 페널티 4종)을 그대로 상속한다.
-# 바꾸는 것은 데이터 · 스텝 · 생성 상한 · 롤아웃 GPU 수 · Gym 환경 · judge 다 (학습 메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+# 바꾸는 것은 데이터 · 스텝 · 생성 상한 · 롤아웃 GPU 수 · Gym 환경 · judge · lr 이다 (학습 메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+# lr 5e-6 (사용자 결정 2026-10-09, RL_PLAN.md 결정 23): 부모 1e-6 은 bf16 가중치에 갱신의 12% 만 반영된다
+#   (docs/KNOWN_ISSUES.md "bf16 가중치에 갱신이 반영되지 않는다"). step 50 에서 tools/measure_bf16_delivery.py 로 잰다.
 #
 # judge 배치 (결정 21): 롤아웃 노드 GPU 8장 = vLLM 롤아웃 6장 + Gym judge 2장 (Gemma-4-31B-it TP2, Gym local_vllm_model 이
 # Ray 로 남은 GPU 에 띄운다). 2노드 비-colocated 에서 롤아웃이 노드 일부만 쓰려면 본체 수정 `alpha/judge-split` 이 필요하다
