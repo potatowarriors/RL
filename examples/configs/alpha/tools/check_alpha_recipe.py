@@ -253,6 +253,10 @@ def check_gym_judges(cfg: dict, ng: dict, paths: list[str]) -> None:
     merged = _merge(merged, {k: v for k, v in ng.items() if isinstance(v, dict)})
     judge_gpus = 0
     for inst, body in merged.items():
+        ns = ((body or {}).get("resources_servers") or {}).get("ns_tools")
+        if isinstance(ns, dict) and "sandbox_port" in ns and not isinstance(ns["sandbox_port"], str):
+            err(f"Gym {inst}.sandbox_port={ns['sandbox_port']!r} — NSToolsConfig 는 str 이다. 정수면 ns_tools 가 기동에서 죽는다 "
+                "(J1 2026-10-10). 따옴표로 감싼다")
         for stype, scfg in ((body or {}).get("resources_servers") or {}).items():
             if not isinstance(scfg, dict) or scfg.get("should_use_judge") is False:
                 continue
