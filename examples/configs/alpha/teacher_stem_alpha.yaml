@@ -9,10 +9,12 @@
 # judge 배치 (결정 21): 롤아웃 노드 GPU 8장 = vLLM 롤아웃 6장 + Gym judge 2장 (Gemma-4-31B-it TP2, Gym local_vllm_model 이
 # Ray 로 남은 GPU 에 띄운다). 2노드 비-colocated 에서 롤아웃이 노드 일부만 쓰려면 본체 수정 `alpha/judge-split` 이 필요하다
 # (grpo.py — upstream 은 노드 전체만 허용, 남는 GPU 가 있으면 학습 placement group 을 먼저 잡는다).
-# 블렌드: teacher_stem_v1.jsonl (52,500 = 820 스텝 × 64) — 객관식 · 퍼즐 · 화학(rdkit) · 주관식(judge) · python 도구 과학(sandbox + judge).
+# 블렌드: teacher_stem_v2.jsonl (52,500 = 820 스텝 × 64) — 객관식 · 퍼즐 · 화학(rdkit) · 주관식(judge) · python 도구 과학(sandbox + judge).
+#   v2 = v1 에서 정답이 자기 output_regex 에 잘리는 Science-v1 636행을 같은 유형 행으로 교체 (결정 25, tools/fix_stem_sci_regex.py).
 #
-# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_stem_alpha.yaml
-# 실행: RECIPE=examples/configs/alpha/teacher_stem_alpha.yaml DATA=<teacher_stem_v1.jsonl> VAL=<teacher_stem_v1_val.jsonl> \
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_stem_alpha.yaml \
+#                        data.train.data_path=<teacher_stem_v2.jsonl>   (데이터를 주면 agent · verifier · 정답 추출을 대조한다)
+# 실행: RECIPE=examples/configs/alpha/teacher_stem_alpha.yaml DATA=<teacher_stem_v2.jsonl> VAL=<teacher_stem_v2_val.jsonl> \
 #         examples/configs/alpha/runs/launch.sh teacher_stem <tag> policy.model_name=<hfmodel_0002862>
 # 전제: gpu06 sandbox 터널 ($NRL_ROOT/sandbox/tunnel.sh, main1 0.0.0.0:6000) · Gemma 가중치 /home/work/vidsearch/models/gemma-4-31B-it
 defaults: student_rlvr1_alpha.yaml
@@ -108,6 +110,11 @@ env:
             input: []
             temperature: 0.0
             max_output_tokens: 2048
+          # 재판정 (결정 25, KNOWN_ISSUES 2026-10-10): 행별 output_regex(Science-v1)로 꺼낸 답이 틀리면 최종 응답 전체로 한 번 더
+          # 판정해 맞으면 0.5. 모델 답 속 닫는 문자(`\)`·`f(x)`·`]`)에서 추출이 잘린 정답을 살린다. Gym 설정 파일은 끈다(false · 0.0).
+          # 정규식이 없는 행(Ultra reasoning · ExamQA)에는 걸리지 않는다. 길이 기준(extraction_length_threshold)은 Gym 설정대로 null.
+          check_full_generation_on_fail: true
+          reward_if_full_generation_succeeds: 0.5
     math_with_judge:
       resources_servers:
         math_with_judge:
