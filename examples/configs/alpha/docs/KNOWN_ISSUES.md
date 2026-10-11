@@ -45,7 +45,8 @@ NeMo-RL 레시피에는 이 변수가 없었다 (`GATES.md` G5 때 "없이도 �
 **결과 (10-11 14:10)**: 이번 기동은 학습이 main1, 롤아웃이 sub1 에 배치됐다. 학습 워커 8개의 `/proc/<pid>/environ` 에 `NCCL_MAX_NCHANNELS=16` 확인.
 **재개 첫 학습 스텝(step 41) 통과** — 13:48 첫 머리글 … 14:09 step 42 머리글. step 41: gen KL 0.0018 · 보상 0.2705 · 스텝 320 s · 학습 2,925 tok/s/GPU
 (`main2r1` step 21 재개 때 2,564) · refit 거품 28.8 s. 같은 체크포인트·같은 rank 메모리 (rank 1·2 52.9 GB 예약) 에서 NCCL 버퍼 OOM 이 사라졌다.
-R1 (step 41~43) 과 스텝 시간 비교는 `STATUS.md` 에 이어 적는다.
+**R1 PASS (14:17)**: step 41·42·43 gen KL 0.00177 / 0.00180 / 0.00198 · 마스킹 0 · 스텝 320 / 175 / 281 s (`GATES.md` R1 행). 두 변경 (Triton GDN prefill · NCCL 16채널) 이
+정합과 처리량을 해치지 않는다. FlashInfer 교착의 재발 없음은 step 80 무렵 (이전 재발 간격 약 20스텝의 두 배) 까지 정지 없이 가야 확인된 것으로 본다.
 
 ## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11 ✅ FlashInfer 0.6.13 GDN prefill 커널 교착 → `gdn_prefill_backend: triton`)
 
