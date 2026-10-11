@@ -37,7 +37,7 @@ NCCL 2.30.7. 이 all-reduce 는 프로세스에서 **처음 쓰는 통신자 그
 1/4 로 줄이고 스텝 시간 비용은 없다 (60.7 s vs 61.1 s, NVLink 포화 유지). 새 런은 영향 없다" (Pai `examples/alpha/train.sh:85-92`, Pai `CLAUDE.md` 07-15 행).
 NeMo-RL 레시피에는 이 변수가 없었다 (`GATES.md` G5 때 "없이도 재개 OOM 은 없었다" 고 적었는데, 그때는 재개 뒤 첫 스텝의 여유가 있었던 경우다).
 
-**대응 (사용자 승인 13:45 "승인할게 바로 실행해", 커밋 `935270af7`)**: `student_rlvr1_alpha.yaml` `policy.megatron_cfg.env_vars` 에 `NCCL_MAX_NCHANNELS: "16"` 추가
+**대응 (사용자 승인 13:45 "승인할게 바로 실행해", 커밋 `f1321fe64` — 15:40 `f625acac4` 작성자 교정 재작성 전에는 `935270af7`, `runs.log` 의 `commit=` 은 옛 값)**: `student_rlvr1_alpha.yaml` `policy.megatron_cfg.env_vars` 에 `NCCL_MAX_NCHANNELS: "16"` 추가
 (`lm_policy.py:147` → Ray runtime_env 로 학습 워커 8개에 전달; 검사기 ERROR 0 · WARN 4, 렌더링 확인). 13:47 `ckpt/step_40` 에서 `main2r3` 기동.
 검증 계획: 학습 워커 `/proc/<pid>/environ` 에 변수가 있는지 · 재개 첫 스텝이 지나가는지 (NCCL 버퍼) · R1 (step 41~43 gen KL < 0.002, 마스킹 0) ·
 스텝 시간이 step 21~40 과 같은지 (NCCL 채널 축소 비용). 롤아웃 노드의 vLLM 엔진에는 이 변수를 주지 않는다 (refit broadcast 는 eth0 TCP 라 채널 수와 무관).
