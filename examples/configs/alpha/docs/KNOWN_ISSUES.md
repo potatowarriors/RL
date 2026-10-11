@@ -5,7 +5,7 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
-## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11, 원인 미확인)
+## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11 ✅ FlashInfer 0.6.13 GDN prefill 커널 교착 → `gdn_prefill_backend: triton`)
 
 **발견 경위**: 사용자 보고 요청 (10:18) 으로 보다가 찾았다. step 40 은 04:16:40 에 끝났고 (ckpt/step_40 저장), step 41 은 6시간째 배치를 기다리고 있었다.
 20분 정체 감시는 울리지 않았다 — 드라이버가 0.5초마다 "Step 41/820" 머리글과 버퍼 진단을 다시 찍어 (41,834회, 로그 92만 줄) 로그 mtime 이 계속 갱신됐다.
@@ -24,11 +24,29 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 **재발 간격**: 10-08 step 7 (첫 RLVR 런) · 10-10 step 22 (`main2`, sub1 GPU 2) · 10-11 step 41 (`main2r1`, main1 GPU 5). 노드·GPU 가 매번 다르다 → 하드웨어보다 소프트웨어 (커널·엔진) 쪽.
 약 20스텝 (롤아웃 약 1,300 궤적) 마다 한 번. 820스텝 런은 이 상태로 끝까지 가지 못한다.
 
-**해석 (미확인)**: TP 1 이라 NCCL 교착은 아니다. 끝나지 않는 GPU 커널이 유력하다 — 이 모델의 vLLM 플러그인은 GDN (fla Triton 커널 `fused_sigmoid_gating_delta_rule_update` ·
-`_fused_post_conv`) 과 MoE Triton 커널을 쓴다. upstream 검색 (2026-10-11) 에서 같은 증상 (GDN 경로, GPU 100%, 진척 0) 은 fork 1Cat-vLLM #488 (TileLang GDN prefill, 16K 초과에서 정지,
-Triton/FLA 백엔드는 완료) 이 가장 가깝지만 커널이 다르다. vLLM #50880 (B300 단일 GPU, SM 100% · 처리량 0, Xid 없음) 도 증상만 같다. 확정 수정은 없다.
+**추가 관찰 (10:40~11:30, 사용자 지시 "원인 분석·해결")**:
+- GPU 5 는 SM 사용률 100% 인데 메모리 사용률 0%, 전력 120 W (유휴 GPU 0 은 126 W). 연산이 아니라 **깃발을 기다리며 스핀하는 커널**이다.
+- 부모 액터 (`vllm_policy-0-5`) 안에서 `__ray_call__` 로 자식 `/proc` 을 읽었다 (ptrace_scope=1 은 조상만 허용): 메인 스레드 `syscall=running` (사용자 공간 스핀,
+  cudaStreamSynchronize 폴링), CUDA 이벤트 스레드는 유휴. py-spy 는 부모가 띄워도 형제 프로세스라 거부됐고, ptrace 직접 호출은 분류기가 막았다.
+- EngineCore 는 spawn 으로 떠서 faulthandler 가 없다 (SigCgt 에 SIGABRT 없음) — SIGABRT 로도 Python 스택은 안 나온다.
 
-**대응**: 사용자 결정 대기 (10:35 보고). 엔진 스택을 볼 수단이 없어, 재발 시 커널을 찍으려면 재개 런에 진단 수단 (예: EngineCore 의 `faulthandler`/주기 스택 덤프, 또는 ptrace 허용) 이 필요하다.
+**원인 (upstream 확정, 우리 스택은 증상 일치)**: FlashInfer 0.6.13 (vLLM 0.25.1 고정 버전) 의 **SM90 GDN prefill JIT 커널 `FlatKernelTmaWarpSpecializedDeltaRule`** (`gdn_prefill_sm90`) 교착.
+우리 엔진은 이 커널을 쓴다 (워커 로그 "Using FlashInfer GDN prefill kernel (requested=auto, head_k_dim=128)"). decode 는 원래 Triton (`fused_recurrent_gated_delta_rule`).
+- FlashInfer #3986 (2026-07-15, H100 · vLLM 0.21/0.25.0 · Qwen3.5 GDN · chunked prefill · 고동시성): 5~20분 또는 8~9시간 뒤 같은 정지. 관리자 (guangyunh-nv) 가
+  `flat_collective_tma_warpspecialized_delta_rule.hpp` L959-961 의 옛 컴파일러 우회 코드를 원인으로 찍어 고쳤고 20시간 스트레스를 통과했다. **FlashInfer 0.6.15.post1 에 포함 — 0.6.13 에는 없다.**
+  0 길이 시퀀스가 섞인 varlen 입력 (chunked prefill) 이 트리거다.
+- FlashInfer #3329 (2026-05-14, H100 · 같은 커널): cuda-gdb 로 블록 하나가 mbarrier 대기에 멈춘 것을 확인했다. 확률적이다 (형상에 따라 0~100%).
+  임시 조치 `--gdn-prefill-backend triton` 으로 0/35 정지, prefill 커널만 1.7~1.9배 느림.
+- vLLM #50880 (2026-08-03, vLLM 0.25.1 · TP 1 · MoE · B300): SM 100% · 메모리 0% · 처리량 0 · EngineCore 메인 스레드 스핀 · Xid 없음 — 우리 관찰 목록과 같다. 미해결.
+- 우리 관찰과의 대응: 블록 하나가 mbarrier 를 기다리면 커널은 상주 (SM 100%) 하되 메모리 접근·연산이 없고 (메모리 0%, 전력 유휴), 호스트는 동기화를 스핀한다.
+  확률적 발생 (약 20스텝마다), 노드·GPU 무관. 10-10 의 "일시정지 무응답"도 같은 상태다 — 엔진 스텝이 끝나야 일시정지가 돌아온다.
+
+**대응 (2026-10-11, 사용자 지시 "정확하게 원인 분석을 하고 해결해")**: `student_rlvr1_alpha.yaml` `vllm_kwargs.gdn_prefill_backend: triton` — FlashInfer 커널을 Triton/FLA
+`chunk_gated_delta_rule` 로 바꾼다 (vLLM `arg_utils.py:730` → `additional_config`, `qwen_gdn_linear_attn._resolve_gdn_prefill_backend`). Triton 경로는 블록 간 mbarrier 파이프라인이 없다.
+비용은 prefill 커널만 1.7~1.9배 — 이 워크로드는 프롬프트 평균 240 토큰 · 생성 8K 라 롤아웃 시간에 거의 안 보인다.
+검증: 재개 첫 3스텝 gen KL < 0.002 (R1 기준) · 마스킹 0 · 엔진 로그 "Using Triton/FLA GDN prefill kernel (requested=triton)".
+FlashInfer 0.6.15+ 로 올리는 것은 vLLM 0.25.1 의 고정 버전·JIT 캐시 패키지 (`flashinfer_jit_cache 0.6.13+cu130`) 와 어긋나 venv 재구축 (E1~E3) 이 필요 — 보류.
+`main2r1` 은 중단하고 `ckpt/step_40` 에서 `main2r2` 로 재개한다. 정체 감시는 로그 mtime 이 아니라 스텝 번호 기준으로 바꿨다.
 
 ## STEM 본 런 `main2` 가 step 22 refit 에서 멈췄다 — vLLM 엔진 하나가 생성 일시정지에 답하지 않음 (2026-10-10, 10-08 7스텝 정지의 재발)
 

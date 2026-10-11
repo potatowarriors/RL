@@ -160,6 +160,10 @@ policy:
       max_num_seqs: 256                 # M2: async 경로 기본값(128)이 작다 — Ultra 값. E1a 처음 배치 때 256 에 닿음 (다음 레버 후보)
       # M2·G3: chunked prefill 을 끄면 vLLM 은 max_num_batched_tokens >= max_model_len 을 요구한다 (아니면 엔진 기동 실패, G3 2026-10-07)
       max_num_batched_tokens: 16384
+      # 2026-10-11 (KNOWN_ISSUES 10-11): H100 의 FlashInfer 0.6.13 GDN prefill JIT 커널(FlatKernelTmaWarpSpecializedDeltaRule)이 mbarrier 결함으로
+      # 드물게 교착해 엔진 하나가 GPU 100% 로 멈춘다 (10-08·10-10·10-11 세 번). FlashInfer #3986 (0.6.15.post1 에서 수정) · #3329 — 둘 다
+      # Triton/FLA prefill 로 정지 0, prefill 커널만 1.7~1.9배 느림. decode 는 원래 Triton (fused_recurrent). R1: 재개 첫 3스텝 gen KL < 0.002.
+      gdn_prefill_backend: triton
     colocated:
       enabled: false
       resources:
