@@ -29,7 +29,8 @@ NCCL 2.30.7. 이 all-reduce 는 프로세스에서 **처음 쓰는 통신자 그
   rank 2 는 80 GB 를 넘는다. PyTorch 는 자기 할당이 막히면 캐시를 비우고 다시 시도하지만 NCCL 의 `cudaMalloc` 은 그런 재시도가 없어 먼저 죽는다.
 - `main2r1` 의 step 21 재개가 살았던 것은 여유가 몇 GB 있었기 때문이고, 재개 뒤 통신자가 한 번 만들어지면 (step 22~40) 같은 all-reduce 는 문제가 없다.
   즉 **재개 직후 첫 학습 스텝만** 위험하다.
-- rank 2 가 다른 rank 보다 6 GB 더 쓴 이유는 확인하지 못했다 (`main2r1` 의 rank 2 워커 로그는 Ray 가 이미 지웠다).
+- rank 2 가 다른 rank 보다 6 GB 더 쓴 것은 우연이 아니다 — `main2r3` (학습 main1) 에서도 **rank 1·2 가 37.4 / 52.9 GB**, 나머지 6개는 33.6~33.8 / 46.5~46.9 GB 로
+  같은 모양이다. EP8·CP8 분할에서 두 rank 가 더 큰 조각을 갖는 결정적 배치로 보인다 (어느 텐서인지는 미확인). 재개마다 이 두 rank 의 여유가 가장 작다.
 
 **원인**: Pai `train.sh` 가 2026-07-15 에 같은 클러스터에서 확인한 결함과 같다 — "NCCL 기본 64 채널은 통신자마다 큰 GPU 버퍼를 할당한다. 재개 때는
 로드된 옵티마이저 상태가 지연 생성 통신자보다 먼저 메모리를 채워 첫 collective 에서 NCCL 'out of memory' 가 난다. `NCCL_MAX_NCHANNELS=16` 이 그 발자국을
@@ -40,7 +41,11 @@ NeMo-RL 레시피에는 이 변수가 없었다 (`GATES.md` G5 때 "없이도 �
 (`lm_policy.py:147` → Ray runtime_env 로 학습 워커 8개에 전달; 검사기 ERROR 0 · WARN 4, 렌더링 확인). 13:47 `ckpt/step_40` 에서 `main2r3` 기동.
 검증 계획: 학습 워커 `/proc/<pid>/environ` 에 변수가 있는지 · 재개 첫 스텝이 지나가는지 (NCCL 버퍼) · R1 (step 41~43 gen KL < 0.002, 마스킹 0) ·
 스텝 시간이 step 21~40 과 같은지 (NCCL 채널 축소 비용). 롤아웃 노드의 vLLM 엔진에는 이 변수를 주지 않는다 (refit broadcast 는 eth0 TCP 라 채널 수와 무관).
-결과는 이 항 아래에 적는다.
+
+**결과 (10-11 14:10)**: 이번 기동은 학습이 main1, 롤아웃이 sub1 에 배치됐다. 학습 워커 8개의 `/proc/<pid>/environ` 에 `NCCL_MAX_NCHANNELS=16` 확인.
+**재개 첫 학습 스텝(step 41) 통과** — 13:48 첫 머리글 … 14:09 step 42 머리글. step 41: gen KL 0.0018 · 보상 0.2705 · 스텝 320 s · 학습 2,925 tok/s/GPU
+(`main2r1` step 21 재개 때 2,564) · refit 거품 28.8 s. 같은 체크포인트·같은 rank 메모리 (rank 1·2 52.9 GB 예약) 에서 NCCL 버퍼 OOM 이 사라졌다.
+R1 (step 41~43) 과 스텝 시간 비교는 `STATUS.md` 에 이어 적는다.
 
 ## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11 ✅ FlashInfer 0.6.13 GDN prefill 커널 교착 → `gdn_prefill_backend: triton`)
 
