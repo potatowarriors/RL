@@ -5,6 +5,41 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## `main2r2` 가 재개 첫 학습 스텝(step 41)에서 죽었다 — sub1 rank 2 의 NCCL all-reduce 가 `Cuda failure 2 'out of memory'` (2026-10-11, 옵티마이저 상태 재개 + 지연 생성 NCCL 통신자 버퍼; Pai 07-15 와 같은 결함, 대응 승인 대기)
+
+**발견 경위**: `gdn_prefill_backend: triton` 으로 `ckpt/step_40` 에서 재개한 `main2r2` (12:37 기동) 가 12:52 step 41 머리글을 찍고 롤아웃 배치 1,024 개를 받아
+(보상 평균 0.2715) logprob 까지 계산한 뒤, 학습(`policy.train`) 에서 12:58 에 죽었다 (rc 1). FlashInfer 교착과는 무관한 학습 노드 문제다.
+
+**오류**: `MegatronPolicyWorker[rank=2]` (sub1, pid 2942071) 만 `torch.distributed.DistBackendError: NCCL error … unhandled cuda error … Cuda failure 2 'out of memory'`.
+위치는 `finalize_model_grads → _update_router_expert_bias → get_updated_expert_bias → all_reduce(tokens_per_expert, group=tp_dp_cp_group)`
+(`megatron/core/transformer/moe/moe_utils.py:1223`) — backward 가 끝난 직후, 옵티마이저 step 전이다. 다른 7 rank 는 정상이었다.
+NCCL 2.30.7. 이 all-reduce 는 프로세스에서 **처음 쓰는 통신자 그룹**이라 NCCL 이 이 순간 채널 버퍼를 `cudaMalloc` 한다.
+
+**관찰 (워커 `[GPU_DIAG] after_model_setup`, 체크포인트 로드 뒤 · 학습 전)**:
+
+| 런 | 시작 방식 | rank 0 allocated / reserved | 다른 rank |
+|---|---|---|---|
+| `main2` (10-10) | iter2862 새로 시작 | 27.6 GB / 30.9 GB (rank 1) | rank 4 26.4 / 29.7 |
+| `main2r1` (10-11 01:29) | `step_20` 재개 | 33.6 / 46.5 | rank 4·5 33.7~33.8 / 46.7~46.9 |
+| `main2r2` (10-11 12:37) | `step_40` 재개 | 33.6 / 46.5 | **rank 2 37.4 / 52.9** (NVML used 55.5 GB, free 26.0 GB) |
+
+- 새로 시작하면 바닥이 27 GB (R4 의 "고정 바닥 27.0 GB" 와 같다). 재개하면 Muon momentum 이 체크포인트에서 바로 올라와 allocated +6 GB, reserved +16 GB 다.
+  새 런은 momentum 을 첫 옵티마이저 step 에서 지연 할당하므로, 첫 all-reduce 시점에는 아직 없다.
+- R4 실측 (128K/CP8, expandable_segments) 의 peak reserved 59.5 GB 는 바닥 27 GB 위에 32.5 GB 를 더 쓴다. 재개 바닥 46.5~52.9 GB 에 이를 더하면 79~85 GB —
+  rank 2 는 80 GB 를 넘는다. PyTorch 는 자기 할당이 막히면 캐시를 비우고 다시 시도하지만 NCCL 의 `cudaMalloc` 은 그런 재시도가 없어 먼저 죽는다.
+- `main2r1` 의 step 21 재개가 살았던 것은 여유가 몇 GB 있었기 때문이고, 재개 뒤 통신자가 한 번 만들어지면 (step 22~40) 같은 all-reduce 는 문제가 없다.
+  즉 **재개 직후 첫 학습 스텝만** 위험하다.
+- rank 2 가 다른 rank 보다 6 GB 더 쓴 이유는 확인하지 못했다 (`main2r1` 의 rank 2 워커 로그는 Ray 가 이미 지웠다).
+
+**원인**: Pai `train.sh` 가 2026-07-15 에 같은 클러스터에서 확인한 결함과 같다 — "NCCL 기본 64 채널은 통신자마다 큰 GPU 버퍼를 할당한다. 재개 때는
+로드된 옵티마이저 상태가 지연 생성 통신자보다 먼저 메모리를 채워 첫 collective 에서 NCCL 'out of memory' 가 난다. `NCCL_MAX_NCHANNELS=16` 이 그 발자국을
+1/4 로 줄이고 스텝 시간 비용은 없다 (60.7 s vs 61.1 s, NVLink 포화 유지). 새 런은 영향 없다" (Pai `examples/alpha/train.sh:85-92`, Pai `CLAUDE.md` 07-15 행).
+NeMo-RL 레시피에는 이 변수가 없었다 (`GATES.md` G5 때 "없이도 재개 OOM 은 없었다" 고 적었는데, 그때는 재개 뒤 첫 스텝의 여유가 있었던 경우다).
+
+**대응 (제안, 사용자 승인 대기)**: `student_rlvr1_alpha.yaml` `policy.megatron_cfg.env_vars` 에 `NCCL_MAX_NCHANNELS: "16"` 추가 (`lm_policy.py:147` → Ray runtime_env 로
+학습 워커 8개에 전달). 그 뒤 `ckpt/step_40` 에서 `main2r3` 재개. 검증: 재개 첫 스텝이 지나가는지 (NCCL 버퍼) · R1 (step 41~43 gen KL < 0.002, 마스킹 0) ·
+스텝 시간이 step 21~40 과 같은지 (NCCL 채널 축소 비용). 롤아웃 노드의 vLLM 엔진에는 이 변수를 주지 않는다 (refit broadcast 는 eth0 TCP 라 채널 수와 무관).
+
 ## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11 ✅ FlashInfer 0.6.13 GDN prefill 커널 교착 → `gdn_prefill_backend: triton`)
 
 **발견 경위**: 사용자 보고 요청 (10:18) 으로 보다가 찾았다. step 40 은 04:16:40 에 끝났고 (ckpt/step_40 저장), step 41 은 6시간째 배치를 기다리고 있었다.
