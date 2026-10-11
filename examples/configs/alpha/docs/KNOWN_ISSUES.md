@@ -5,6 +5,31 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11, 원인 미확인)
+
+**발견 경위**: 사용자 보고 요청 (10:18) 으로 보다가 찾았다. step 40 은 04:16:40 에 끝났고 (ckpt/step_40 저장), step 41 은 6시간째 배치를 기다리고 있었다.
+20분 정체 감시는 울리지 않았다 — 드라이버가 0.5초마다 "Step 41/820" 머리글과 버퍼 진단을 다시 찍어 (41,834회, 로그 92만 줄) 로그 mtime 이 계속 갱신됐다.
+감시는 로그 mtime 이 아니라 스텝 번호 진척을 봐야 한다.
+
+**관찰** (읽기만으로, Ray 작업으로 main1 컨테이너 안을 봤다):
+- replay buffer 는 step 41 시작 약 3분 뒤 (04:20 무렵) 124 그룹에서 멈췄다. target 40 은 63/64, target 41 은 56/64, target 42 는 5/64. 이후 완료된 궤적 0.
+- 이번 런은 롤아웃이 main1 이다. main1 GPU 5 만 사용률 100%, GPU 0~4 는 0% (policy 엔진 6개 = TP 1 × 6, GPU 6·7 은 judge TP 2).
+- 엔진 6개 중 `VllmAsyncGenerationWorker` pid 1254251 의 자식 `VLLM::EngineCore` (pid 1255799) 만 상태 R, 메인 스레드가 5초에 499 틱 (코어 1개 100%), 자발적 문맥 전환 0.
+  다른 5개 EngineCore 는 futex 대기. 생애 평균 CPU 도 88.8% 대 20% 로 혼자 높다. GPU 가 100% 인데 커널이 끝나지 않아 CUDA 동기화를 스핀 대기하는 모양이다.
+- 오류·경고 로그 없음. vLLM 워커 로그는 모두 기동 직후 (01:3x) 가 마지막. `/proc/<pid>/{stack,syscall}` 은 권한 거부, py-spy 도 ptrace 거부 — 커널 이름은 못 봤다.
+- Ray RUNNING: `NemoGym.run_rollouts` 3개 (03:56·04:02·04:08 시작, 롤아웃 배치 41·42·43), 수집기는 generation_limit_pause 로 새 프롬프트를 보내지 않는다 (버퍼 124/128 포화).
+- 이번은 refit 일시정지가 아니라 생성 중에 멈췄다 (step 40 refit 28.7 s 정상 완료, version 40 궤적 5개 완료 뒤 정지). 10-08·10-10 은 일시정지에서 드러났지만 같은 상태다 —
+  엔진 스텝이 끝나지 않으면 일시정지도 돌아오지 않는다.
+
+**재발 간격**: 10-08 step 7 (첫 RLVR 런) · 10-10 step 22 (`main2`, sub1 GPU 2) · 10-11 step 41 (`main2r1`, main1 GPU 5). 노드·GPU 가 매번 다르다 → 하드웨어보다 소프트웨어 (커널·엔진) 쪽.
+약 20스텝 (롤아웃 약 1,300 궤적) 마다 한 번. 820스텝 런은 이 상태로 끝까지 가지 못한다.
+
+**해석 (미확인)**: TP 1 이라 NCCL 교착은 아니다. 끝나지 않는 GPU 커널이 유력하다 — 이 모델의 vLLM 플러그인은 GDN (fla Triton 커널 `fused_sigmoid_gating_delta_rule_update` ·
+`_fused_post_conv`) 과 MoE Triton 커널을 쓴다. upstream 검색 (2026-10-11) 에서 같은 증상 (GDN 경로, GPU 100%, 진척 0) 은 fork 1Cat-vLLM #488 (TileLang GDN prefill, 16K 초과에서 정지,
+Triton/FLA 백엔드는 완료) 이 가장 가깝지만 커널이 다르다. vLLM #50880 (B300 단일 GPU, SM 100% · 처리량 0, Xid 없음) 도 증상만 같다. 확정 수정은 없다.
+
+**대응**: 사용자 결정 대기 (10:35 보고). 엔진 스택을 볼 수단이 없어, 재발 시 커널을 찍으려면 재개 런에 진단 수단 (예: EngineCore 의 `faulthandler`/주기 스택 덤프, 또는 ptrace 허용) 이 필요하다.
+
 ## STEM 본 런 `main2` 가 step 22 refit 에서 멈췄다 — vLLM 엔진 하나가 생성 일시정지에 답하지 않음 (2026-10-10, 10-08 7스텝 정지의 재발)
 
 **발견 경위**: 정체 감시(30분)가 23:25 에 걸렸다. 드라이버 로그는 22:55:42 이후 한 줄도 없었다. 오류·경고도 없었다.
