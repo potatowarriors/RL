@@ -115,6 +115,10 @@ policy:
       async_save: false
     env_vars:
       PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"   # D6 — 128K/CP8 Triton OOM 회피 (R4). 2노드 분리 전용: colocated(IPC refit)에서는 pidfd_getfd EPERM (KNOWN_ISSUES 2026-10-07) → env_vars=null
+      # 2026-10-11 (KNOWN_ISSUES 10-11 둘째 항, 사용자 승인): 옵티마이저 상태를 안고 재개하면 바닥이 46~53 GB 라, 재개 첫 학습 스텝의 첫 all-reduce 에서
+      # 지연 생성되는 NCCL 통신자(기본 64채널)의 버퍼 cudaMalloc 이 'out of memory' 로 죽는다 (main2r2 step 41, rank 2). Pai train.sh 가 07-15 같은 클러스터에서
+      # 확인한 결함 — 16채널이면 버퍼 1/4, 스텝 시간 비용 없음, 새 런 영향 없음. 학습 워커에만 전달된다 (vLLM 엔진은 vllm_kwargs.env_vars 별도).
+      NCCL_MAX_NCHANNELS: "16"
     optimizer:
       lr: 1.0e-6                        # D5 (2026-10-07 결정)
       min_lr: 1.0e-6
