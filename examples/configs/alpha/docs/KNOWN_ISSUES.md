@@ -5,7 +5,7 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
-## `main2r2` 가 재개 첫 학습 스텝(step 41)에서 죽었다 — sub1 rank 2 의 NCCL all-reduce 가 `Cuda failure 2 'out of memory'` (2026-10-11, 옵티마이저 상태 재개 + 지연 생성 NCCL 통신자 버퍼; Pai 07-15 와 같은 결함, 대응 승인 대기)
+## `main2r2` 가 재개 첫 학습 스텝(step 41)에서 죽었다 — sub1 rank 2 의 NCCL all-reduce 가 `Cuda failure 2 'out of memory'` (2026-10-11 ✅ 옵티마이저 상태 재개 + 지연 생성 NCCL 통신자 버퍼; Pai 07-15 와 같은 결함 → `NCCL_MAX_NCHANNELS=16`)
 
 **발견 경위**: `gdn_prefill_backend: triton` 으로 `ckpt/step_40` 에서 재개한 `main2r2` (12:37 기동) 가 12:52 step 41 머리글을 찍고 롤아웃 배치 1,024 개를 받아
 (보상 평균 0.2715) logprob 까지 계산한 뒤, 학습(`policy.train`) 에서 12:58 에 죽었다 (rc 1). FlashInfer 교착과는 무관한 학습 노드 문제다.
@@ -36,9 +36,11 @@ NCCL 2.30.7. 이 all-reduce 는 프로세스에서 **처음 쓰는 통신자 그
 1/4 로 줄이고 스텝 시간 비용은 없다 (60.7 s vs 61.1 s, NVLink 포화 유지). 새 런은 영향 없다" (Pai `examples/alpha/train.sh:85-92`, Pai `CLAUDE.md` 07-15 행).
 NeMo-RL 레시피에는 이 변수가 없었다 (`GATES.md` G5 때 "없이도 재개 OOM 은 없었다" 고 적었는데, 그때는 재개 뒤 첫 스텝의 여유가 있었던 경우다).
 
-**대응 (제안, 사용자 승인 대기)**: `student_rlvr1_alpha.yaml` `policy.megatron_cfg.env_vars` 에 `NCCL_MAX_NCHANNELS: "16"` 추가 (`lm_policy.py:147` → Ray runtime_env 로
-학습 워커 8개에 전달). 그 뒤 `ckpt/step_40` 에서 `main2r3` 재개. 검증: 재개 첫 스텝이 지나가는지 (NCCL 버퍼) · R1 (step 41~43 gen KL < 0.002, 마스킹 0) ·
+**대응 (사용자 승인 13:45 "승인할게 바로 실행해", 커밋 `935270af7`)**: `student_rlvr1_alpha.yaml` `policy.megatron_cfg.env_vars` 에 `NCCL_MAX_NCHANNELS: "16"` 추가
+(`lm_policy.py:147` → Ray runtime_env 로 학습 워커 8개에 전달; 검사기 ERROR 0 · WARN 4, 렌더링 확인). 13:47 `ckpt/step_40` 에서 `main2r3` 기동.
+검증 계획: 학습 워커 `/proc/<pid>/environ` 에 변수가 있는지 · 재개 첫 스텝이 지나가는지 (NCCL 버퍼) · R1 (step 41~43 gen KL < 0.002, 마스킹 0) ·
 스텝 시간이 step 21~40 과 같은지 (NCCL 채널 축소 비용). 롤아웃 노드의 vLLM 엔진에는 이 변수를 주지 않는다 (refit broadcast 는 eth0 TCP 라 채널 수와 무관).
+결과는 이 항 아래에 적는다.
 
 ## `main2r1` 이 step 41 배치 대기에서 멈췄다 — vLLM 엔진 하나의 EngineCore 가 GPU 100% 로 스핀, 3번째 재발 (2026-10-11 ✅ FlashInfer 0.6.13 GDN prefill 커널 교착 → `gdn_prefill_backend: triton`)
 
