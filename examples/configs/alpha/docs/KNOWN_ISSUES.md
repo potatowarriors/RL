@@ -5,6 +5,22 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## `main2r3` 가 step 647 뒤 약 1시간 멈췼다 — 낙오 궤적 1개가 엔진 1장에서 느리게 생성되는 동안 GPU 16장이 대기 (2026-10-13 🔶 저절로 풀림, 기전 미확정)
+
+- **증상**: step 647 완료(13:30:25) 뒤 "Step 648/820" 머리글만 반복. 14:2x 에 저절로 풀려 step 648 학습이 이어졌다 (사용자가 GPU 재가동을 먼저 봄). 재시작하지 않았다.
+- **멈춘 기전 (확정, `nemo_rl/algorithms/async_utils/replay_buffer.py`)**: 리플레이 버퍼는 "현재 스텝용(target weight)으로 지정된 그룹 64개가 전부" 있어야 샘플링한다.
+  647 용은 63/64, 648·649 용은 64/64 로 버퍼 191/192 였고, 코드는 다른 스텝용으로 채우는 것을 금지하며 시간 제한도 없다 ("STALLING: Need 64 … only 63 are ready").
+  버퍼(192 = 3 스텝분)가 차서 새 프롬프트도 나가지 않아 학습 8장·롤아웃 6장·judge 2장이 모두 0% (전력 112~126 W) 였다.
+- **낙오자 (증거)**: sub1 엔진 `vllm_policy-0-4` 만 생성 토큰 누계가 늘었다 (45초 +430 = 9.6 tok/s, 60초 +1,311 = 21.8 tok/s), 나머지 5개는 0.
+  GPU 4 는 약 39초 주기로 4초만 690 W 로 100% 돌고 나머지는 유휴 — 단일 시퀀스의 정상 디코드(40~65 tok/s 연속)와 다르다. 4초 버스트는 긴 문맥을 매 주기
+  다시 prefill 하는 시간과 비슷하다. 후보는 (a) 멀티턴 루프가 매 턴 전체 문맥을 다시 보냄 (RL 엔진은 prefix caching 끔, D2) — 그러나 남은 행은 reasoning_gym
+  (도구 없음) 이었고 sandbox 터널·reasoning_gym·judge 서버는 유휴였다, (b) vLLM 이 요청을 반복 선점·재계산 — 그러나 KV 는 거의 비어 있었다.
+  확정 수단이 없었다: 엔진 서버는 `/v1/chat/completions`·`/tokenize` 만 열어 선점 지표를 못 읽고, `get_vllm_logger_metrics` 는 4개 키뿐, py-spy 는 컨테이너 ptrace 거부.
+- **FlashInfer 교착(10-11)과 구별**: 그때는 엔진 1개가 SM 100%·전력 유휴로 영원히 돌았고, 이번은 느리게나마 토큰이 늘었다. 10-08 "in-flight 진척 0" 과도 다르다 (진척 0 아님).
+- **빈도**: 647 스텝 × 1,024 ≈ 66만 샘플 중 1회. 턴당 32K 상한에 닿는 샘플은 매 스텝 있지만 (max_gen_tokens_per_turn max=32768) 정상 속도면 10~13분이라 스텝 안에 묻힌다.
+- **대응 (사용자 판단 대기)**: ① 리플레이 버퍼에 대기 상한을 두고 넘으면 다른 스텝용 유효 궤적으로 채우거나 낙오 그룹을 버림 (본체 수정, 별도 커밋) ② 턴당 상한 축소
+  ③ 정체 감시에 "스텝 무진척 + 엔진 1개만 토큰 증가" 신호 추가. 진단 명령은 `scratchpad` 의 `engine4_rate.py`·`gpu4_burst_probe.py` 방식 (액터 `get_vllm_logger_metrics` 의 `generation_tokens` 차분).
+
 ## `main2r2` 가 재개 첫 학습 스텝(step 41)에서 죽었다 — sub1 rank 2 의 NCCL all-reduce 가 `Cuda failure 2 'out of memory'` (2026-10-11 ✅ 옵티마이저 상태 재개 + 지연 생성 NCCL 통신자 버퍼; Pai 07-15 와 같은 결함 → `NCCL_MAX_NCHANNELS=16`)
 
 **발견 경위**: `gdn_prefill_backend: triton` 으로 `ckpt/step_40` 에서 재개한 `main2r2` (12:37 기동) 가 12:52 step 41 머리글을 찍고 롤아웃 배치 1,024 개를 받아

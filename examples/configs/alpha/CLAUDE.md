@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 10-13 | async 런이 오류 없이 약 1시간 멈춤 — GPU 16장 전부 0%, 버퍼 191/192, 엔진 1개만 39초 주기 4초 버스트로 토큰이 느리게 늘다가 저절로 풀림 (`main2r3` step 647) | 리플레이 버퍼가 "현재 스텝용 그룹 64개 전부" 를 시간 제한 없이 요구해 낙오 궤적 1개가 전체를 세움 (`replay_buffer.py`). 낙오자가 느린 기전은 미확정. 판별은 엔진별 `generation_tokens` 차분 — 하나만 늘면 낙오, 전부 0 이면 교착. 대응 선택지는 `docs/KNOWN_ISSUES.md` 10-13 |
 | 10-11 | 체크포인트 재개 뒤 **첫 학습 스텝**에서 학습 rank 하나가 NCCL `Cuda failure 2 'out of memory'` 로 죽음 (`main2r2` step 41, rank 2) — 새 런·이후 스텝은 무사 | 재개는 Muon 상태가 바로 올라와 바닥이 46~53 GB (새 런 30 GB) → 첫 all-reduce 때 지연 생성되는 NCCL 통신자(64채널) 버퍼 `cudaMalloc` 실패. Pai 07-15 와 같은 결함 → 레시피 `policy.megatron_cfg.env_vars.NCCL_MAX_NCHANNELS: "16"` (`f1321fe64`). 재개 런은 첫 스텝 통과를 확인한다 |
 | 10-11 | async 런이 오류 없이 멈춤 — vLLM 엔진 하나만 GPU 100% (메모리 0%, 전력 유휴), 나머지 0%, 버퍼 정지 (10-08 · 10-10 · 10-11 세 번) | FlashInfer 0.6.13 (vLLM 0.25.1 고정) 의 SM90 GDN prefill JIT 커널 mbarrier 교착 (FlashInfer #3986 · #3329, 0.6.15.post1 수정) → 레시피 `vllm_kwargs.gdn_prefill_backend: triton`. 정체 감시는 로그 mtime 이 아니라 스텝 번호로 (드라이버가 대기 중 머리글을 반복 출력) |
 | 10-10 | rdkit 예/아니오 행(`bool` · `presence`)의 맞는 답 `((No))` 가 0 점 | 정답은 1/0 인데 형식 예시가 정수라 모델이 단어로 답함 → 플러그인이 그 행만 yes/no 도 읽는다. 새 채점기는 실제 롤아웃 출력으로 재채점해 본다 (단위 테스트로는 안 드러났다) |

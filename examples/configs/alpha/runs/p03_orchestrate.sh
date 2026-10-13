@@ -2,13 +2,16 @@
 # P0-3 Code·Math alpha 사전 측정 오케스트레이터 (RL_DATA.md §5.5·§5.6, 사용자 승인 2026-10-13).
 # 순서: main2r3 종료(rc 0) 대기 → 최종 step_820 HF 반출 (결정 28) → 남은 Gym 서버(judge 포함) 정리 → 양 노드 GPU 비움 확인
 #   → fleet 16 기동 (main1 Pai serve_fleet.sh 8 + sub1 $NRL_ROOT/p0_measure/ray_serve_alpha.py 8, 10-08 과 같은 TOOLS=1·qwen3_xml·nemotron_v3)
-#   → 수학 12,000 × 4회 @24K (alpha_vllm_model_p0.yaml) → 코드 12,000 × 4회 @48K (alpha_vllm_model_p0_48k.yaml) → fleet 정지.
+#   → 수학 12,000 × 4회 @24K → 코드 12,000 × 4회 @24K (둘 다 alpha_vllm_model_p0.yaml) → fleet 정지.
 # 측정 본체는 10-08 과 같은 $NRL_ROOT/p0_measure/run_measure.sh (gym env start → gym eval run --no-serve → gym eval profile).
-# max_len 57344: 코드 측정 목록의 렌더 프롬프트 최대 4,448 토큰 + 생성 49,152 (10-08 의 53,248 은 4,096 여유라 최장 행이 넘친다).
+# 코드도 24K 로 잰다 (사용자 2026-10-13: 학습 상한 128K 인 alpha 는 가능한 짧은 생성으로 맞히게 학습해야 하므로, 24K 에서의 처리 능력을
+# 관측해 상한을 정한다; 24K 로 학습 가능하면 24K 부터 시작). 48K 참고치는 10-08 code48k 스모크 (끝냄 16~31% · 정답 6%).
+# max_len 32768: 렌더 프롬프트 최대 코드 4,448 · 수학 1,484 토큰 + 생성 24,576.
 # 실패하면 그 자리에서 멈추고 ABORT 를 남긴다 — 재시도·재기동은 하지 않는다 (사용자 판단).
-# 실행: setsid nohup bash examples/configs/alpha/runs/p03_orchestrate.sh > $NRL_ROOT/p0_measure/p03_orchestrate.out 2>&1 &
-#       (세션과 무관하게 돈다; 진행은 $NRL_ROOT/p0_measure/p03_orchestrate.log)
+# 실행: setsid nohup bash examples/configs/alpha/runs/p03_orchestrate.sh [case=main2r3] > $NRL_ROOT/p0_measure/p03_orchestrate.out 2>&1 &
+#       (세션과 무관하게 돈다; 진행은 $NRL_ROOT/p0_measure/p03_orchestrate.log). case 는 종료를 기다릴 STEM 런의 runs.log 태그.
 set -u
+CASE=${1:-main2r3}
 NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}
 P=$NRL/p0_measure
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd)
@@ -18,17 +21,17 @@ CK=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/output
 POOL=/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/teacher_pool
 O=$REPO/results/alpha/teacher_stem
 LOG=$P/p03_orchestrate.log
-MAXLEN=57344
+MAXLEN=32768
 HOSTS="10.0.37.4 10.0.37.2"
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
 abort() { log "ABORT: $*"; exit 1; }
 
-log "armed: waiting for main2r3 exit (runs.log case=main2r3 rc=)"
-until grep -q 'case=main2r3 rc=' "$O/runs.log"; do sleep 120; done
-rc=$(grep 'case=main2r3 rc=' "$O/runs.log" | tail -1 | grep -oE 'rc=[0-9]+')
-log "main2r3 exited: $rc"
-[ "$rc" = "rc=0" ] || abort "main2r3 did not finish cleanly ($rc) — P0-3 not launched"
+log "armed: waiting for $CASE exit (runs.log case=$CASE rc=)"
+until grep -q "case=$CASE rc=" "$O/runs.log"; do sleep 120; done
+rc=$(grep "case=$CASE rc=" "$O/runs.log" | tail -1 | grep -oE 'rc=[0-9]+')
+log "$CASE exited: $rc"
+[ "$rc" = "rc=0" ] || abort "$CASE did not finish cleanly ($rc) — P0-3 not launched"
 
 # 1) 최종 step_820 HF 반출 (결정 28). 변환은 CPU(gloo). 이미 있으면 건너뛴다.
 sleep 30
@@ -77,8 +80,8 @@ log "servers ready: $ready/16"
 log "P0-3 math: 12,000 × 4 @24K"
 MODEL_CFG=$P/alpha_vllm_model_p0.yaml bash "$P/run_measure.sh" p03_math "$POOL/math_measure.jsonl" 4 1024 >> "$LOG" 2>&1
 log "math done: $(tail -2 "$P/p03_math/run.log" | tr '\n' ' ')"
-log "P0-3 code: 12,000 × 4 @48K"
-MODEL_CFG=$P/alpha_vllm_model_p0_48k.yaml bash "$P/run_measure.sh" p03_code "$POOL/code_measure.jsonl" 4 1024 >> "$LOG" 2>&1
+log "P0-3 code: 12,000 × 4 @24K"
+MODEL_CFG=$P/alpha_vllm_model_p0.yaml bash "$P/run_measure.sh" p03_code "$POOL/code_measure.jsonl" 4 1024 >> "$LOG" 2>&1
 log "code done: $(tail -2 "$P/p03_code/run.log" | tr '\n' ' ')"
 
 # 5) fleet 정지 (Pai stop_fleet.sh: SIGTERM → 메모리 회수 확인; sub1 은 Ray 액터 stop)
