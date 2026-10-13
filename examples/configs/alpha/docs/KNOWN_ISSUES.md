@@ -5,6 +5,15 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 프롬프트 수를 64 → 256 으로 바꿔 `ckpt/step_710` 을 재개하자 두 번 즉시 종료됐다 — 스케줄러 샘플 수 assert · 에폭 클램프 (2026-10-13 ✅ 오버라이드 2개로 해결, `main2r6`)
+
+- **배경**: 결정 29 (`RL_PLAN.md`) 로 `main2r3` 를 step 717 에서 멈추고 `grpo.num_prompts_per_step=256 grpo.max_num_steps=735 checkpointing.save_period=5` 로 재개했다. 레시피는 GBS 를 프롬프트 수 × 16 으로 묶어 두어 GBS 도 1,024 → 4,096 이 된다.
+- **1차 `main2r4` (19:11, rc 1)**: 학습 워커 초기화의 `load_checkpoint` 에서 `OptimizerParamScheduler: class input value 40960 and checkpoint value 10240 for warmup iterations do not match`. Megatron-Bridge 는 `lr_warmup_iters: 10` 을 iters × GBS = 샘플 수로 바꿔 체크포인트에 저장하고, mcore 스케줄러는 `use_checkpoint_opt_param_scheduler`·`override_opt_param_scheduler` 가 둘 다 꺼져 있으면 값을 대조한다 (G7 의 wd 반복 수 불일치와 같은 기전, 이번엔 GBS 쪽). 대응: `++policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler=true` — 체크포인트 값(warmup 10,240 샘플 · decay 102.4M 샘플)을 그대로 쓴다. 누적 샘플 727,040 이 warmup 을 지났고 lr = min_lr = 5e-6 상수라 학습률은 바뀌지 않는다.
+- **2차 `main2r5` (19:21, rc 0)**: 기동 직후 "Async GRPO training is already complete: current step 710 reached the effective limit of 205 steps". `async_grpo_train` 이 `max_num_steps = min(max_num_steps, max_num_epochs × len(dataloader))` 로 자르는데 (`grpo.py:4349~4362`), `len(dataloader)` 가 52,500 // 256 = 205 로 줄어 710 보다 작아졌다. 대응: `grpo.max_num_epochs=4` (4 × 205 = 820 ≥ 735). 실제 데이터 소비는 45,440 + 6,400 = 51,840 < 52,500 이라 1 에폭 안이고, `StatefulDataLoader` 상태는 샘플 단위(`samples_yielded`)라 위치가 이어진다 — gap fill 첫 task index 45,918 로 확인.
+- **아찔했던 점**: rc 0 이라 P0-3 오케스트레이터가 정상 종료로 읽고 fleet 기동으로 넘어가기 직전이었다 (폴링 2분 주기, 19:28:23 수동 중단, fleet 미기동). 오케스트레이터에 "최종 ckpt `step_<final>` 이 없으면 ABORT" 가드를 넣었다.
+- **3차 `main2r6` (19:29, commit `e6992924e`)**: 두 오버라이드를 더해 기동. 리플레이 버퍼 복원 221 그룹(64-배치 런이 711~713 용으로 모은 것) → 첫 256-step 용 192 그룹 gap fill. 결과는 `STATUS.md`.
+- **교훈**: 프롬프트 수·GBS 를 바꿔 재개할 때는 (1) 스케줄러 플래그 (2) 에폭 클램프 (3) 데이터로더 위치 (4) 후속 자동화의 "정상 종료" 판정 네 가지를 먼저 본다. 함정 표 10-13.
+
 ## `main2r3` 가 step 647 뒤 약 1시간 멈췼다 — 낙오 궤적 1개가 엔진 1장에서 느리게 생성되는 동안 GPU 16장이 대기 (2026-10-13 🔶 저절로 풀림, 기전 미확정)
 
 - **증상**: step 647 완료(13:30:25) 뒤 "Step 648/820" 머리글만 반복. 14:2x 에 저절로 풀려 step 648 학습이 이어졌다 (사용자가 GPU 재가동을 먼저 봄). 재시작하지 않았다.

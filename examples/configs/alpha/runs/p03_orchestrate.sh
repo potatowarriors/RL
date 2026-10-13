@@ -35,9 +35,11 @@ until grep -q "case=$CASE rc=" "$O/runs.log"; do sleep 120; done
 rc=$(grep "case=$CASE rc=" "$O/runs.log" | tail -1 | grep -oE 'rc=[0-9]+')
 log "$CASE exited: $rc"
 [ "$rc" = "rc=0" ] || abort "$CASE did not finish cleanly ($rc) — P0-3 not launched"
+# rc 0 이어도 최종 체크포인트가 없으면 진짜 종료가 아니다 (2026-10-13 main2r5: 에폭 클램프로 기동 직후 rc 0 — KNOWN_ISSUES 10-13).
+sleep 30
+[ -d "$O/ckpt/step_$FINAL" ] || abort "$CASE exited rc=0 but ckpt/step_$FINAL is missing — not a real finish, P0-3 not launched"
 
 # 1) 최종 step_$FINAL HF 반출 (결정 28). 변환은 CPU(gloo). 이미 있으면 건너뛴다.
-sleep 30
 if [ -d "$O/ckpt/step_$FINAL" ] && [ ! -e "$O/hf/$HF_FINAL" ]; then
     log "exporting step_$FINAL → hf/$HF_FINAL"
     bash "$REPO/examples/configs/alpha/tools/export_rl_hf.sh" "$O/ckpt/step_$FINAL" "$O/hf/$HF_FINAL" > "$O/hf/$HF_FINAL.log" 2>&1
