@@ -8,10 +8,13 @@
 # 관측해 상한을 정한다; 24K 로 학습 가능하면 24K 부터 시작). 48K 참고치는 10-08 code48k 스모크 (끝냄 16~31% · 정답 6%).
 # max_len 32768: 렌더 프롬프트 최대 코드 4,448 · 수학 1,484 토큰 + 생성 24,576.
 # 실패하면 그 자리에서 멈추고 ABORT 를 남긴다 — 재시도·재기동은 하지 않는다 (사용자 판단).
-# 실행: setsid nohup bash examples/configs/alpha/runs/p03_orchestrate.sh [case=main2r3] > $NRL_ROOT/p0_measure/p03_orchestrate.out 2>&1 &
-#       (세션과 무관하게 돈다; 진행은 $NRL_ROOT/p0_measure/p03_orchestrate.log). case 는 종료를 기다릴 STEM 런의 runs.log 태그.
+# 실행: setsid nohup bash examples/configs/alpha/runs/p03_orchestrate.sh [case=main2r3] [final_step=820] > $NRL_ROOT/p0_measure/p03_orchestrate.out 2>&1 &
+#       (세션과 무관하게 돈다; 진행은 $NRL_ROOT/p0_measure/p03_orchestrate.log). case 는 종료를 기다릴 STEM 런의 runs.log 태그,
+#       final_step 은 반출할 마지막 체크포인트 번호 (결정 29: main2r4 는 735).
 set -u
 CASE=${1:-main2r3}
+FINAL=${2:-820}
+HF_FINAL=$(printf 'hf_step_%05d' "$FINAL")
 NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}
 P=$NRL/p0_measure
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd)
@@ -27,20 +30,20 @@ log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
 abort() { log "ABORT: $*"; exit 1; }
 
-log "armed: waiting for $CASE exit (runs.log case=$CASE rc=)"
+log "armed: waiting for $CASE exit (runs.log case=$CASE rc=); final ckpt step_$FINAL → hf/$HF_FINAL"
 until grep -q "case=$CASE rc=" "$O/runs.log"; do sleep 120; done
 rc=$(grep "case=$CASE rc=" "$O/runs.log" | tail -1 | grep -oE 'rc=[0-9]+')
 log "$CASE exited: $rc"
 [ "$rc" = "rc=0" ] || abort "$CASE did not finish cleanly ($rc) — P0-3 not launched"
 
-# 1) 최종 step_820 HF 반출 (결정 28). 변환은 CPU(gloo). 이미 있으면 건너뛴다.
+# 1) 최종 step_$FINAL HF 반출 (결정 28). 변환은 CPU(gloo). 이미 있으면 건너뛴다.
 sleep 30
-if [ -d "$O/ckpt/step_820" ] && [ ! -e "$O/hf/hf_step_00820" ]; then
-    log "exporting step_820 → hf/hf_step_00820"
-    bash "$REPO/examples/configs/alpha/tools/export_rl_hf.sh" "$O/ckpt/step_820" "$O/hf/hf_step_00820" > "$O/hf/hf_step_00820.log" 2>&1
-    log "export rc=$? $(grep -a 'tensors=' "$O/hf/hf_step_00820.log" | tail -1)"
+if [ -d "$O/ckpt/step_$FINAL" ] && [ ! -e "$O/hf/$HF_FINAL" ]; then
+    log "exporting step_$FINAL → hf/$HF_FINAL"
+    bash "$REPO/examples/configs/alpha/tools/export_rl_hf.sh" "$O/ckpt/step_$FINAL" "$O/hf/$HF_FINAL" > "$O/hf/$HF_FINAL.log" 2>&1
+    log "export rc=$? $(grep -a 'tensors=' "$O/hf/$HF_FINAL.log" | tail -1)"
 else
-    log "export skipped: step_820=$([ -d "$O/ckpt/step_820" ] && echo yes || echo no) existing=$([ -e "$O/hf/hf_step_00820" ] && echo yes || echo no)"
+    log "export skipped: step_$FINAL=$([ -d "$O/ckpt/step_$FINAL" ] && echo yes || echo no) existing=$([ -e "$O/hf/$HF_FINAL" ] && echo yes || echo no)"
 fi
 
 # 2) 남은 런 액터 0 확인 → Gym 잔여(judge 포함) 정리 → GPU 비움 (launch.sh 와 같은 순서)
