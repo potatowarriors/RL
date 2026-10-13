@@ -56,6 +56,8 @@ Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는
 | 27 | **J1 보충 j1c 후속 5건**: (1) rdkit 채점기가 예/아니오 행(`bool` · `presence`)에서 yes/no 도 읽는다 — 채택 (`6e1e88827`) (2) judge 재판정 끔 — 결정 25 의 (2) 철회, `teacher_stem_alpha.yaml` `check_full_generation_on_fail: false` (3) STEM 본 런 `main` (10-10 17:32 기동, 재판정 켬 상태) 유지 (4) 실행기 순서 변경 채택 — 런 액터 0 이면 Gym 서버 정리 뒤 GPU 검사 (`bf379bc96`) (5) j1c 를 J1 판정 근거로 인정 | (1) 맞는 답 `((No))` 가 0 점이었다 — j1c 출력 재채점 정답 4 → 28 /48, 정수 행 그대로. (2) 0.5 보상 39 중 잘린 추출 복구 13, 26 은 같은 답의 판정 뒤집힘 (일부 오답), judge 표본의 3.6%. (4) judge vLLM 이 런 뒤 GPU 2장을 쥐고 남아 다음 기동이 막힌다. (5) judge 파싱 실패 0/1,129 · 재판정 발생을 실제 런에서 쟀다. 다섯 건 모두 승인 없이 먼저 진행했고 사후 승인받았다 — 이후 `.claude/rules/alpha.md` 승인 규칙을 따른다 | 사용자 결정 2026-10-10 |
 | 14 | **RLVR 준비를 먼저** 진행한다. Pai 의 중요한 학습 설정을 유지하고 SFT 학습 최적화를 이식해 최대 128K 로 학습한다. 첫 작업은 이식 위험 보고·게이트(`RLVR_READINESS.md`) | §1 의 PivotRL 선행 순서는 재검토 대상 — Ultra RLVR1 블렌드의 38% 가 이미 단일 스텝 도구 호출(피벗형) 환경이다 | 사용자 지시 2026-10-07 |
 
+**검토 예정 — step 당 프롬프트 수 2단계 (사용자 2026-10-13 20:15, 결정 아님, Code·Math 레시피 때 결정)**: 처음 100 step 은 64, 나머지는 256 으로 돈다. 뜻은 "작은 배치로 업데이트 횟수를 벌어 초반 상승을 빨리 얻고, 평탄해지는 구간은 큰 배치로 잡음을 줄인다" 이다. NeMo-RL 에는 런 중 프롬프트 수를 바꾸는 옵션이 없으므로 (`num_prompts_per_step` 은 기동 때 고정) 구현은 체크포인트 경계에서 멈추고 재개하는 2단계 런이다 — 재기동 35~40분, 재개 오버라이드 `++policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler=true` 와 `grpo.max_num_epochs` 클램프 회피가 필수 (`KNOWN_ISSUES.md` 10-13, 결정 29 의 `main2r4`·`main2r5`). 판단 근거는 STEM `main2r3`(64, step 1~717) 대 `main2r6`(256, step 711~735) 의 보상 잔차·상승 기울기 비교다 (`STATUS.md`). 샘플당 wall time 은 두 배치가 같으므로 (생성 한계) 시간 손해는 재기동 1회뿐이다.
+
 ### SFT → RL 승계 범위 (2026-10-07)
 
 B안에서 SFT 가 만든 특성이 어디까지 이어지는지 정리한다. 게이트 수치는 [`GATES.md`](GATES.md).

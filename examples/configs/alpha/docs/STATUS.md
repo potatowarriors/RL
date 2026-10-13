@@ -36,6 +36,7 @@ _마지막 갱신: 2026-10-13 19:45 (`main2r3` 를 step 717 에서 멈추고 `ck
 
 | 결정 | 선택지 · 권고 | 정본 |
 |---|---|---|
+| **step 당 프롬프트 수 2단계 — 처음 100 step 64, 나머지 256 (사용자 2026-10-13 20:15 검토 중, Code·Math 레시피 때 결정)** | 런 중 변경 옵션이 없어 체크포인트 경계에서 멈추고 재개하는 2단계 런 (재기동 35~40분 + 재개 오버라이드 2개). 판단 근거: STEM `main2r3`(64) 대 `main2r6`(256) 의 보상 잔차·기울기 비교. 같은 자리에서 "GBS 를 쪼개 rollout 당 여러 번 업데이트" 와 lr 도 함께 결정 | `RL_PLAN.md` §2 검토 예정 · 결정 29 |
 | ~~도구 사용 teacher 체크포인트~~ **결정됨 (사용자 2026-10-10, `RL_PLAN.md` 결정 26) — step 400** (`results/alpha/teacher_tool/hf/hf_step_00400`) | MOPD 도구 프롬프트 teacher 도 step 400. 권고는 step 100 이었다 (τ³ pass^1 은 다섯 개 모두 잡음 안, step 400 은 행동 일치 +10.9 로 가장 높고 airline 거절 과제 금지 쓰기 48/96 으로 가장 많다). 거절 약점은 2차 agentic 과제로 다룬다 (`RL_PLAN.md` §1) | `RL_PLAN.md` 결정 26 |
 | **코드 능력 끌어올리기 — 1차 최대 과제 (사용자 2026-10-08, `RL_PLAN.md` 결정 20)** | 24K 에서 alpha 는 코드 답을 거의 끝내지 못한다 (32회 중 1회, 정답 0). 미루지 않고 48K 로 다시 재고 커리큘럼으로 올린다. Code·Math teacher 시작(세 번째) 전까지 방법을 찾는다 | `RL_DATA.md` §5.5 |
 | ~~1차 teacher 블렌드안~~ **결정됨 (사용자 2026-10-08, `RL_PLAN.md` 결정 19)** | 시작 ckpt agentic iter2862 · judge Gemma-4-31B-it · P0 승인 · 규모 B · 도구 사용 warm-up teacher 추가 · sandbox gpu06 · 한국어 보강 안 함 · Code·Math teacher 의 MOPD2 재사용은 학습 경향을 보고 결정. **남은 것**: STEM 비율안 (2026-10-08 보고: 객관식 50.7 · 주관식 20 · 퍼즐 15 · python 도구 과학 10 · 화학 4.3%, `RL_DATA.md` §5.4) 승인 · Code·Math 의 ns_tools·Lean 비율 | `RL_DATA.md` §5.0 |
