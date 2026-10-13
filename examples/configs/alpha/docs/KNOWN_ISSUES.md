@@ -5,6 +5,13 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## `main2r6` (256 프롬프트) 가 step 729 에서 죽었다 — Ray 객체 spill 이 main1 루트 디스크를 채움 (2026-10-13 ✅ 디스크 정리 뒤 `main2r7` 재개, 근본 대책은 클러스터 재기동 때)
+
+- **증상 (23:39, rc 1)**: step 729/735 학습 뒤 드라이버가 `log_generation_metrics_to_wandb` → `wandb run.log(figure)` 의 JSON 덤프에서 예외로 종료. 그 앞에 raylet 의 `OSError: [Errno 28] No space left on device: /tmp/ray/session_…/ray_spilled_objects/…` 4,822회, Ray 로그 싱크 기록 실패, 뒤이어 엔진 셧다운과 Gym 의 `ClientOSError` 334회·`ServerDisconnectedError` 72회 (후행 증상). 마지막 체크포인트 `ckpt/step_725` (22:52, NFS) 는 무사.
+- **기전**: 256 배치는 리플레이 버퍼·DataPlane 에 궤적 12,288개(3 목표 × 256 × 16)를 Ray 객체 저장소(main1 `/dev/shm` 128 GB, Pai 가 65 GB 사용)에 올린다. 넘친 객체를 Ray 가 `/tmp/ray/…/ray_spilled_objects` (루트 overlay 878 GB) 로 흘렸고 이 런에서 누적 555 GB · 1,307 객체. 루트는 이미 617 GB 가 차 있었다 — 그중 257 GB 가 Claude 세션 scratchpad 잔재 (Pai 세션 `c0a8d222` 221 GB (10-07) · NeMo-RL 세션 `d08e8a82` 22 GB · `87daa8cf` 14 GB). 64 배치 `main2r3` 는 spill 0.
+- **대응**: 사용자 승인 (23:47 "바로 진행해") 으로 scratchpad 삭제 — `nrl_probe` 183 GB · `87daa8cf/scratchpad` 14 GB 는 지웠고 (루트 617 → 420 GB 사용, 413 GB 여유), `gym060` 38 GB · `d08e8a82/scratchpad` 22 GB 는 자동 권한 분류기가 막아 사용자 직접 삭제 요청. `ckpt/step_725` 에서 `main2r7` 재개 (23:49, 같은 오버라이드, 726~729 의 4 step 손실). 안전망 cron 에 `df -h /` 150 GB 경고 추가.
+- **근본 대책 (다음 Ray 클러스터 재기동 때)**: `ray start` 의 객체 저장소 크기 명시와 spill 경로를 NFS 로 (`object_spilling_config`). 지금 클러스터는 10-07 부터 Pai 세션과 공유라 재시작하지 않았다. 256 이상 배치를 쓰는 레시피는 기동 전 루트 여유 ≥ 300 GB 를 확인한다. 죽은 런의 spill 잔재 47 GB (`ray_spilled_objects`, 23:30) 는 Ray 소유라 두었다.
+
 ## 프롬프트 수를 64 → 256 으로 바꿔 `ckpt/step_710` 을 재개하자 두 번 즉시 종료됐다 — 스케줄러 샘플 수 assert · 에폭 클램프 (2026-10-13 ✅ 오버라이드 2개로 해결, `main2r6`)
 
 - **배경**: 결정 29 (`RL_PLAN.md`) 로 `main2r3` 를 step 717 에서 멈추고 `grpo.num_prompts_per_step=256 grpo.max_num_steps=735 checkpointing.save_period=5` 로 재개했다. 레시피는 GBS 를 프롬프트 수 × 16 으로 묶어 두어 GBS 도 1,024 → 4,096 이 된다.
