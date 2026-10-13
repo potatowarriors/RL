@@ -1,0 +1,87 @@
+#!/bin/bash
+# P0-3 Code·Math alpha 사전 측정 오케스트레이터 (RL_DATA.md §5.5·§5.6, 사용자 승인 2026-10-13).
+# 순서: main2r3 종료(rc 0) 대기 → 최종 step_820 HF 반출 (결정 28) → 남은 Gym 서버(judge 포함) 정리 → 양 노드 GPU 비움 확인
+#   → fleet 16 기동 (main1 Pai serve_fleet.sh 8 + sub1 $NRL_ROOT/p0_measure/ray_serve_alpha.py 8, 10-08 과 같은 TOOLS=1·qwen3_xml·nemotron_v3)
+#   → 수학 12,000 × 4회 @24K (alpha_vllm_model_p0.yaml) → 코드 12,000 × 4회 @48K (alpha_vllm_model_p0_48k.yaml) → fleet 정지.
+# 측정 본체는 10-08 과 같은 $NRL_ROOT/p0_measure/run_measure.sh (gym env start → gym eval run --no-serve → gym eval profile).
+# max_len 57344: 코드 측정 목록의 렌더 프롬프트 최대 4,448 토큰 + 생성 49,152 (10-08 의 53,248 은 4,096 여유라 최장 행이 넘친다).
+# 실패하면 그 자리에서 멈추고 ABORT 를 남긴다 — 재시도·재기동은 하지 않는다 (사용자 판단).
+# 실행: setsid nohup bash examples/configs/alpha/runs/p03_orchestrate.sh > $NRL_ROOT/p0_measure/p03_orchestrate.out 2>&1 &
+#       (세션과 무관하게 돈다; 진행은 $NRL_ROOT/p0_measure/p03_orchestrate.log)
+set -u
+NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}
+P=$NRL/p0_measure
+REPO=$(cd "$(dirname "$0")/../../../.." && pwd)
+HERE=$REPO/examples/configs/alpha/runs
+PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
+CK=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_agentic_resume_20261001_011900/hfmodel_0002862
+POOL=/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/teacher_pool
+O=$REPO/results/alpha/teacher_stem
+LOG=$P/p03_orchestrate.log
+MAXLEN=57344
+HOSTS="10.0.37.4 10.0.37.2"
+log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
+ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
+abort() { log "ABORT: $*"; exit 1; }
+
+log "armed: waiting for main2r3 exit (runs.log case=main2r3 rc=)"
+until grep -q 'case=main2r3 rc=' "$O/runs.log"; do sleep 120; done
+rc=$(grep 'case=main2r3 rc=' "$O/runs.log" | tail -1 | grep -oE 'rc=[0-9]+')
+log "main2r3 exited: $rc"
+[ "$rc" = "rc=0" ] || abort "main2r3 did not finish cleanly ($rc) — P0-3 not launched"
+
+# 1) 최종 step_820 HF 반출 (결정 28). 변환은 CPU(gloo). 이미 있으면 건너뛴다.
+sleep 30
+if [ -d "$O/ckpt/step_820" ] && [ ! -e "$O/hf/hf_step_00820" ]; then
+    log "exporting step_820 → hf/hf_step_00820"
+    bash "$REPO/examples/configs/alpha/tools/export_rl_hf.sh" "$O/ckpt/step_820" "$O/hf/hf_step_00820" > "$O/hf/hf_step_00820.log" 2>&1
+    log "export rc=$? $(grep -a 'tensors=' "$O/hf/hf_step_00820.log" | tail -1)"
+else
+    log "export skipped: step_820=$([ -d "$O/ckpt/step_820" ] && echo yes || echo no) existing=$([ -e "$O/hf/hf_step_00820" ] && echo yes || echo no)"
+fi
+
+# 2) 남은 런 액터 0 확인 → Gym 잔여(judge 포함) 정리 → GPU 비움 (launch.sh 와 같은 순서)
+ra=$(ray_py "$HERE/gpu_check.py" | awk '/NRL_RUN_ACTORS/{print $2}')
+[ "$ra" = "0" ] || abort "NRL_RUN_ACTORS=${ra:-?} — another NeMo-RL run is alive"
+gl=$(ray_py "$HERE/gym_cleanup.py" kill | awk '/GYM_LEFTOVER_TOTAL/{print $2}')
+log "leftover Gym servers killed: ${gl:-?}"
+busy=?
+for i in $(seq 1 18); do
+    busy=$(ray_py "$HERE/gpu_check.py" | awk '/BUSY_GPUS/{print $2}')
+    [ "$busy" = "0" ] && break
+    sleep 10
+done
+[ "$busy" = "0" ] || abort "BUSY_GPUS=$busy after Gym cleanup (3 min)"
+log "both nodes idle (BUSY_GPUS=0)"
+
+# 3) fleet 기동 — 10-08 과 같은 플래그 (TOOLS=1 qwen3_xml · nemotron_v3 · strict 끔 · prefix cache 끔 · gpu util 0.95)
+export TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 VLLM_ENFORCE_STRICT_TOOL_CALLING=0 PREFIX_CACHE=0
+log "starting main1 fleet: serve_fleet.sh $CK $MAXLEN 8 8100"
+GPUS=0,1,2,3,4,5,6,7 bash "$PAI/eval_sft/serve_fleet.sh" "$CK" "$MAXLEN" 8 8100 >> "$LOG" 2>&1
+log "starting sub1 servers via Ray: ray_serve_alpha.py start 10.0.37.2 $CK $MAXLEN"
+ray_py "$P/ray_serve_alpha.py" start 10.0.37.2 "$CK" "$MAXLEN" >> "$LOG" 2>&1 || abort "ray_serve_alpha.py start failed"
+
+ready=0
+for i in $(seq 1 120); do   # 최대 30분
+    ready=0
+    for h in $HOSTS; do for p in 8000 8001 8002 8003 8004 8005 8006 8007; do
+        curl -s -m 3 "http://$h:$p/v1/models" 2>/dev/null | grep -q '"alpha"' && ready=$((ready+1))
+    done; done
+    [ "$ready" -eq 16 ] && break
+    sleep 15
+done
+log "servers ready: $ready/16"
+[ "$ready" -eq 16 ] || abort "only $ready/16 vLLM servers ready after 30 min (fleets left running for diagnosis)"
+
+# 4) 측정 — 수학(24K) 먼저, 코드(48K) 다음. run_measure.sh 가 Gym 서버 기동·수집·프로파일을 한다.
+log "P0-3 math: 12,000 × 4 @24K"
+MODEL_CFG=$P/alpha_vllm_model_p0.yaml bash "$P/run_measure.sh" p03_math "$POOL/math_measure.jsonl" 4 1024 >> "$LOG" 2>&1
+log "math done: $(tail -2 "$P/p03_math/run.log" | tr '\n' ' ')"
+log "P0-3 code: 12,000 × 4 @48K"
+MODEL_CFG=$P/alpha_vllm_model_p0_48k.yaml bash "$P/run_measure.sh" p03_code "$POOL/code_measure.jsonl" 4 1024 >> "$LOG" 2>&1
+log "code done: $(tail -2 "$P/p03_code/run.log" | tr '\n' ' ')"
+
+# 5) fleet 정지 (Pai stop_fleet.sh: SIGTERM → 메모리 회수 확인; sub1 은 Ray 액터 stop)
+bash "$PAI/eval_sft/stop_fleet.sh" 0,1,2,3,4,5,6,7 >> "$LOG" 2>&1
+ray_py "$P/ray_serve_alpha.py" stop 10.0.37.2 >> "$LOG" 2>&1
+log "DONE — results: $P/p03_math/rollouts.jsonl · $P/p03_code/rollouts.jsonl"
