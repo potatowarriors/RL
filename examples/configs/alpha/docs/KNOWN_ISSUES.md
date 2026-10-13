@@ -5,6 +5,13 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## `main2r7` 이 step 733 앞에서 6시간 멈췄다 — 낙오 궤적 정체 2번째 (2026-10-14 ✅ 사용자 승인으로 중단, `ckpt/step_730` 에서 `main2r8` 재개)
+
+- **증상**: step 732 학습 완료 01:29:01 뒤 "STALLING: Need 256 trajectories for step 732, but only 255 are ready" (버퍼 767/768) 가 07:35 까지 반복. 엔진 6개 중 `vllm_policy-0-5` (main1 GPU 5) 만 생성 토큰이 늘었다 — 02:47 4.3 tok/s, 03:55 4.6 tok/s, 03:55~05:49 평균 1.5 tok/s, 05:49 이후 1분 창에서 0. 01:27 부터 누적 약 4.5만 토큰으로 턴당 상한 32K 를 넘겼으므로 멀티턴 행이다. 나머지 15장은 0% (GPU 5 는 15분 중 10~22% 표본에서만 버스트).
+- **10-13 13:30 정체와의 차이**: 그때는 10~22 tok/s 로 55분 만에 저절로 풀렸다. 이번은 4 tok/s 이하로 느려지며 6시간 동안 풀리지 않았다. 256 배치에서는 step 마다 그룹 256개를 다 기다리므로 낙오 1개가 걸릴 확률이 64 배치의 4배다 (`RL_PLAN.md` 결정 29 위험 항목).
+- **대응**: 01:53 · 02:48 · 03:56 알림, 07:35 사용자 지시("아직도 정체면 중단해")로 드라이버 SIGTERM (rc 134) → 07:37 `ckpt/step_730` 에서 `main2r8` 재개 (731·732 두 step 손실, 같은 오버라이드). GPU 16장 유휴 약 6시간.
+- **남은 과제 (결정 대기, 10-13 항목과 같음)**: ① 리플레이 버퍼 대기 상한 + 낙오 그룹 드롭/대체 (본체 수정) ② 턴당 생성 상한 축소 ③ 감시 신호 "스텝 무진척 + 엔진 1개만 토큰 증가" 자동화 (진단은 `$CLAUDE_JOB_DIR/tmp/engine_rate_probe.py` 방식 — 이름 붙은 액터 `vllm_policy-0-N` 의 `get_vllm_logger_metrics` 를 60초 간격 2회). 낙오자가 느린 기전은 여전히 미확정.
+
 ## `main2r6` (256 프롬프트) 가 step 729 에서 죽었다 — Ray 객체 spill 이 main1 루트 디스크를 채움 (2026-10-13 ✅ 디스크 정리 뒤 `main2r7` 재개, 근본 대책은 클러스터 재기동 때)
 
 - **증상 (23:39, rc 1)**: step 729/735 학습 뒤 드라이버가 `log_generation_metrics_to_wandb` → `wandb run.log(figure)` 의 JSON 덤프에서 예외로 종료. 그 앞에 raylet 의 `OSError: [Errno 28] No space left on device: /tmp/ray/session_…/ray_spilled_objects/…` 4,822회, Ray 로그 싱크 기록 실패, 뒤이어 엔진 셧다운과 Gym 의 `ClientOSError` 334회·`ServerDisconnectedError` 72회 (후행 증상). 마지막 체크포인트 `ckpt/step_725` (22:52, NFS) 는 무사.
