@@ -28,8 +28,19 @@ grpo:
   num_prompts_per_step: 64              # 1단계는 업데이트 횟수 우선 (맺는 법을 빨리 배운다). 256 으로 바꾸려면 위 오버라이드
   max_num_steps: 282                    # 9,028 행 × 2 에폭 / 64
   max_num_epochs: 2
+  # 결정 34 (사용자 2026-10-14 23:30): 시퀀스 단위 손실로 전환하면서 in-loss 필터를 끄는데, force_on_policy_ratio 에서 threshold 가
+  # 남아 있으면 prev_logprobs 를 따로 계산하는 forward 가 하나 더 생긴다 (grpo.py _resolve_logprob_skip_flags). 마스킹은 STEM 676 step 에서
+  # 6 시퀀스, 이 런 19 step 에서 1 시퀀스뿐이라 끈다. 정합은 gen KL (0.002) 로 계속 본다.
+  seq_logprob_error_threshold: null
   async_grpo:
     rollout_overprovision: 4            # 결정 31 — 64 배치의 6%. 256 배치면 8
+
+loss_fn:
+  # 결정 34: 1단계는 시퀀스 단위 손실 (원래 GRPO). 토큰 단위(DAPO, Ultra 원형)는 샘플의 75% 가 32K 에 잘린 지금 조건에서 4K 정답 1개가
+  # 32K 오답 1개의 1/8 무게가 돼 "맺고 맞히기" 신호가 묻힌다 (step 1~21: 잘림 0.79 → 0.74 정체, grad norm STEM 의 1/5). 잘림이 10% 아래로
+  # 내려간 2단계에서 토큰 단위로 되돌릴지 다시 정한다. in-loss 필터는 token_level 전용이라 함께 끈다 (위 threshold null).
+  token_level_loss: false
+  seq_logprob_error_in_loss: false
 
 policy:
   generation:
