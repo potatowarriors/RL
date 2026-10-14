@@ -196,6 +196,12 @@ class AsyncGRPOConfig(BaseModel, extra="allow"):
     in_flight_weight_updates: bool = False
     # Recomputes the KV cache after weight updates.
     recompute_kv_cache_after_weight_updates: bool = False
+    # Extra prompt groups the collector launches per target step on top of
+    # num_prompts_per_step. Training proceeds as soon as num_prompts_per_step
+    # groups are ready; the leftover groups are carried to the next step
+    # (never discarded), so one slow trajectory cannot stall the whole run.
+    # 0 keeps the exact-count behaviour.
+    rollout_overprovision: int = 0
 
 
 class RewardPenaltyTokenIdsConfig(BaseModel, extra="allow"):
@@ -4426,14 +4432,28 @@ def async_grpo_train(
     # Each weight version generates exactly num_prompts_per_step trajectories
     # With max_age_steps, we keep trajectories from multiple weight versions
     num_prompts_per_step = master_config.grpo.num_prompts_per_step
+    rollout_overprovision = int(
+        getattr(master_config.grpo.async_grpo, "rollout_overprovision", 0)
+    )
+    assert rollout_overprovision >= 0, (
+        f"grpo.async_grpo.rollout_overprovision must be >= 0, got {rollout_overprovision}"
+    )
     late_arrival_slack = 2
     optimal_buffer_size = (
-        num_prompts_per_step * max_trajectory_age_steps * late_arrival_slack
+        (num_prompts_per_step + rollout_overprovision)
+        * max_trajectory_age_steps
+        * late_arrival_slack
     )
 
     replay_buffer = ReplayBuffer.options(runtime_env=_replay_runtime_env).remote(
-        max_size=optimal_buffer_size
+        max_size=optimal_buffer_size,
+        allow_carryover=rollout_overprovision > 0,
     )
+    if rollout_overprovision > 0:
+        print(
+            f"🔁 Rollout over-provisioning enabled: {num_prompts_per_step + rollout_overprovision} "
+            f"groups launched per target step, {num_prompts_per_step} consumed, leftovers carried over"
+        )
 
     last_checkpoint_path = checkpointer.get_latest_checkpoint_path()
     replay_buffer_restore_metadata: dict[str, int] | None = None
@@ -4718,9 +4738,7 @@ def async_grpo_train(
             ray.get(trajectory_collector.check_health.remote())
             refit_metrics: dict[str, float] = {}
             early_stop_message: Optional[str] = None
-            print(
-                f"\n{'=' * 25} Step {step + 1}/{max_num_steps} {'=' * 25}"
-            )
+            print(f"\n{'=' * 25} Step {step + 1}/{max_num_steps} {'=' * 25}")
             maybe_gpu_profile_step(policy, step + 1)
             if policy != policy_generation:
                 maybe_gpu_profile_step(policy_generation, step + 1)

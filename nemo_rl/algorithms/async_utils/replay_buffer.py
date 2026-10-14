@@ -44,10 +44,16 @@ class ReplayBufferImpl(ReplayBufferProtocol):
     grpo.num_generations_per_prompt (required to compute per-prompt advantages).
     """
 
-    def __init__(self, max_size: int):
+    def __init__(self, max_size: int, allow_carryover: bool = False):
         if max_size <= 0:
             raise ValueError(f"max_size must be positive, got {max_size}")
         self.max_size = max_size
+        # With rollout over-provisioning (grpo.async_grpo.rollout_overprovision > 0)
+        # the collector launches more groups per target step than training consumes.
+        # ``sample`` then takes the first ``num_prompt_groups`` ready groups and the
+        # leftovers are carried to the next step instead of being discarded, so a
+        # single slow trajectory never stalls training and no group is dropped.
+        self.allow_carryover = allow_carryover
         self.trajectories = []  # List[dict[str, Any]]
         # If trajectory_version is 1 and target_weight_version is 4 it means that weight version 1 was used for generating a trajectory and this trajectory will be used for training when weight version is 4.
         self.trajectory_versions = []  # it is the weight-version used for generation of a trajectory
@@ -267,20 +273,43 @@ class ReplayBufferImpl(ReplayBufferProtocol):
                 f"   🎯 Found {len(intended_indices)} trajectories intended for current step {current_weight_version}"
             )
 
+            # Carry-over mode: groups intended for an earlier step that were not
+            # consumed (over-provisioned leftovers or late stragglers) are usable
+            # for this step as long as they are inside the age window. Intended
+            # groups come first, then the oldest targets.
+            carryover_indices: list[int] = []
+            if self.allow_carryover:
+                carryover_indices = sorted(
+                    (
+                        i
+                        for i in valid_indices
+                        if self.target_weight_versions[i] < current_weight_version
+                    ),
+                    key=lambda i: (self.target_weight_versions[i], i),
+                )
+                if carryover_indices:
+                    print(
+                        f"   🔁 {len(carryover_indices)} carried-over trajectories "
+                        f"(target < {current_weight_version}) are also eligible"
+                    )
+            available_indices = intended_indices + carryover_indices
+
             # Stall training if we don't have enough trajectories intended for this step
-            if len(intended_indices) < num_prompt_groups:
+            if len(available_indices) < num_prompt_groups:
                 print(
-                    f"   ⏸️ STALLING: Need {num_prompt_groups} trajectories for step {current_weight_version}, but only {len(intended_indices)} are ready"
+                    f"   ⏸️ STALLING: Need {num_prompt_groups} trajectories for step {current_weight_version}, but only {len(available_indices)} are ready"
                 )
                 print(
-                    f"   ⏸️ Training will wait for remaining {num_prompt_groups - len(intended_indices)} trajectories to be generated"
+                    f"   ⏸️ Training will wait for remaining {num_prompt_groups - len(available_indices)} trajectories to be generated"
                 )
                 return None
 
             # Select exactly the trajectories intended for this step (FIFO within same target)
-            selected: list[int] = intended_indices[:num_prompt_groups]
+            selected: list[int] = available_indices[:num_prompt_groups]
+            num_selected_carried = max(0, len(selected) - len(intended_indices))
             print(
-                f"   ✅ Selected {len(selected)} trajectories all intended for step {current_weight_version}"
+                f"   ✅ Selected {len(selected)} trajectories for step {current_weight_version}"
+                f" ({len(selected) - num_selected_carried} intended, {num_selected_carried} carried over)"
             )
 
             sampled_weights = [self.trajectory_versions[i] for i in selected]
@@ -291,13 +320,29 @@ class ReplayBufferImpl(ReplayBufferProtocol):
                 f"✅ Selected counts by generation weight-version: {Counter(sampled_weights)}"
             )
             print(f"📊 Average trajectory age: {avg_trajectory_age:.2f} steps")
-            print(
-                f"🎯 All selected trajectories target step {current_weight_version} (100% target match)"
-            )
+            if num_selected_carried == 0:
+                print(
+                    f"🎯 All selected trajectories target step {current_weight_version} (100% target match)"
+                )
 
             # Remove selected items in reverse order to maintain correct indices
             sampled_items = [self.trajectories[i] for i in selected]
             self._remove_indices(selected)
+
+            # Carry-over mode: whatever is left for this step (over-provisioned
+            # leftovers, late stragglers) is re-targeted to the next step so the
+            # collector's per-target accounting sees it and generates less.
+            if self.allow_carryover:
+                carried = 0
+                for i, target in enumerate(self.target_weight_versions):
+                    if target <= current_weight_version:
+                        self.target_weight_versions[i] = current_weight_version + 1
+                        carried += 1
+                if carried:
+                    print(
+                        f"🔁 Carried {carried} leftover groups from step {current_weight_version} "
+                        f"to step {current_weight_version + 1}"
+                    )
 
             old_last_target = self.last_target_weight_already_generated
             self.last_target_weight_already_generated = max(
