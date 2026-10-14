@@ -1,0 +1,93 @@
+# teacher_codemath_alpha.yaml — 1차 Code·Math teacher, 1단계 = 생성 상한 32K (RL_PLAN.md 결정 19·23·30·31·32, docs/RL_DATA.md §5.5).
+#
+# STEM teacher 와 같은 검증된 RLVR 설정(student_rlvr1_alpha.yaml: 2노드 분리 · async age 2 · chunked prefill · Muon warmup 10 ·
+# 128K/CP8 · R3 · GDN 상태 fp32 · KL 0 + threshold 2 · 페널티 4종)을 상속한다. 학습 메모리·CP 가 같아 R4 재측정 대상이 아니다.
+# STEM 과 다른 것:
+#   - 데이터: teacher_codemath_s1_v1.jsonl (수학 4,514 + 코드 4,514 = 9,028, tools/build_codemath_stage1_blend.py) — 1:1 draw.
+#   - Gym 환경: code_gen (Ray 워커 CPU 에서 유닛 테스트) + math_with_judge (math-verify 만, judge 끔). judge GPU 가 없으므로
+#     롤아웃 노드 8장 전부 vLLM (STEM 은 6 + judge 2). sandbox 터널 불필요.
+#   - 스텝: 2 에폭 = 18,056 draw. num_prompts_per_step 64 면 282 스텝 (기본), 256 이면 70 스텝 (오버라이드 grpo.num_prompts_per_step=256
+#     grpo.max_num_steps=70 grpo.async_grpo.rollout_overprovision=8).
+#   - 낙오 정체 대책 (결정 31): grpo.async_grpo.rollout_overprovision — 목표 step 마다 N+k 그룹을 띄우고 N 이 모이면 학습, 나머지는 이월.
+#     첫 런에서 검증한다 (사용자 2026-10-14: 별도 스모크 대신 본 런 초반 로그로 확인 — "Carried … leftover groups" · "Keeping … unused prompts" ·
+#     "Selected N trajectories … (intended, carried over)" · train_global_batch_size 일정).
+#   - lr 5e-6 (결정 23). 생성 상한 32K (결정 30). 2단계(48K)는 1단계 학습 로그의 문제별 정답률로 블렌드를 다시 뽑아 별도 레시피로.
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_codemath_alpha.yaml \
+#                        data.train.data_path=<teacher_codemath_s1_v1.jsonl> data.validation.data_path=<…_val.jsonl>
+#                      (2026-10-14: ERROR 0 · WARN 2 — enforce_eager · unwanted token_ids, 둘 다 기지)
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_alpha.yaml DATA=<teacher_codemath_s1_v1.jsonl> VAL=<…_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath <tag> policy.model_name=<hfmodel_0002862>
+defaults: student_rlvr1_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath"
+  save_period: 5                        # 64 배치 기준 약 20분마다 (STEM 10 → 5, 10-13 사고 뒤 손실 축소)
+
+grpo:
+  num_prompts_per_step: 64              # 1단계는 업데이트 횟수 우선 (맺는 법을 빨리 배운다). 256 으로 바꾸려면 위 오버라이드
+  max_num_steps: 282                    # 9,028 행 × 2 에폭 / 64
+  max_num_epochs: 2
+  async_grpo:
+    rollout_overprovision: 4            # 결정 31 — 64 배치의 6%. 256 배치면 8
+
+policy:
+  generation:
+    max_new_tokens: 32768               # 결정 30 — 1단계 32K
+    colocated:
+      resources:
+        gpus_per_node: 8                # judge 없음 → 롤아웃 노드 8장 전부
+        num_nodes: 1
+  megatron_cfg:
+    optimizer:
+      lr: 5.0e-6                        # 결정 23
+      min_lr: 5.0e-6
+
+env:
+  _override_: true
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
+    skip_venv_if_present: true
+    port_range_low: 5000
+    port_range_high: 5999
+    effort_levels:                      # 부모와 같다 (블렌드 행의 effort 마커는 풀 구성 때 제거됨)
+      low_string: "{reasoning effort: efficient}"
+      low_weight: 0.1
+      low_penalty: 1
+      low_ub: 15000
+    invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
+    thinking_tags: ["<think>", "</think>"]
+    config_paths:
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      - resources_servers/code_gen/configs/code_gen.yaml                 # 유닛 테스트 실행 (Ray 워커 CPU)
+      - resources_servers/math_with_judge/configs/math_with_judge.yaml   # math-verify 만
+    policy_model:
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 8
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs: null
+    policy_model_reasoning_off:
+      _copy: policy_model
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 2
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs:
+            enable_thinking: false
+    math_with_judge:
+      resources_servers:
+        math_with_judge:
+          should_use_judge: false       # P0-3 측정과 같은 채점 (math-verify)
+    code_gen:
+      resources_servers:
+        code_gen:
+          num_processes: 64             # P0-3 측정과 같다
+          unit_test_timeout_secs: 10
+          debug: false
+
+logger:
+  wandb:
+    project: alpha-rl
