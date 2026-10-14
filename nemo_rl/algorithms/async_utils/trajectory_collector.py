@@ -175,6 +175,24 @@ class AsyncTrajectoryCollector:
             self.master_config.grpo.async_grpo.max_generation_failures
         )
 
+    def _rollout_overprovision(self) -> int:
+        """Extra prompt groups launched per target step (0 = exact count)."""
+        return int(
+            getattr(self.master_config.grpo.async_grpo, "rollout_overprovision", 0) or 0
+        )
+
+    def _prompt_groups_per_target(self) -> int:
+        """Prompt groups the collector aims to have per target step.
+
+        Training consumes ``num_prompts_per_step``; with over-provisioning the
+        collector launches ``rollout_overprovision`` more so that a few slow
+        trajectories do not stall the step (the leftovers carry over, see
+        ``ReplayBufferImpl.sample``).
+        """
+        return int(self.master_config.grpo.num_prompts_per_step) + (
+            self._rollout_overprovision()
+        )
+
     def _calculate_target_weights(self, generation_weight_version: int) -> list[int]:
         """Calculate target weight versions for given generation weight version.
 
@@ -208,7 +226,7 @@ class AsyncTrajectoryCollector:
     ) -> Optional[int]:
         """Get the next target weight that needs generation (if any)."""
         target_weights = self._calculate_target_weights(generation_weight_version)
-        num_prompts = int(self.master_config.grpo.num_prompts_per_step)
+        num_prompts = self._prompt_groups_per_target()
         max_age_steps = int(self.master_config.grpo.async_grpo.max_trajectory_age_steps)
         last_consumed_target = ray.get(
             self.replay_buffer.get_last_target_weight_already_generated.remote()
@@ -256,7 +274,7 @@ class AsyncTrajectoryCollector:
         """Check if collection should be paused due to generation limits."""
         try:
             target_weights = self._calculate_target_weights(self.current_weight_version)
-            num_prompts = int(self.master_config.grpo.num_prompts_per_step)
+            num_prompts = self._prompt_groups_per_target()
             max_age_steps = int(
                 self.master_config.grpo.async_grpo.max_trajectory_age_steps
             )
@@ -322,8 +340,25 @@ class AsyncTrajectoryCollector:
                 "start_collection must set a dataloader before collection"
             )
         dataloader = self.dataloader
+        # With rollout over-provisioning a target may need fewer prompts than a
+        # dataloader batch holds (the rest of the batch is carried over from the
+        # previous step). The unused tail of the batch is kept in ``pending`` and
+        # offered to the next target instead of being dropped.
+        keep_batch_tail = self._rollout_overprovision() > 0
+        pending: Optional[BatchedDataDict[DatumSpec]] = None
         try:
-            for batch in dataloader:
+            dataloader_iter = iter(dataloader)
+            while True:
+                if pending is not None:
+                    batch = pending
+                    pending = None
+                else:
+                    try:
+                        batch = next(dataloader_iter)
+                    except StopIteration:
+                        # iterator drained cleanly → dataloader exhausted
+                        dataloader_exhausted = True
+                        break
                 if not self.running:
                     break
 
@@ -369,10 +404,22 @@ class AsyncTrajectoryCollector:
                 if not self.running:
                     break
 
-                self._process_batch(batch)
-            else:
-                # for-loop completed without break → dataloader iterator exhausted
-                dataloader_exhausted = True
+                consumed = self._process_batch(batch)
+                if keep_batch_tail and consumed is not None:
+                    batch_size = batch.size
+                    if consumed == 0:
+                        # Nothing could be launched right now (e.g. a target
+                        # became complete between the pause check and the
+                        # reservation). Offer the same batch again after a
+                        # short wait rather than skipping its prompts.
+                        pending = batch
+                        time.sleep(1.0)
+                    elif consumed < batch_size:
+                        pending = batch.slice(consumed, batch_size)
+                        print(
+                            f"🔁 Keeping {batch_size - consumed} unused prompts of the "
+                            "batch for the next target"
+                        )
 
         except Exception as e:
             print(f"❌ Error in trajectory collection: {e}")
@@ -409,15 +456,22 @@ class AsyncTrajectoryCollector:
         batch["extra_env_info"] = stamped_rows
         self._next_nemo_gym_task_index += len(stamped_rows)
 
-    def _process_batch(self, batch: BatchedDataDict[DatumSpec]) -> None:
-        """Process a single batch and generate for one target weight."""
+    def _process_batch(self, batch: BatchedDataDict[DatumSpec]) -> Optional[int]:
+        """Process a single batch and generate for one target weight.
+
+        Returns the number of prompts of ``batch`` handed to a rollout worker
+        (0 when nothing was launched). ``None`` means the batch was abandoned
+        because of an error. The caller only uses this with
+        ``rollout_overprovision > 0`` to keep the unused tail of the batch for
+        the next target instead of dropping those prompts.
+        """
         target_weight: Optional[int] = None
         worker_started = False
         try:
             generation_weight_version = self.current_weight_version
             num_generations = self.master_config.grpo.num_generations_per_prompt
             num_prompts_in_batch = batch.size
-            num_prompts_per_step = int(self.master_config.grpo.num_prompts_per_step)
+            num_prompts_per_step = self._prompt_groups_per_target()
             max_age_steps = int(
                 self.master_config.grpo.async_grpo.max_trajectory_age_steps
             )
@@ -431,7 +485,7 @@ class AsyncTrajectoryCollector:
                 print(
                     f"🔄 No targets need generation for weight {generation_weight_version}"
                 )
-                return
+                return 0
             reserved_target = target_weight
 
             print(
@@ -449,7 +503,7 @@ class AsyncTrajectoryCollector:
                     f"🔄 Target {reserved_target} already has enough trajectories, skipping"
                 )
                 self._release_target(reserved_target)
-                return
+                return 0
 
             if num_prompts_to_generate < num_prompts_in_batch:
                 print(
@@ -525,6 +579,7 @@ class AsyncTrajectoryCollector:
             )
 
             self._cleanup_finished_threads()
+            return num_prompts_to_generate
 
         except Exception as e:
             if target_weight is not None and not worker_started:
@@ -533,6 +588,7 @@ class AsyncTrajectoryCollector:
             import traceback
 
             traceback.print_exc()
+            return None
 
     def get_weight_version(self) -> int:
         return self.current_weight_version

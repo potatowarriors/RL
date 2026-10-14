@@ -61,6 +61,11 @@ grpo:
     # 0 (default) = fail on the first worker exception. Increase only
     # when transient generation errors are expected and acceptable to drop.
     max_generation_failures: 0
+    # Extra prompt groups launched per target step beyond num_prompts_per_step.
+    # Training proceeds once num_prompts_per_step groups are ready and the
+    # leftovers carry over to the next step, so one slow trajectory cannot
+    # stall the run. 0 (default) keeps the exact-count behaviour.
+    rollout_overprovision: 0
     in_flight_weight_updates: false # Set to true to enable in-flight weight updates
     recompute_kv_cache_after_weight_updates: false # Set to true to recompute kv cache after weight updates
 
