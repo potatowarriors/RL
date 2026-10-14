@@ -54,6 +54,7 @@ _마지막 갱신: 2026-10-14 09:50 (✅ STEM teacher 완료 08:43 · 최종 반
 
 | 항목 | 판정 | 재평가 시점 |
 |---|---|---|
+| 장문(128K 생성) 확장 때 비동기 staleness·클립 재검토 (사용자 2026-10-14) | 지금은 `max_trajectory_age_steps: 2` · 클립 0.2/0.28. 생성 128K 로 늘리면 궤적이 refit 2번 안에 못 끝나 age 초과 폐기가 늘므로, MiMo-V2.6 처럼 staleness 4 + 양의 advantage 클립 상한을 5.0 까지 여는 조합(엔트로피 연동 조절)을 검토한다 — `RL_PLAN.md` §2 검토 예정 둘째 항 | MOPD2 (SWE·장문 agentic) 레시피 때, 지표는 age 초과 폐기 비율·클립 발동률·gen KL |
 | FlashQLA E2E 스텝 이득 | 커널 단위 검증만 완료(K1·M2). 레시피 opt-in | 첫 장문 RL 런 |
 | vLLM 롤아웃측 FlashQLA | prefill 한정 이득, vllm 코드 변경 필요 — 후순위 | 롤아웃이 병목일 때 |
 | fla 0.4.2 네이티브 GQA NaN upstream 보고 | 2026-08-18 "보고 예정" 기록 뒤 실행 여부 미기록 (mcore 는 MHA 확장으로 우회 중, 원장 #14) | — |
