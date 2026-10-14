@@ -5,6 +5,13 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 2026-10-07 이관: 워크스페이스 `project_s/NEMO_RL_SETUP.md` §4 원장 21건과 Pai `KNOWN_ISSUES.md` 10-06 항목의 RL 측 서사를 옮겼다.
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 
+## 초과 할당(결정 31)이 첫 본 런에서 켜지지 않았다 — 데이터로더 배치 64 가 목표당 68 을 한 번에 못 띄움 (2026-10-14 ✅ 수집기 루프 수정, `s1` 재기동으로 검증)
+
+- **증상**: Code·Math 1단계 `s1` (`rollout_overprovision: 4`) 의 드라이버 로그에 "68 groups launched per target step" 은 찍혔지만, 수집기는 목표 0·1·2 에 각각 "batch worker for 64 prompt groups" 만 띄웠다. 결정 33 의 본 런 검증 항목(이월·"Keeping unused prompts")이 하나도 나오지 않았다.
+- **원인**: `_process_batch` 가 `min(batch.size, needed)` 만 띄운다. 데이터로더 배치가 `num_prompts_per_step`(64) 라 68 중 64 만 launch 되고, 나머지 4 는 그 목표가 `_generating_targets` 에서 풀린 뒤(= 첫 worker 의 64 그룹이 모두 끝난 뒤)에야 gap fill 로 띄워진다. 그때는 이미 64 가 모여 학습이 나간 뒤라 "N+k 가 동시에 떠 있어야 낙오를 흡수한다" 는 전제가 성립하지 않았다. 단위 테스트는 루프를 mock `_process_batch` 로만 검사해 이 상호작용을 놓쳤다.
+- **수정 (`alpha/async-overprovision` `eb49dfaad`)**: 초과 할당 모드에서 배치가 `needed` 보다 작으면 `_process_batch` 가 목표를 되돌려 주고 `-needed` 를 반환하고, 루프가 다음 배치를 `BatchedDataDict.from_batches` 로 이어 붙여(`batch_max_length` 재계산) 다시 시도한다. 데이터로더가 끝나면 남은 행으로 launch 한다 (`_allow_partial_launch`). 테스트 3개 추가 (이어 붙이기·끝에서 부분 launch·실제 BatchedDataDict 결합), 12/12 PASS.
+- **운영**: 실행 중인 런이 import 하는 트리에는 병합하지 않고, `ckpt/step_5` 저장 뒤 `s1` 을 멈추고 병합·재개(`s1r1`)해 첫 step 로그에서 68 launch · 이월 · GBS 1,024 를 확인한다.
+
 ## `main2r7` 이 step 733 앞에서 6시간 멈췄다 — 낙오 궤적 정체 2번째 (2026-10-14 ✅ 사용자 승인으로 중단, `ckpt/step_730` 에서 `main2r8` 재개)
 
 - **증상**: step 732 학습 완료 01:29:01 뒤 "STALLING: Need 256 trajectories for step 732, but only 255 are ready" (버퍼 767/768) 가 07:35 까지 반복. 엔진 6개 중 `vllm_policy-0-5` (main1 GPU 5) 만 생성 토큰이 늘었다 — 02:47 4.3 tok/s, 03:55 4.6 tok/s, 03:55~05:49 평균 1.5 tok/s, 05:49 이후 1분 창에서 0. 01:27 부터 누적 약 4.5만 토큰으로 턴당 상한 32K 를 넘겼으므로 멀티턴 행이다. 나머지 15장은 0% (GPU 5 는 15분 중 10~22% 표본에서만 버스트).
