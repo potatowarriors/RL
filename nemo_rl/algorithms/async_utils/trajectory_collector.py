@@ -161,6 +161,9 @@ class AsyncTrajectoryCollector:
         self._generation_check_lock: _threading.Lock = _threading.Lock()
         # Track which target weights are currently being generated (globally)
         self._generating_targets: set[int] = set()
+        # Over-provisioning: once the dataloader is exhausted a target may be
+        # launched with fewer rows than it asked for (see _collection_loop).
+        self._allow_partial_launch: bool = False
         self._next_nemo_gym_task_index = next_nemo_gym_task_index
 
         # Timer for efficiency metrics
@@ -174,6 +177,21 @@ class AsyncTrajectoryCollector:
         self._max_generation_failures = (
             self.master_config.grpo.async_grpo.max_generation_failures
         )
+
+    @staticmethod
+    def _concat_batches(
+        first: BatchedDataDict[DatumSpec], second: BatchedDataDict[DatumSpec]
+    ) -> BatchedDataDict[DatumSpec]:
+        """Append ``second`` to ``first`` (rows in order) for over-provisioned launches.
+
+        ``batch_max_length`` is a per-batch constant in ``rl_collate_fn``; it is
+        recomputed so the merged batch stays consistent.
+        """
+        merged = BatchedDataDict.from_batches([first, second])
+        if "length" in merged and "batch_max_length" in merged:
+            length = merged["length"]
+            merged["batch_max_length"] = torch.ones_like(length) * length.max()
+        return merged
 
     def _rollout_overprovision(self) -> int:
         """Extra prompt groups launched per target step (0 = exact count)."""
@@ -407,7 +425,23 @@ class AsyncTrajectoryCollector:
                 consumed = self._process_batch(batch)
                 if keep_batch_tail and consumed is not None:
                     batch_size = batch.size
-                    if consumed == 0:
+                    if consumed < 0:
+                        # The target needs more prompts than this batch holds
+                        # (N+k must be launched together for the over-provisioning
+                        # to protect the step). Pull the next batch, append it and
+                        # retry; at the end of the dataloader launch what is left.
+                        try:
+                            more = next(dataloader_iter)
+                        except StopIteration:
+                            self._allow_partial_launch = True
+                            pending = batch
+                            continue
+                        pending = self._concat_batches(batch, more)
+                        print(
+                            f"🔁 Appended a dataloader batch: {batch_size} + {more.size} "
+                            f"rows available for a target needing {-consumed}"
+                        )
+                    elif consumed == 0:
                         # Nothing could be launched right now (e.g. a target
                         # became complete between the pause check and the
                         # reservation). Offer the same batch again after a
@@ -504,6 +538,20 @@ class AsyncTrajectoryCollector:
                 )
                 self._release_target(reserved_target)
                 return 0
+            if (
+                self._rollout_overprovision() > 0
+                and num_prompts_in_batch < trajectories_needed
+                and not self._allow_partial_launch
+            ):
+                # Over-provisioning only protects the step if all N+k groups are
+                # in flight together; a dataloader batch of N rows cannot cover
+                # that. Hand the target back and ask the loop for more rows.
+                self._release_target(reserved_target)
+                print(
+                    f"🔁 Target {reserved_target} needs {trajectories_needed} prompts "
+                    f"but the batch holds {num_prompts_in_batch}; requesting more rows"
+                )
+                return -trajectories_needed
 
             if num_prompts_to_generate < num_prompts_in_batch:
                 print(

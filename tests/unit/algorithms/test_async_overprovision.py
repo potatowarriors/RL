@@ -237,6 +237,96 @@ class TestCollectorOverprovision:
         assert collector.data_exhausted is True
         assert collector.collection_failed is False
 
+    def test_collection_loop_appends_next_batch_when_target_needs_more(self):
+        """A negative return means "the target needs more rows than this batch":
+        the loop pulls the next batch, appends it and retries, so N+k groups are
+        launched together."""
+        collector = _local_collector(rollout_overprovision=2)
+        collector._concat_batches = lambda a, b: _FakeBatch(a.items + b.items)
+        launched: list[list[int]] = []
+        # 1st call: batch [0,1,2] too small for 5 → ask for more; 2nd: [0..5] → launch 5;
+        # 3rd: tail [5] + nothing pending... loop offers [5] → launch 1; 4th: [6,7,8] → launch 3
+        consume_plan = iter([-5, 5, 1, 3])
+
+        def fake_process(batch):
+            n = next(consume_plan)
+            if n > 0:
+                launched.append(batch.items[:n])
+            return n
+
+        collector._process_batch = fake_process
+        collector.dataloader = [
+            _FakeBatch([0, 1, 2]),
+            _FakeBatch([3, 4, 5]),
+            _FakeBatch([6, 7, 8]),
+        ]
+
+        collector._collection_loop()
+
+        assert launched == [[0, 1, 2, 3, 4], [5], [6, 7, 8]]
+        assert collector.data_exhausted is True
+        assert collector._allow_partial_launch is False
+
+    def test_collection_loop_partial_launch_at_dataloader_end(self):
+        """When no more batches exist, the target is launched with what is left."""
+        collector = _local_collector(rollout_overprovision=2)
+        launched: list[list[int]] = []
+        seen_partial_flag: list[bool] = []
+
+        def fake_process(batch):
+            seen_partial_flag.append(collector._allow_partial_launch)
+            if not collector._allow_partial_launch:
+                return -5  # needs 5, batch has 3, no more data
+            launched.append(batch.items)
+            return batch.size
+
+        collector._process_batch = fake_process
+        collector.dataloader = [_FakeBatch([0, 1, 2])]
+
+        collector._collection_loop()
+
+        assert launched == [[0, 1, 2]]
+        assert seen_partial_flag == [False, True]
+        assert collector.data_exhausted is True
+
+    def test_concat_batches_merges_rows_and_recomputes_batch_max_length(self):
+        import torch
+
+        from nemo_rl.distributed.batched_data_dict import BatchedDataDict
+
+        a = BatchedDataDict(
+            message_log=[[{"role": "user", "content": "a"}]],
+            length=torch.tensor([3]),
+            loss_multiplier=torch.tensor([1.0]),
+            extra_env_info=[{"k": 1}],
+            task_name=["t"],
+            idx=[0],
+            batch_max_length=torch.tensor([3]),
+            stop_strings=[None],
+        )
+        b = BatchedDataDict(
+            message_log=[
+                [{"role": "user", "content": "b"}],
+                [{"role": "user", "content": "c"}],
+            ],
+            length=torch.tensor([5, 2]),
+            loss_multiplier=torch.tensor([1.0, 1.0]),
+            extra_env_info=[{"k": 2}, {"k": 3}],
+            task_name=["t", "t"],
+            idx=[1, 2],
+            batch_max_length=torch.tensor([5, 5]),
+            stop_strings=[None, None],
+        )
+        collector_cls = AsyncTrajectoryCollector.__ray_metadata__.modified_class
+        merged = collector_cls._concat_batches(a, b)
+        assert merged.size == 3
+        assert merged["idx"] == [0, 1, 2]
+        assert merged["length"].tolist() == [3, 5, 2]
+        assert merged["batch_max_length"].tolist() == [5, 5, 5]
+        assert merged["extra_env_info"] == [{"k": 1}, {"k": 2}, {"k": 3}]
+        tail = merged.slice(2, 3)
+        assert tail.size == 1 and tail["idx"] == [2]
+
     def test_collection_loop_default_mode_drops_tail_as_before(self):
         collector = _local_collector(rollout_overprovision=0)
         launched: list[list[int]] = []
