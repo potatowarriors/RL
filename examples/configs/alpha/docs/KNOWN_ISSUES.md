@@ -319,6 +319,7 @@ GPU 를 100% 쓰면서 진척이 없으므로 끝나지 않는 GPU 연산 쪽이
 - **사실**: `reward_shaping` 은 동기 `grpo_train` 에서만 호출된다 (`nemo_rl/algorithms/grpo.py:3131`). alpha 레시피가 쓰는 `async_grpo_train` 에는 호출이 없다. 원보상 기준 표준편차(`std_rewards`)도 동기 경로에서만 넘어간다 (3149행). 레시피에서 켜도 조용히 아무 일도 없다.
 - **대응**: 길이 보상은 그룹이 모이는 `nemo_rl/experience/rollouts.py` 의 `_postprocess_single_nemo_gym_group` (effort shaping·페널티 계산 자리)에 넣는다. 설계·오프라인 검증은 `RL_DATA.md` §5.5 (Code·Math 차례에 구현).
 - **대응 (2026-10-15, `RL_PLAN.md` 결정 36)**: 그룹 후처리(`rollouts.py`)가 아니라 **async 학습 스텝**에 넣었다 — `nemo_rl/algorithms/grpo.py` `apply_async_reward_shaping` 이 버퍼에서 뽑은 배치에 sync 루프와 같은 위치(롤아웃 지표 뒤 · advantage 앞)에서 upstream `apply_reward_shaping` 을 호출한다. 학습 시점 적용이라 체크포인트에서 복원한 버퍼 그룹에도 적용되고 버퍼 키가 늘지 않는다. 응답 길이는 턴별 최대 assistant 토큰 (`hit_max_tokens` 와 같은 호출 단위; data-plane 슬라이스의 `response_token_lengths` 가 있으면 그것). 브랜치 `alpha/async-dapo` (`bb0835bd2`), 테스트 `tests/unit/algorithms/test_async_reward_shaping.py`. **확인법**: 켜진 레시피에서 `train/reward_shaping/penalized_rate` 가 잘림률과 비슷해야 한다 — 0 이면 미적용 (TensorBoard · W&B allowlist 포함).
+- **함정 (2026-10-15 `s1r4` 기동 실패)**: 두 진입 스크립트(`examples/run_grpo.py` · `examples/nemo_gym/run_grpo_nemo_gym.py`)가 async 에서 `reward_shaping.enabled` 를 `NotImplementedError` 로 막는다 — 학습 전 rc 1. `nemo_rl/` 만 grep 해서 놓쳤다. 감점 가드만 제거 (`2b069dbb6`), 동적 샘플링·`reward_scaling` 가드는 async 미구현이라 유지. 본체 기능을 켤 때는 `examples/` 진입 스크립트의 가드도 같이 본다.
 
 ## alpha vLLM 을 `--data-parallel-size 8` 로 띄우면 NCCL 초기화에서 `free(): double free detected in tcache 2` 로 죽는다 (2026-10-08, Pai 문서에 이미 있던 함정)
 
