@@ -4218,6 +4218,70 @@ def select_training_samples(
     return kept, metrics
 
 
+def _max_assistant_turn_lengths(message_logs: list[LLMMessageLogType]) -> torch.Tensor:
+    """Return the longest assistant turn (in tokens) of every sample.
+
+    The generation cap (``policy.generation.max_new_tokens``) applies per model
+    call, so the per-turn maximum is the length that DAPO overlong shaping has
+    to compare with ``max_response_length``. For single-turn rollouts it is the
+    response length. Samples without an assistant turn get 0 (no penalty).
+    """
+    lengths = []
+    for message_log in message_logs:
+        lengths.append(
+            max(
+                (
+                    len(message["token_ids"])
+                    for message in message_log
+                    if message["role"] == "assistant"
+                ),
+                default=0,
+            )
+        )
+    return torch.tensor(lengths, dtype=torch.long)
+
+
+def apply_async_reward_shaping(
+    repeated_batch: BatchedDataDict, cfg: RewardShapingConfig
+) -> tuple[BatchedDataDict, dict[str, float]]:
+    """Apply ``grpo.reward_shaping`` to a training batch sampled from the replay buffer.
+
+    This is the async counterpart of the ``apply_reward_shaping`` call in the
+    sync loop (after the rollout metrics, before advantages): rollout metrics
+    keep the raw reward, ``total_reward`` becomes the shaped reward and the raw
+    reward is preserved as ``unshaped_total_reward``. Shaping at training time
+    (rather than at collection) also covers groups restored from a checkpointed
+    replay buffer.
+
+    Response lengths are the per-turn maximum of the assistant turns unless the
+    batch already carries ``response_token_lengths`` (data-plane slices do).
+
+    Returns:
+        The batch and the step metrics ``reward_shaping/penalized_rate``
+        (fraction of samples whose reward was lowered) and
+        ``reward_shaping/mean_penalty`` (mean of shaped minus raw reward). Both
+        are empty when shaping is disabled.
+    """
+    if not cfg.enabled:
+        return repeated_batch, {}
+    added_lengths = "response_token_lengths" not in repeated_batch
+    if added_lengths:
+        repeated_batch["response_token_lengths"] = _max_assistant_turn_lengths(
+            repeated_batch["message_log"]
+        )
+    try:
+        repeated_batch = apply_reward_shaping(repeated_batch, cfg)
+    finally:
+        if added_lengths:
+            del repeated_batch["response_token_lengths"]
+    penalty = repeated_batch["total_reward"] - repeated_batch["unshaped_total_reward"]
+    metrics = {
+        "reward_shaping/penalized_rate": (penalty < 0).float().mean().item(),
+        "reward_shaping/mean_penalty": penalty.float().mean().item(),
+    }
+    return repeated_batch, metrics
+
+
 def aggregate_rollout_metrics(
     per_group_metrics: dict[str, list],
 ) -> dict[str, Any]:
@@ -4922,6 +4986,14 @@ def async_grpo_train(
                     prompt_ids_for_adv = prompt_batched_flat["token_ids"]
                     del initial_prompt_message_logs
                     del prompt_batched_flat
+
+                    # Process rewards with custom reward function (same place
+                    # as the sync loop; rollout metrics above stay on the raw
+                    # reward, the shaped reward drives baseline and advantages).
+                    repeated_batch, reward_shaping_metrics = apply_async_reward_shaping(
+                        repeated_batch, master_config.grpo.reward_shaping
+                    )
+                    rollout_metrics.update(reward_shaping_metrics)
 
                     rewards = repeated_batch["total_reward"]
 
