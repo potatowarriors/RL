@@ -202,6 +202,12 @@ class AsyncGRPOConfig(BaseModel, extra="allow"):
     # (never discarded), so one slow trajectory cannot stall the whole run.
     # 0 keeps the exact-count behaviour.
     rollout_overprovision: int = 0
+    # Path of a jsonl file the collector appends one record to per buffered
+    # prompt group (row key, generation/target weight versions, per-sample
+    # rewards, generated tokens and truncation). Gives per-prompt pass rates
+    # over training without a separate measurement run. None disables it.
+    # NeMo-Gym rollouts only (the row key comes from the Gym row).
+    rollout_group_log: Optional[str] = None
 
 
 class RewardPenaltyTokenIdsConfig(BaseModel, extra="allow"):

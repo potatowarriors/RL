@@ -86,6 +86,56 @@ def annotate_request_priority(
         params["metadata"] = metadata
 
 
+def _row_log_meta(row: dict[str, Any]) -> dict[str, Any]:
+    """Identify a NeMo-Gym row for the rollout group log."""
+    agent_ref = row.get("agent_ref")
+    return {
+        "pool_key": row.get("pool_key"),
+        "dataset": row.get("dataset"),
+        "agent": agent_ref.get("name") if isinstance(agent_ref, dict) else None,
+    }
+
+
+def rollout_group_record(
+    final_batch: BatchedDataDict[DatumSpec],
+    *,
+    task_index: Optional[int],
+    row_meta: dict[str, Any],
+    generation_weight_version: int,
+    target_weight_version: int,
+) -> dict[str, Any]:
+    """Build the rollout group log record for one prompt group.
+
+    ``rewards`` are the environment rewards before any training-time reward
+    shaping; ``gen_tokens`` counts assistant tokens per sample.
+    """
+    rewards = final_batch["total_reward"]
+    rewards = rewards.tolist() if isinstance(rewards, torch.Tensor) else list(rewards)
+    truncated = final_batch.get("truncated")
+    if isinstance(truncated, torch.Tensor):
+        truncated = [bool(t) for t in truncated.tolist()]
+    elif truncated is not None:
+        truncated = [bool(t) for t in truncated]
+    gen_tokens = [
+        sum(
+            len(message["token_ids"])
+            for message in message_log
+            if message.get("role") == "assistant"
+        )
+        for message_log in final_batch["message_log"]
+    ]
+    return {
+        "time": round(time.time(), 1),
+        "task_index": int(task_index) if task_index is not None else None,
+        **row_meta,
+        "generation_weight_version": int(generation_weight_version),
+        "target_weight_version": int(target_weight_version),
+        "rewards": [float(r) for r in rewards],
+        "gen_tokens": gen_tokens,
+        "truncated": truncated,
+    }
+
+
 @ray.remote  # pragma: no cover
 class AsyncTrajectoryCollector:
     """Collects trajectories asynchronously and adds them to replay buffer."""
@@ -165,6 +215,14 @@ class AsyncTrajectoryCollector:
         # launched with fewer rows than it asked for (see _collection_loop).
         self._allow_partial_launch: bool = False
         self._next_nemo_gym_task_index = next_nemo_gym_task_index
+        # Optional per-group rollout log (grpo.async_grpo.rollout_group_log).
+        # Row metadata is remembered at stamping time and written once the
+        # group is buffered.
+        self._rollout_group_log_path: Optional[str] = getattr(
+            self.master_config.grpo.async_grpo, "rollout_group_log", None
+        )
+        self._task_row_meta: dict[int, dict[str, Any]] = {}
+        self._rollout_group_log_lock: _threading.Lock = _threading.Lock()
 
         # Timer for efficiency metrics
         self._efficiency_timer = ThreadSafeTimer(context={"worker": "collector"})
@@ -486,6 +544,8 @@ class AsyncTrajectoryCollector:
             stamped_row = dict(row)
             stamped_row[NEMO_GYM_TASK_INDEX_KEY] = first_task_index + offset
             stamped_rows.append(stamped_row)
+            if self._rollout_group_log_path:
+                self._task_row_meta[first_task_index + offset] = _row_log_meta(row)
 
         batch["extra_env_info"] = stamped_rows
         self._next_nemo_gym_task_index += len(stamped_rows)
@@ -834,6 +894,40 @@ class AsyncTrajectoryCollector:
             finished = {t for t in self._inflight_threads if not t.is_alive()}
             for t in finished:
                 self._inflight_threads.remove(t)
+
+    def _write_rollout_group_log(
+        self,
+        rollout_result: RolloutGroupResult,
+        generation_weight_version: int,
+        target_weight_version: int,
+    ) -> None:
+        """Append one record for a buffered prompt group (no-op when disabled).
+
+        Logging must never break collection, so write errors are reported and
+        swallowed.
+        """
+        if not self._rollout_group_log_path:
+            return
+        task_index = rollout_result.task_index
+        row_meta = (
+            self._task_row_meta.pop(int(task_index), {})
+            if task_index is not None
+            else {}
+        )
+        try:
+            record = rollout_group_record(
+                rollout_result.final_batch,
+                task_index=task_index,
+                row_meta=row_meta,
+                generation_weight_version=generation_weight_version,
+                target_weight_version=target_weight_version,
+            )
+            line = json.dumps(record, separators=(",", ":"))
+            with self._rollout_group_log_lock:
+                with open(self._rollout_group_log_path, "a") as f:
+                    f.write(line + "\n")
+        except Exception as error:  # noqa: BLE001 - logging is best effort
+            print(f"⚠️ rollout group log write failed: {error!r}")
 
     def _release_target(self, target_weight_version: int) -> None:
         """Release the reservation owned by a completed batch worker."""
@@ -1212,6 +1306,11 @@ class AsyncTrajectoryCollector:
                 )
                 if status == "success":
                     buffered_group_indices.add(rollout_result.group_index)
+                    self._write_rollout_group_log(
+                        rollout_result,
+                        generation_weight_version,
+                        target_weight_version,
+                    )
                     group_description = f"group_index={rollout_result.group_index}"
                     if rollout_result.task_index is not None:
                         group_description = (

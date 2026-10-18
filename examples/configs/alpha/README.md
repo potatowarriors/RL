@@ -20,6 +20,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `teacher_tool_alpha.yaml` | 1차 도구 사용 warm-up teacher — Gym 단일 스텝 도구 호출 3종, 400 스텝, Muon lr 3e-6 | 결정 19·20·22. 2026-10-10 완료, teacher 체크포인트는 τ³ 로 고른다 (`docs/STATUS.md`) |
 | `teacher_stem_alpha.yaml` | 1차 STEM teacher — 롤아웃 6장 + Gemma judge 2장 (`grpo.py` 부분 노드 배치), 820 스텝, lr 5e-6 | 결정 18·19·21·23·24. 2026-10-14 완료 (`hf/hf_step_00735`), 마지막 25 step 은 256 배치 |
 | `teacher_codemath_alpha.yaml` | 1차 Code·Math teacher 1단계 (32K) — code_gen + math-verify, judge 없음 → 롤아웃 8장, 64 배치 282 스텝 2 에폭, lr 5e-6, `rollout_overprovision: 4` (결정 31) | 결정 30·32·33. 블렌드 `teacher_codemath_s1_v1.jsonl` 9,028 (`tools/build_codemath_stage1_blend.py`). 2단계(48K)는 1단계 로그로 블렌드를 다시 뽑는다 |
+| `teacher_codemath_s2_alpha.yaml` | Code·Math 2단계 (32K) — 1단계 결과 `hf_step_00282` 시작, P0-4 난이도 지도의 학습 구간(1~7/8)만 · code 1~2/8 두 번, 175 step (1 에폭), held-out 검증 20 step 마다, 프롬프트별 롤아웃 기록 (결정 38) |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
 | `teacher_code_math_alpha.yaml` · `teacher_general_alpha.yaml` | 1차 Code·Math · General teacher | 미작성 (lr 5e-6, 결정 23) |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |

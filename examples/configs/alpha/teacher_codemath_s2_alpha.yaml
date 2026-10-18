@@ -1,0 +1,29 @@
+# teacher_codemath_s2_alpha.yaml — Code·Math 2단계 (RL_PLAN.md 결정 38, 사용자 승인 2026-10-19).
+#
+# 1단계(teacher_codemath_alpha.yaml, 캠페인 teacher_codemath2) 결과 hf_step_00282 를 시작점으로 새 캠페인에서 학습한다.
+# 1단계와 같은 설정(32K · G 16 · 64 프롬프트 · 초과 할당 4 · 토큰 단위 손실 · KL 0 · lr 5e-6 · 감점 끔)을 상속하고 바꾸는 것:
+#   - 데이터: teacher_codemath_s2_v1.jsonl (11,250행 = 9,641 프롬프트) — P0-4 난이도 지도(hf_step_00282, 프롬프트당 8회 @32K)의
+#     학습 구간(정답 1~7/8)만. 0/8·8/8 은 advantage 0 이라 뺐다. code 1~2/8 은 두 번 넣어 G=32 효과 (tools/build_codemath_stage2_blend.py).
+#   - 1 에폭 = 11,250 // 64 = 175 step. max_num_epochs 2 는 초과 할당으로 데이터로더가 먼저 마르지 않게 둔 여유다
+#     (async 에폭 클램프 min(175, 2 × 175) = 175).
+#   - held-out 검증: _val.jsonl 256 (math 128 + code 128, 학습 구간에서 떼어 학습 제외), 20 step 마다 + 시작·끝.
+#   - 프롬프트별 롤아웃 기록: <log_dir>/rollout_groups.jsonl (grpo.async_grpo.rollout_group_log) — 에폭 경계 재선별용.
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_codemath_s2_alpha.yaml \
+#                        data.train.data_path=<teacher_codemath_s2_v1.jsonl> data.validation.data_path=<…_val.jsonl>
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_s2_alpha.yaml DATA=<teacher_codemath_s2_v1.jsonl> VAL=<…_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_s2 <tag> \
+#         policy.model_name=/home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_codemath2/hf/hf_step_00282
+defaults: teacher_codemath_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_s2"
+
+grpo:
+  max_num_steps: 175                    # 11,250 행 // 64 = 1 에폭 (결정 38)
+  max_num_epochs: 2                     # 데이터로더 여유 (위 주석)
+  val_period: 20
+  val_at_start: true                    # step 0 기준선 (새 캠페인이라 동작한다; 재개 런에서는 무시됨)
+  val_at_end: true
+  async_grpo:
+    rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl   # launch.sh 가 절대경로 log_dir 를 준다 (collector 는 다른 노드에서 돈다)
