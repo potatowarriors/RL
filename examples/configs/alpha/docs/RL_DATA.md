@@ -38,7 +38,7 @@ RL 데이터의 현행 정본이다. 2026-10-07 이관 출처: Pai `SFT_RL_DATAS
 | 데이터셋 | 행 | 라이선스 | Gym 형식 | 채점 | 난이도 정보 | Ultra 와의 관계 |
 |---|---|---|---|---|---|---|
 | `Nemotron-RL-coding-competitive_coding` `opencodereasoning_filtered_25k_train.jsonl` | 23,971 문제 (parquet 16,083 은 부분집합) | 머리말 CC BY-SA 4.0 · 본문 CC BY 4.0 (불일치) | `agent_ref` 추가 → code_gen | unit test (중앙 24개) | 없음 | Ultra code_gen 고유 4,702 문제를 모두 포함 |
-| 같은 폴더 `validation.jsonl` | 322 | — | — | — | — | **LiveCodeBench v5 (2024-07~2025-02) — 학습 금지** |
+| 같은 폴더 `validation.jsonl` | 322 | — | — | — | — | **LiveCodeBench v5 (2024-07~2025-02) — 학습 금지** · 2026-10-19 코드 벤치로 변환 `alpha_blends/eval/lcb_v5_322.jsonl` (agent code_gen 부여, 옛 응답 제거, 함수형 124 · 표준입력 198), 실행 `runs/eval_lcb.sh` · 집계 `tools/summarize_lcb.py` |
 | `Nemotron-RL-knowledge-mcqa` | 617,020 (+ val 68,553) | CC BY 4.0 | `agent_ref` 추가 → mcqa | 정답 문자 (judge 없음) | Qwen3-30B-A3B pass_rate: 1.0 364,853 · (0,1) 129,781 · 없음 122,386 | 겹침 0.2% |
 | `Multi-subject-RLVR` (ExamQA) | 573,002 (+ test 6,000) | Apache-2.0 | 변환 필요 (query·label) | 자유형 답 → LLM judge | 없음 | Ultra `reasoning.jsonl` 5,236행의 출처 |
 | `Nemotron-RL-instruction_following` | 46,391 | ODC-BY | `agent_ref` 추가 → instruction_following | 프로그램 (48개 id 모두 Gym 등록) | 없음 | Ultra IF 고유 15,166 을 모두 포함 |
