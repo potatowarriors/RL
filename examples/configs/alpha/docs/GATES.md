@@ -9,6 +9,7 @@
 | 바뀐 것 | 다시 돌릴 게이트 |
 |---|---|
 | 체크포인트 (새 `hfmodel_*`) | M1 · M2 · M3 → R1 |
+| RL 반출 체크포인트를 시작점으로 (`hf/hf_step_*`, 사용자 결정 2026-10-19) | M1 · M2 · M4 → **R1** (M3 는 기록만 — R3 없는 10토큰 비교라 RL 로 라우팅이 민감해진 체크포인트에서 1.05 를 넘는다. 판정은 R3 를 켠 R1 과 반출 직전 학습 중 `token_mult_prob_error`·gen KL) |
 | AlphaBridge 코드 (Megatron-Bridge fork) | M1 · M2 · M3 (`force_reconvert_from_hf: true`) |
 | vLLM 플러그인 코드 | M3 · M4 → R1 |
 | 레시피의 생성·라우팅 설정 (`vllm_kwargs`, `router_replay` 등) | R1 |
@@ -29,7 +30,7 @@
 |---|---|---|---|---|
 | M1 | 가중치 라운드트립 HF→mcore→HF | `tools/verify_bridge_roundtrip.py` | 텐서별 `max_diff==0.0` + 양방향 커버리지 (`A_log` 만 문서화된 dtype 예외) | 2026-08-13 base **14,181/14,181** · 2026-10-06 agentic iter2400 **14,181/14,181** · 2026-10-08 agentic iter2862 **14,181/14,181** |
 | M2 | forward 로짓 패리티 (mcore vs Pai 검증 HF 참조) | `tools/verify_forward_parity.py` + `tools/gen_hf_reference_logits.py` | 영/한/887토큰 3종 argmax·top5 일치 + cos ≥ 0.99 | 2026-08-13 cos ≥ 0.99988 · 2026-08-18 FlashQLA 활성 3종 PASS (TileLang 실행 확인) · 2026-10-06 iter2400 argmax 3/3, cos ≥ 0.99984 · 2026-10-08 iter2862 argmax 3/3, cos ≥ 0.99980 |
-| M3 | mcore→vLLM refit (토큰별 logprob) | upstream `tools/refit_verifier.py` (우리 수정 `1eca2f383`) | mean(exp\|Δ\|) = mult_prob_err < 1.05 | 2026-08-13 mean diff 0.020 / max 0.122 (≈1.02) · 2026-10-06 iter2400 **1.0293** · 2026-10-08 iter2862 **1.0228** (mean diff 0.022 / max 0.111) · 2026-10-19 RL 반출 `teacher_codemath2/hf_step_00282` **FAIL 1.07** (mean diff 0.068 / max 0.159, 10토큰 중 8개 0.03~0.16) — 진단 (같은 날 08:43~09:11): 대조군 iter2862 재실행 **1.025** (0.0249, 환경 변화 없음) · step_282 재실행 0.0558 (≈1.057, 재현) · 같은 ckpt 의 R1(R3 켬) **KL 0.0010 × 3 · mult_prob_err 1.018 · \|d\|>1 토큰 0**. 결론: M3(R3 없음, 10토큰)의 초과는 RL 로 라우팅 경계가 민감해진 체크포인트의 성질이고 refit 경로 결함이 아니다 (KNOWN_ISSUES 10-16). RL 반출 시작점의 판정 방식은 사용자 결정 대기 |
+| M3 | mcore→vLLM refit (토큰별 logprob) | upstream `tools/refit_verifier.py` (우리 수정 `1eca2f383`) | mean(exp\|Δ\|) = mult_prob_err < 1.05 | 2026-08-13 mean diff 0.020 / max 0.122 (≈1.02) · 2026-10-06 iter2400 **1.0293** · 2026-10-08 iter2862 **1.0228** (mean diff 0.022 / max 0.111) · 2026-10-19 RL 반출 `teacher_codemath2/hf_step_00282` **FAIL 1.07** (mean diff 0.068 / max 0.159, 10토큰 중 8개 0.03~0.16) — 진단 (같은 날 08:43~09:11): 대조군 iter2862 재실행 **1.025** (0.0249, 환경 변화 없음) · step_282 재실행 0.0558 (≈1.057, 재현) · 같은 ckpt 의 R1(R3 켬) **KL 0.0010 × 3 · mult_prob_err 1.018 · \|d\|>1 토큰 0**. 결론: M3(R3 없음, 10토큰)의 초과는 RL 로 라우팅 경계가 민감해진 체크포인트의 성질이고 refit 경로 결함이 아니다 (KNOWN_ISSUES 10-16). 사용자 결정 2026-10-19: RL 반출 시작점은 M3 대신 R1 로 판정 (재실행 조건 표) |
 | M4 | vLLM 단독 서빙 (디스크 직접 로드) | `tools/verify_vllm_serving_parity.py` | 전체 vocab(163,968) next-token 분포: 3종 argmax 일치 + cos ≥ 0.99 (KL 은 보고) | 2026-08-24 argmax·top5 일치, cos ≥ 0.99997, KL(HF‖vLLM) ≤ 0.0013 · 2026-10-08 iter2862 argmax 3/3 (top5 1/3), cos ≥ 0.99995, KL ≤ 0.0074 — KL 이 8월보다 크고 원인은 미확인 (GDN 상태를 fp32 로 바꿔도 같은 값). RL 경로 정합은 R1 이 본다 |
 | M5 | SFT 엔진(Pai Megatron-LM-251125) ↔ RL 엔진(NeMo-RL mcore) forward·gradient 동등성 | `tools/engine_parity_{pai,nemorl,hf,compare}.py` (+ `engine_parity_common.py`) | Pai↔NeMo-RL 거리가 bf16 노이즈 바닥 이내. 바닥은 두 기준선으로 잰다: HF 를 제3 구현으로 둔 삼각측량, 같은 Pai 엔진에 라우터 dtype 만 바꾼 섭동 런 | 2026-10-07 iter2400 **PASS** (아래 표) |
 
