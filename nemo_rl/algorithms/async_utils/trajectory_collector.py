@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import concurrent.futures
 import json
 import os
@@ -96,6 +97,20 @@ def _row_log_meta(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def zero_std_group_kind(rewards: Any) -> Optional[str]:
+    """Classify a prompt group with no reward variance (DAPO dynamic sampling).
+
+    Returns ``"all_correct"`` / ``"all_wrong"`` when every reward is equal and
+    positive / non-positive, or ``None`` when the group has reward variance
+    (or fewer than two samples) and should be kept.
+    """
+    values = rewards.tolist() if isinstance(rewards, torch.Tensor) else list(rewards)
+    values = [float(v) for v in values]
+    if len(values) < 2 or max(values) != min(values):
+        return None
+    return "all_correct" if values[0] > 0 else "all_wrong"
+
+
 def rollout_group_record(
     final_batch: BatchedDataDict[DatumSpec],
     *,
@@ -103,6 +118,7 @@ def rollout_group_record(
     row_meta: dict[str, Any],
     generation_weight_version: int,
     target_weight_version: int,
+    dropped: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build the rollout group log record for one prompt group.
 
@@ -133,6 +149,7 @@ def rollout_group_record(
         "rewards": [float(r) for r in rewards],
         "gen_tokens": gen_tokens,
         "truncated": truncated,
+        "dropped": dropped,
     }
 
 
@@ -223,6 +240,12 @@ class AsyncTrajectoryCollector:
         )
         self._task_row_meta: dict[int, dict[str, Any]] = {}
         self._rollout_group_log_lock: _threading.Lock = _threading.Lock()
+        # DAPO dynamic sampling (grpo.async_grpo.drop_zero_std_groups).
+        self._drop_zero_std_groups: bool = bool(
+            getattr(self.master_config.grpo.async_grpo, "drop_zero_std_groups", False)
+        )
+        self._dynamic_sampling_counts: collections.Counter[str] = collections.Counter()
+        self._dynamic_sampling_lock: _threading.Lock = _threading.Lock()
 
         # Timer for efficiency metrics
         self._efficiency_timer = ThreadSafeTimer(context={"worker": "collector"})
@@ -900,8 +923,9 @@ class AsyncTrajectoryCollector:
         rollout_result: RolloutGroupResult,
         generation_weight_version: int,
         target_weight_version: int,
+        dropped: Optional[str] = None,
     ) -> None:
-        """Append one record for a buffered prompt group (no-op when disabled).
+        """Append one record for a buffered or dropped prompt group (no-op when disabled).
 
         Logging must never break collection, so write errors are reported and
         swallowed.
@@ -921,6 +945,7 @@ class AsyncTrajectoryCollector:
                 row_meta=row_meta,
                 generation_weight_version=generation_weight_version,
                 target_weight_version=target_weight_version,
+                dropped=dropped,
             )
             line = json.dumps(record, separators=(",", ":"))
             with self._rollout_group_log_lock:
@@ -928,6 +953,11 @@ class AsyncTrajectoryCollector:
                     f.write(line + "\n")
         except Exception as error:  # noqa: BLE001 - logging is best effort
             print(f"⚠️ rollout group log write failed: {error!r}")
+
+    def get_dynamic_sampling_counts(self) -> dict[str, int]:
+        """Cumulative kept / all_wrong / all_correct group counts (DAPO dynamic sampling)."""
+        with self._dynamic_sampling_lock:
+            return dict(self._dynamic_sampling_counts)
 
     def _release_target(self, target_weight_version: int) -> None:
         """Release the reservation owned by a completed batch worker."""
@@ -1243,6 +1273,31 @@ class AsyncTrajectoryCollector:
         """Push one prompt group to the replay buffer with bounded backoff."""
         final_batch_cpu = rollout_result.final_batch.to("cpu")
         rollout_metrics = rollout_result.rollout_metrics
+
+        if self._drop_zero_std_groups:
+            dropped = zero_std_group_kind(final_batch_cpu["total_reward"])
+            with self._dynamic_sampling_lock:
+                self._dynamic_sampling_counts[dropped or "kept"] += 1
+                counts = dict(self._dynamic_sampling_counts)
+            if dropped is not None:
+                # Resolved without buffering: the target keeps asking for groups
+                # (over-provisioning / gap-fill) until enough carry signal.
+                buffered_group_indices.add(rollout_result.group_index)
+                self._write_rollout_group_log(
+                    rollout_result,
+                    generation_weight_version,
+                    target_weight_version,
+                    dropped=dropped,
+                )
+                total = sum(counts.values())
+                print(
+                    f"🧹 Dropped zero-variance prompt group ({dropped}, "
+                    f"target_weight={target_weight_version}) — dynamic sampling "
+                    f"so far: kept {counts.get('kept', 0)}/{total}, "
+                    f"all_wrong {counts.get('all_wrong', 0)}, "
+                    f"all_correct {counts.get('all_correct', 0)}"
+                )
+                return
 
         # Teacher inference is blocking. Keep it off this worker's event loop so
         # other completed prompt groups can continue moving toward the buffer.

@@ -208,6 +208,13 @@ class AsyncGRPOConfig(BaseModel, extra="allow"):
     # over training without a separate measurement run. None disables it.
     # NeMo-Gym rollouts only (the row key comes from the Gym row).
     rollout_group_log: Optional[str] = None
+    # DAPO dynamic sampling for async GRPO: drop prompt groups whose rewards
+    # are all equal (all correct / all wrong; zero advantage, zero gradient)
+    # before they reach the replay buffer, so every trained group carries
+    # signal. Dropped groups are still written to rollout_group_log (with
+    # "dropped"). The step then waits for more groups, so size
+    # rollout_overprovision to the expected drop rate (N / (1 - drop) - N).
+    drop_zero_std_groups: bool = False
 
 
 class RewardPenaltyTokenIdsConfig(BaseModel, extra="allow"):
@@ -4247,6 +4254,26 @@ def _max_assistant_turn_lengths(message_logs: list[LLMMessageLogType]) -> torch.
     return torch.tensor(lengths, dtype=torch.long)
 
 
+def dynamic_sampling_step_metrics(
+    previous: dict[str, int], current: dict[str, int]
+) -> dict[str, float]:
+    """Per-interval DAPO dynamic-sampling metrics from cumulative collector counts.
+
+    ``previous`` / ``current`` are cumulative ``kept`` / ``all_wrong`` /
+    ``all_correct`` group counts (``AsyncTrajectoryCollector.get_dynamic_sampling_counts``).
+    Returns the counts and fractions of groups resolved since the previous call.
+    """
+    delta = {
+        k: current.get(k, 0) - previous.get(k, 0)
+        for k in ("kept", "all_wrong", "all_correct")
+    }
+    total = sum(delta.values())
+    metrics: dict[str, float] = {"dynamic_sampling/groups": float(total)}
+    for k, v in delta.items():
+        metrics[f"dynamic_sampling/{k}_fraction"] = (v / total) if total else 0.0
+    return metrics
+
+
 def apply_async_reward_shaping(
     repeated_batch: BatchedDataDict, cfg: RewardShapingConfig
 ) -> tuple[BatchedDataDict, dict[str, float]]:
@@ -4408,6 +4435,7 @@ def async_grpo_train(
 
     timer = Timer(context={"worker": "driver"})
     training_wall_start = time.perf_counter()
+    prev_dynamic_sampling_counts: dict[str, int] = {}
     timeout = TimeoutChecker(
         timeout=master_config.checkpointing["checkpoint_must_save_by"],
         fit_last_save_time=True,
@@ -5654,6 +5682,16 @@ def async_grpo_train(
             if refit_metrics:
                 logger.log_metrics(refit_metrics, step + 1, prefix="refit")
             logger.log_metrics(performance_metrics, step + 1, prefix="performance")
+            if getattr(master_config.grpo.async_grpo, "drop_zero_std_groups", False):
+                dynamic_sampling_counts = ray.get(
+                    trajectory_collector.get_dynamic_sampling_counts.remote()
+                )
+                metrics.update(
+                    dynamic_sampling_step_metrics(
+                        prev_dynamic_sampling_counts, dynamic_sampling_counts
+                    )
+                )
+                prev_dynamic_sampling_counts = dynamic_sampling_counts
             logger.log_metrics(metrics, step + 1, prefix="train")
             logger.log_metrics(efficiency_loggable, step + 1, prefix="")
             # step_finished=True here since this is the final log of our current step.
