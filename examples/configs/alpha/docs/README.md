@@ -37,6 +37,7 @@
 |---|---|
 | [study/pivotrl_study.md](study/pivotrl_study.md) | PivotRL 스터디 — 방법·Ultra 사용처·공개 자산 실사·agentic SFT 이후 적용 설계·게이트 (2026-09-22, Pai 에서 이관) |
 | [study/grpo_objective_gradient.md](study/grpo_objective_gradient.md) | GRPO 목적함수·기울기 스터디 — 현 레시피에서 미분되는 것은 `log π_θ` 뿐, KL 0·clip 사문, TIS 가중치, advantage 수치 표(k=1 불연속·그룹 합≠0), Megatron 워커 집계 순서 (2026-10-15) |
+| [study/forward_reverse_kl.md](study/forward_reverse_kl.md) | Forward vs Reverse KL 스터디 — Hamad 블로그 요약(mode-covering·mode-seeking, LLM 학습별 방향, k1·k3 추정), 장난감 실험 재현(reverse KL 의 대칭점 국소 최소), MOPD 가 reverse KL 인 이유와 함의 (2026-10-19) |
 | [archive/POSTTRAIN_PREP_2026-08.md](archive/POSTTRAIN_PREP_2026-08.md) | [동결] RL 인프라 준비 종합 보고 — 타임라인·결정·게이트·산출물 맵 (2026-08-12~21) |
 
 ## upstream 참조 (NeMo-RL 본체·서브모듈 — 링크만)
