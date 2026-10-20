@@ -4537,9 +4537,16 @@ def async_grpo_train(
         f"grpo.async_grpo.rollout_overprovision must be >= 0, got {rollout_overprovision}"
     )
     late_arrival_slack = 2
+    # With dynamic sampling the buffer also holds carry-over leftovers of the
+    # consumed target until the next sample() evicts them: one more target's worth.
+    buffer_targets = max_trajectory_age_steps + (
+        1
+        if getattr(master_config.grpo.async_grpo, "drop_zero_std_groups", False)
+        else 0
+    )
     optimal_buffer_size = (
         (num_prompts_per_step + rollout_overprovision)
-        * max_trajectory_age_steps
+        * buffer_targets
         * late_arrival_slack
     )
 
