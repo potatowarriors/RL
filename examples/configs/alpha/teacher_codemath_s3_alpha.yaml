@@ -1,0 +1,42 @@
+# teacher_codemath_s3_alpha.yaml — Code·Math 3단계 (RL_PLAN.md 결정 39, 사용자 결정 2026-10-19/20).
+#
+# 2단계 결과 hf_step_00175 를 시작점으로, 전체 후보 풀을 DAPO 동적 샘플링으로 학습한다. 1·2단계 설정을 상속하고 바꾸는 것:
+#   - 데이터: teacher_codemath_s3_v1.jsonl 53,418행 (고유 52,757 = 4 풀 53,377 − 2단계 검증 256 − 2단계 기록상 16/16 364; code 1~2/16 중복 661).
+#     0/16 도 넣는다 — 학습 중 풀리기 시작하면 신호가 된다 (사용자 2026-10-19). tools/build_codemath_stage3_blend.py.
+#   - DAPO 필터 grpo.async_grpo.drop_zero_std_groups: 전부 정답·전부 오답 그룹은 버퍼 전에 버리고 rollout_groups.jsonl 에 dropped 로 남긴다.
+#     버린 몫은 초과 할당으로 메운다: 첫 바퀴 버림률 약 45% 예상 → 256 / 0.55 − 256 ≈ 210, 여유를 더해 250 (2단계 기록·P0-4 측정 기준).
+#   - 프롬프트 256 (사용자 2026-10-19). 궤적 최대 나이 2 → 1: 생성이 병목이라 앞서 생성할 이득이 작고, 낡은 샘플은 10-16 붕괴의 요인이며 버퍼가 절반이 된다.
+#   - 생성 상한 32K → 48K: P0-4 에서 어려운 수학 문제(1~2/8) 정답의 10.7% 가 28~32K 에 몰려 있다 (RL_DATA.md). 학습 시퀀스 상한 131072 는 그대로.
+#   - 에폭: 데이터로더는 순환(CyclingDataLoader)이라 "에폭"은 명목값이다. 버림률 45% 면 데이터 한 바퀴 ≈ 53,418 × 0.55 / 256 ≈ 115 step.
+#     max_num_steps 115 로 한 바퀴를 돌고, rollout_groups.jsonl 로 블렌드를 갱신해(16/16 제외 · 0/16 은 1/4 만) 다음 바퀴를 재개한다 (목표 3 바퀴).
+#     max_num_epochs 2 는 클램프(2 × 208 = 416)가 걸리지 않게 둔 값이다.
+#   - 검증 5 step 마다 (step 약 50분) · 저장 2 step 마다 (keep_top_k 2) · lr 5e-6 유지 (업데이트 수가 1/4 이라도 올리지 않는다 — 10-16 교훈).
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_codemath_s3_alpha.yaml \
+#                        data.train.data_path=<teacher_codemath_s3_v1.jsonl> data.validation.data_path=<teacher_codemath_s2_v1_val.jsonl>
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_s3_alpha.yaml DATA=<teacher_codemath_s3_v1.jsonl> VAL=<teacher_codemath_s2_v1_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_s3 <tag> \
+#         policy.model_name=/home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_codemath_s2/hf/hf_step_00175
+#   256 배치 전제 (KNOWN_ISSUES 10-13): 기동 전 main1 루트 여유 ≥ 300 GB, Ray spill 경로 확인.
+defaults: teacher_codemath_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_s3"
+  save_period: 2                        # step 약 50분 → 100분마다. 보존은 runs 의 하드링크 보존 루프(10 step 마다)
+
+grpo:
+  num_prompts_per_step: 256             # 사용자 2026-10-19
+  max_num_steps: 115                    # 데이터 한 바퀴 (버림률 45% 가정, 위 주석). 바퀴마다 블렌드 갱신 뒤 재개
+  max_num_epochs: 2                     # 클램프 비활성 (명목 에폭 208 step)
+  val_period: 5
+  val_at_start: true
+  val_at_end: true
+  async_grpo:
+    max_trajectory_age_steps: 1         # 2 → 1 (위 주석)
+    rollout_overprovision: 250          # 버림률 45% 기준 210 + 여유
+    drop_zero_std_groups: true          # DAPO 동적 샘플링 (async 구현, 2026-10-19)
+    rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
+
+policy:
+  generation:
+    max_new_tokens: 49152               # 48K (위 주석)

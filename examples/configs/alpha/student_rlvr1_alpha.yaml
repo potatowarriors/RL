@@ -290,5 +290,6 @@ logger:
       - train/reward_shaping/(penalized_rate|mean_penalty)  # DAPO 길이 감점 (결정 36, 켠 레시피에서만 나온다)
       - validation/(accuracy|avg_length|pass_k)  # held-out 검증 (결정 38, val_period 를 켠 레시피에서만 나온다)
       - validation/[^/]+/reward/mean               # agent 별 검증 보상
+      - train/dynamic_sampling/.*                  # DAPO 동적 샘플링 (결정 39, drop_zero_std_groups 를 켠 레시피에서만 나온다)
       - timing/train/(total_step_time|exposed_generation|policy_training)  # 속도
       - performance/(tokens_per_sec|generation_tokens_per_sec)
