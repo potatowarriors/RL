@@ -19,6 +19,13 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 - **대응**: 01:53 · 02:48 · 03:56 알림, 07:35 사용자 지시("아직도 정체면 중단해")로 드라이버 SIGTERM (rc 134) → 07:37 `ckpt/step_730` 에서 `main2r8` 재개 (731·732 두 step 손실, 같은 오버라이드). GPU 16장 유휴 약 6시간.
 - **대책 (결정 31, 2026-10-14 구현)**: 롤아웃 초과 할당 + 이월 — `grpo.async_grpo.rollout_overprovision` (기본 0). 수집기가 N+k 그룹을 띄우고 버퍼는 N 이 모이면 학습, 남은 그룹은 다음 step 으로 이월. 단위 테스트 PASS, GPU 스모크는 Code·Math 전 GPU 창에서. 남은 것: ② 턴당 생성 상한 축소 ③ 감시 신호 "스텝 무진척 + 엔진 1개만 토큰 증가" 자동화 (진단은 `$CLAUDE_JOB_DIR/tmp/engine_rate_probe.py` 방식 — 이름 붙은 액터 `vllm_policy-0-N` 의 `get_vllm_logger_metrics` 를 60초 간격 2회). 낙오자가 느린 기전은 여전히 미확정.
 
+## DAPO 동적 샘플링이 async 수집기를 교착시켰다 — 배치가 짧게 끝나면 아무도 깨우지 않음 (2026-10-20 ✅ `57f86ee1e`, `teacher_codemath_s3/s1` → `s2`)
+
+- **증상**: `teacher_codemath_s3/s1` (256 프롬프트 · 초과 할당 250 · `drop_zero_std_groups`) 이 step 0 검증 뒤 1,012 그룹을 생성하고(14:36) 학습을 시작하지 못했다. 드라이버는 "need 59 more trajectories for step 0" 로 대기, sub1 GPU 0%, 수집기는 "⏸️ Pausing collection: all target weights [0] … Waiting for weight update".
+- **기전**: 실측 버림률 60% (전부 오답 57% · 전부 정답 3.6%) 라 목표 0 의 506 그룹 중 남은 것이 197 < 256. 수집기는 두 목표(0, 1)가 모두 진행 중일 때 생성 한도 일시정지에 들어갔고, 이 정지는 `set_weight_version`(학습 뒤) 으로만 풀린다 — 학습은 목표 0 이 차야 가능하므로 교착. 깨우더라도 `_calculate_target_weights(v)` 가 v+1..v+age 만 돌려줘 부족한 현재 목표 v 는 보충 후보가 아니었다. 버림이 없으면 자기 배치만으로 항상 N 을 넘어 드러나지 않던 경로.
+- **수정** (`drop_zero_std_groups` 켤 때만): ① `_release_target` 이 생성 한도 이벤트를 set 해 루프를 깨운다 ② 목표 후보에 현재 목표 v 를 포함한다 (소비된 목표는 호출자가 거른다). 회귀 테스트 2개 (`test_async_dynamic_sampling.py`).
+- **교훈**: 수집기의 "목표당 N+k 생성 뒤 다음 목표" 설계는 그룹이 버려지지 않는다는 가정 위에 있다. 그룹을 버리는 기능을 넣으면 "목표가 N 에 이를 때까지 계속 생성" 이 보장되는지 코드 경로(일시정지·후보 목록·이월)를 모두 봐야 한다. 초과 할당 k 는 이월 깊이일 뿐 정확성 조건이 아니다. 손실: 생성 2시간 40분.
+
 ## `main2r6` (256 프롬프트) 가 step 729 에서 죽었다 — Ray 객체 spill 이 main1 루트 디스크를 채움 (2026-10-13 ✅ 디스크 정리 뒤 `main2r7` 재개, 근본 대책은 클러스터 재기동 때)
 
 - **증상 (23:39, rc 1)**: step 729/735 학습 뒤 드라이버가 `log_generation_metrics_to_wandb` → `wandb run.log(figure)` 의 JSON 덤프에서 예외로 종료. 그 앞에 raylet 의 `OSError: [Errno 28] No space left on device: /tmp/ray/session_…/ray_spilled_objects/…` 4,822회, Ray 로그 싱크 기록 실패, 뒤이어 엔진 셧다운과 Gym 의 `ClientOSError` 334회·`ServerDisconnectedError` 72회 (후행 증상). 마지막 체크포인트 `ckpt/step_725` (22:52, NFS) 는 무사.
