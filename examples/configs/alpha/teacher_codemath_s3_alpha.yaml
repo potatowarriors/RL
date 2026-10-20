@@ -6,7 +6,7 @@
 #   - DAPO 필터 grpo.async_grpo.drop_zero_std_groups: 전부 정답·전부 오답 그룹은 버퍼 전에 버리고 rollout_groups.jsonl 에 dropped 로 남긴다.
 #     버린 몫은 초과 할당으로 메운다: 첫 바퀴 버림률 약 45% 예상 → 256 / 0.55 − 256 ≈ 210, 여유를 더해 250 (2단계 기록·P0-4 측정 기준).
 #     s1 실측(10-20): 버림률 60% (전부 오답 57% · 전부 정답 3.6%). 초과 할당은 그대로 둔다 — 부족분은 보충 생성이 메우고(수집기 수정 `57f86ee1e`), 250 은 이월 깊이만 정한다.
-#   - 프롬프트 256 (사용자 2026-10-19). 궤적 최대 나이 2 → 1: 생성이 병목이라 앞서 생성할 이득이 작고, 낡은 샘플은 10-16 붕괴의 요인이며 버퍼가 절반이 된다.
+#   - 프롬프트 128 (처음 256 — 호스트 OOM, 위 num_prompts_per_step 주석). 궤적 최대 나이 2 → 1: 생성이 병목이라 앞서 생성할 이득이 작고, 낡은 샘플은 10-16 붕괴의 요인이며 버퍼가 절반이 된다.
 #   - 생성 상한 32K → 48K: P0-4 에서 어려운 수학 문제(1~2/8) 정답의 10.7% 가 28~32K 에 몰려 있다 (RL_DATA.md). 학습 시퀀스 상한 131072 는 그대로.
 #   - 에폭: 데이터로더는 순환(CyclingDataLoader)이라 "에폭"은 명목값이다. 버림률 60% 면 데이터 한 바퀴 ≈ 53,418 × 0.4 / 256 ≈ 83 step.
 #     max_num_steps 85 로 한 바퀴를 돌고, rollout_groups.jsonl 로 블렌드를 갱신해(16/16 제외 · 0/16 은 1/4 만) 다음 바퀴를 재개한다 (목표 3 바퀴).
@@ -23,21 +23,25 @@ defaults: teacher_codemath_alpha.yaml
 
 checkpointing:
   checkpoint_dir: "results/alpha_teacher_codemath_s3"
-  save_period: 2                        # step 약 50분 → 100분마다. 보존은 runs 의 하드링크 보존 루프(10 step 마다)
+  save_period: 4                        # step 약 35분 → 약 2.3시간마다. 보존은 runs 의 하드링크 보존 루프(40 step 마다)
 
 grpo:
-  num_prompts_per_step: 256             # 사용자 2026-10-19
-  max_num_steps: 85                     # 데이터 한 바퀴 ≈ 53,418 × 0.4 / 256 (s1 실측 버림률 60%: code 66% · math 55%). 바퀴마다 블렌드 갱신 뒤 재개
-  max_num_epochs: 2                     # 클램프 비활성 (명목 에폭 208 step)
-  val_period: 5
+  num_prompts_per_step: 128             # 256 → 128 (사용자 결정 2026-10-20 22:10, KNOWN_ISSUES 10-20 호스트 OOM): CP8·EP8 은 DP1 이라 학습 워커 8개가 각각 전체 배치를 호스트에 올린다.
+                                        #   256 × 17.5K 토큰 = 84 GB 배치 → 워커당 150 GB, 합계 1.2 TB 로 main1 1.9 TB 를 넘었다. 128 이면 배치 42 GB · 워커당 약 80 GB.
+  max_num_steps: 167                    # 데이터 한 바퀴 ≈ 53,418 × 0.4 / 128 (s1~s3 실측 유지율 40%). 바퀴마다 블렌드 갱신 뒤 재개
+  max_num_epochs: 2                     # 클램프 비활성 (명목 에폭 417 step)
+  val_period: 10                        # step 약 35분 → 약 6시간마다
   val_at_start: true
   val_at_end: true
   async_grpo:
     max_trajectory_age_steps: 1         # 2 → 1 (위 주석)
-    rollout_overprovision: 250          # 버림률 45% 기준 210 + 여유
+    rollout_overprovision: 125          # 첫 배치 253 그룹; 이후 보충은 유지율로 크기 결정 (a3b6a3380)
     drop_zero_std_groups: true          # DAPO 동적 샘플링 (async 구현, 2026-10-19)
     rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
 
 policy:
+  megatron_cfg:
+    scheduler:
+      lr_warmup_iters: 0                # 워밍업 제거 (사용자 2026-10-20): Muon 은 업데이트를 정규화해 빈 모멘텀에서도 보폭이 튀지 않는다. 128 배치 step ≈ 35분이라 10 step 워밍업은 6시간
   generation:
     max_new_tokens: 49152               # 48K (위 주석)
