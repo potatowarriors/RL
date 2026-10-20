@@ -170,3 +170,32 @@ def test_disabled_keeps_zero_variance_groups():
     assert buffered == {0}
     replay_buffer.add.remote.assert_awaited_once()
     assert collector.get_dynamic_sampling_counts() == {}
+
+
+def test_release_target_wakes_paused_loop_only_with_dynamic_sampling():
+    # Regression: 2026-10-20 teacher_codemath_s3/s1 deadlock. Both targets were
+    # in flight, the loop parked on the generation limit, the batches finished
+    # short (dropped groups) and nothing could wake the loop.
+    collector, _ = _collector(drop=True)
+    collector._generating_targets.add(0)
+    collector._generation_limit_cleared.clear()
+    collector._release_target(0)
+    assert 0 not in collector._generating_targets
+    assert collector._generation_limit_cleared.is_set()
+
+    collector, _ = _collector(drop=False)
+    collector._generating_targets.add(0)
+    collector._generation_limit_cleared.clear()
+    collector._release_target(0)
+    assert not collector._generation_limit_cleared.is_set()  # upstream behaviour kept
+
+
+def test_target_weights_include_pending_target_with_dynamic_sampling():
+    collector, _ = _collector(drop=True)
+    collector.initial_weight_version = 0
+    assert collector._calculate_target_weights(0) == [0, 1, 2]  # initial: unchanged
+    assert collector._calculate_target_weights(5) == [5, 6, 7]  # pending target kept
+
+    collector, _ = _collector(drop=False)
+    collector.initial_weight_version = 0
+    assert collector._calculate_target_weights(5) == [6, 7]  # upstream behaviour kept
