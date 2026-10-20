@@ -318,6 +318,13 @@ class AsyncTrajectoryCollector:
                 )
             ]
 
+        if self._drop_zero_std_groups:
+            # Dynamic sampling can leave the pending target (= this weight
+            # version) short after its batch; keep it eligible for gap-fill.
+            # Consumed targets are filtered out by the caller.
+            return [
+                generation_weight_version + i for i in range(0, max_trajectory_age + 1)
+            ]
         return [generation_weight_version + i for i in range(1, max_trajectory_age + 1)]
 
     def _get_next_target_for_generation(
@@ -967,6 +974,17 @@ class AsyncTrajectoryCollector:
                 print(
                     f"🧹 Released reservation for target weight {target_weight_version}"
                 )
+        # With dynamic sampling a finished batch can leave its target short
+        # (dropped groups are resolved, not buffered). The collection loop may
+        # be parked on the generation limit, which only a weight update clears
+        # — and training cannot update weights until the target fills. Wake the
+        # loop so it re-evaluates the targets and gap-fills.
+        if self._drop_zero_std_groups and not self._generation_limit_cleared.is_set():
+            self._generation_limit_cleared.set()
+            print(
+                f"🔄 Target weight {target_weight_version} released with dynamic "
+                "sampling on — re-checking generation limits"
+            )
 
     def _compute_teacher_logprobs(
         self,
