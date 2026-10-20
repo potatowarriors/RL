@@ -112,6 +112,21 @@ def zero_std_group_kind(rewards: Any) -> Optional[str]:
     return "all_correct" if values[0] > 0 else "all_wrong"
 
 
+def max_generated_tokens(final_batch: BatchedDataDict[DatumSpec]) -> int:
+    """Longest assistant-token count over the samples of a prompt group."""
+    return max(
+        (
+            sum(
+                len(message["token_ids"])
+                for message in message_log
+                if message.get("role") == "assistant"
+            )
+            for message_log in final_batch["message_log"]
+        ),
+        default=0,
+    )
+
+
 def rollout_group_record(
     final_batch: BatchedDataDict[DatumSpec],
     *,
@@ -250,6 +265,12 @@ class AsyncTrajectoryCollector:
         )
         self._dynamic_sampling_counts: collections.Counter[str] = collections.Counter()
         self._dynamic_sampling_lock: _threading.Lock = _threading.Lock()
+        self._drop_groups_over_gen_tokens: int = int(
+            getattr(
+                self.master_config.grpo.async_grpo, "drop_groups_over_gen_tokens", 0
+            )
+            or 0
+        )
 
         # Timer for efficiency metrics
         self._efficiency_timer = ThreadSafeTimer(context={"worker": "collector"})
@@ -1353,8 +1374,14 @@ class AsyncTrajectoryCollector:
         final_batch_cpu = rollout_result.final_batch.to("cpu")
         rollout_metrics = rollout_result.rollout_metrics
 
-        if self._drop_zero_std_groups:
-            dropped = zero_std_group_kind(final_batch_cpu["total_reward"])
+        if self._drop_zero_std_groups or self._drop_groups_over_gen_tokens:
+            dropped = None
+            if self._drop_groups_over_gen_tokens:
+                longest = max_generated_tokens(final_batch_cpu)
+                if longest > self._drop_groups_over_gen_tokens:
+                    dropped = "overlong"
+            if dropped is None and self._drop_zero_std_groups:
+                dropped = zero_std_group_kind(final_batch_cpu["total_reward"])
             with self._dynamic_sampling_lock:
                 self._dynamic_sampling_counts[dropped or "kept"] += 1
                 counts = dict(self._dynamic_sampling_counts)
@@ -1370,7 +1397,7 @@ class AsyncTrajectoryCollector:
                 )
                 total = sum(counts.values())
                 print(
-                    f"🧹 Dropped zero-variance prompt group ({dropped}, "
+                    f"🧹 Dropped prompt group ({dropped}, "
                     f"target_weight={target_weight_version}) — dynamic sampling "
                     f"so far: kept {counts.get('kept', 0)}/{total}, "
                     f"all_wrong {counts.get('all_wrong', 0)}, "
