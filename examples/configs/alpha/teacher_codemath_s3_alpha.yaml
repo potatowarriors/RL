@@ -38,6 +38,20 @@ grpo:
     rollout_overprovision: 125          # 첫 배치 253 그룹; 이후 보충은 유지율로 크기 결정 (a3b6a3380)
     drop_zero_std_groups: true          # DAPO 동적 샘플링 (async 구현, 2026-10-19)
     rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
+    drop_groups_over_gen_tokens: ${policy.generation.max_new_tokens}   # 생성 토큰이 상한을 넘는 샘플(2회 호출 궤적, 최대 98K 관측)이 든 그룹은 버린다 — 학습 배치는 최장 행에 맞춰 패딩되어 CP 랭크 8개에 복제된다 (KNOWN_ISSUES 10-20 호스트 OOM)
+
+env:
+  nemo_gym:
+    # 단일 턴 과제: 응답이 상한에서 잘리면 Gym simple_agent 가 모델을 다시 불러 궤적이 2회 호출(최대 98K 토큰)이 된다.
+    # max_steps 1 로 한 번만 부른다 (잘린 응답은 그대로 채점 → 오답). drop_groups_over_gen_tokens 는 2중 안전장치.
+    code_gen_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+    math_with_judge_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
 
 policy:
   megatron_cfg:

@@ -140,6 +140,8 @@ def test_dynamic_sampling_step_metrics():
     assert m["dynamic_sampling/all_wrong_fraction"] == 0.3
     assert m["dynamic_sampling/all_correct_fraction"] == 0.1
     assert dynamic_sampling_step_metrics({}, {})["dynamic_sampling/groups"] == 0.0
+    m2 = dynamic_sampling_step_metrics({}, {"kept": 3, "overlong": 1})
+    assert m2["dynamic_sampling/overlong_fraction"] == 0.25
 
 
 def test_zero_variance_group_is_dropped_resolved_and_logged(tmp_path):
@@ -199,3 +201,57 @@ def test_target_weights_include_pending_target_with_dynamic_sampling():
     collector, _ = _collector(drop=False)
     collector.initial_weight_version = 0
     assert collector._calculate_target_weights(5) == [6, 7]  # upstream behaviour kept
+
+
+def test_overlong_group_is_dropped_before_zero_std_check(tmp_path):
+    # 2026-10-20: a multi-call trajectory (~98K generated tokens) pads the whole
+    # training batch on every CP rank and blew main1's host memory.
+    from nemo_rl.algorithms.async_utils.trajectory_collector import (
+        max_generated_tokens,
+    )
+
+    collector, replay_buffer = _collector(drop=True, log_path=str(tmp_path / "g.jsonl"))
+    collector._drop_groups_over_gen_tokens = 5
+    batch = _group([1.0, 0.0])  # has reward variance -> would normally be kept
+    batch["message_log"][1][1]["token_ids"] = torch.arange(9)  # 9 > 5 generated tokens
+    assert max_generated_tokens(batch) == 9
+    result = RolloutGroupResult(
+        group_index=0, final_batch=batch, rollout_metrics={}, task_index=None
+    )
+    buffered = set()
+    asyncio.run(
+        collector._enqueue_rollout_group(
+            rollout_result=result,
+            generation_weight_version=0,
+            target_weight_version=0,
+            expected_prompt_groups=1,
+            buffered_group_indices=buffered,
+            collection_started_at=0.0,
+        )
+    )
+    assert buffered == {0}
+    replay_buffer.add.remote.assert_not_called()
+    rec = json.loads(open(tmp_path / "g.jsonl").read().splitlines()[0])
+    assert rec["dropped"] == "overlong" and rec["gen_tokens"] == [4, 9]
+    assert collector.get_dynamic_sampling_counts() == {"overlong": 1}
+
+
+def test_overlong_limit_zero_disables(tmp_path):
+    collector, replay_buffer = _collector(drop=True, log_path=str(tmp_path / "g.jsonl"))
+    assert collector._drop_groups_over_gen_tokens == 0
+    batch = _group([1.0, 0.0])
+    batch["message_log"][1][1]["token_ids"] = torch.arange(9)
+    result = RolloutGroupResult(
+        group_index=0, final_batch=batch, rollout_metrics={}, task_index=None
+    )
+    asyncio.run(
+        collector._enqueue_rollout_group(
+            rollout_result=result,
+            generation_weight_version=0,
+            target_weight_version=0,
+            expected_prompt_groups=1,
+            buffered_group_indices=set(),
+            collection_started_at=0.0,
+        )
+    )
+    replay_buffer.add.remote.assert_awaited_once()

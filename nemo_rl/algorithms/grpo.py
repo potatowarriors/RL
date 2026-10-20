@@ -215,6 +215,12 @@ class AsyncGRPOConfig(BaseModel, extra="allow"):
     # "dropped"). The step then waits for more groups, so size
     # rollout_overprovision to the expected drop rate (N / (1 - drop) - N).
     drop_zero_std_groups: bool = False
+    # Drop prompt groups containing a sample whose generated tokens exceed
+    # this many (0 disables). Guards host memory: the training batch is padded
+    # to its longest row on every CP rank, and a multi-call trajectory can be
+    # several times policy.generation.max_new_tokens. Dropped groups are
+    # logged with "dropped": "overlong" and refilled like zero-variance ones.
+    drop_groups_over_gen_tokens: int = 0  # effective only with drop_zero_std_groups
 
 
 class RewardPenaltyTokenIdsConfig(BaseModel, extra="allow"):
@@ -4265,7 +4271,7 @@ def dynamic_sampling_step_metrics(
     """
     delta = {
         k: current.get(k, 0) - previous.get(k, 0)
-        for k in ("kept", "all_wrong", "all_correct")
+        for k in ("kept", "all_wrong", "all_correct", "overlong")
     }
     total = sum(delta.values())
     metrics: dict[str, float] = {"dynamic_sampling/groups": float(total)}
