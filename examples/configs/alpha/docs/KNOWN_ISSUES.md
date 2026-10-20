@@ -19,6 +19,13 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 - **대응**: 01:53 · 02:48 · 03:56 알림, 07:35 사용자 지시("아직도 정체면 중단해")로 드라이버 SIGTERM (rc 134) → 07:37 `ckpt/step_730` 에서 `main2r8` 재개 (731·732 두 step 손실, 같은 오버라이드). GPU 16장 유휴 약 6시간.
 - **대책 (결정 31, 2026-10-14 구현)**: 롤아웃 초과 할당 + 이월 — `grpo.async_grpo.rollout_overprovision` (기본 0). 수집기가 N+k 그룹을 띄우고 버퍼는 N 이 모이면 학습, 남은 그룹은 다음 step 으로 이월. 단위 테스트 PASS, GPU 스모크는 Code·Math 전 GPU 창에서. 남은 것: ② 턴당 생성 상한 축소 ③ 감시 신호 "스텝 무진척 + 엔진 1개만 토큰 증가" 자동화 (진단은 `$CLAUDE_JOB_DIR/tmp/engine_rate_probe.py` 방식 — 이름 붙은 액터 `vllm_policy-0-N` 의 `get_vllm_logger_metrics` 를 60초 간격 2회). 낙오자가 느린 기전은 여전히 미확정.
 
+## 256 프롬프트 · 48K 런이 main1 호스트 메모리 부족으로 죽었다 — CP8/DP1 이라 학습 워커 8개가 전체 배치를 각자 보유 (2026-10-20 ✅ 128 로 재시작 `s4`)
+
+- **증상**: `teacher_codemath_s3/s3` step 3 학습 시작 직후 `ray.exceptions.OutOfMemoryError: 11 worker(s) were killed … 1743.02GB / 1772.00GB`. raylet `threshold_memory_monitor`: 사용 1,855 GB > 임계 1,808 GB (95% of 1,903 GB). cgroup `memory.peak` 1,903 GB 로 실제 소진. 10-13 과 달리 디스크가 아니라 RAM.
+- **기전**: OOM 보고서의 상위 사용자는 MegatronPolicyWorker 8개 각 145~160 GB. 학습 배치 객체는 84 GB (`bytes created by worker: 84,351,691,549`; 4,096 시퀀스 × 평균 17.5K 토큰 = 72M 토큰, 토큰당 약 1.2 KB — R3 라우팅 기록이 대부분). 레시피가 CP8·EP8 이라 DP=1 이고 NeMo-RL 은 DP 샤드 단위로 데이터를 나누므로 워커마다 전체 배치 + 변환 복사본을 호스트에 올린다. 여기에 raylet 77 GB · spill IO 워커 3개 약 180 GB(1.1 TB spill 처리 뒤 메모리를 반환하지 않음) · Pai shm 66 GB. 1·2단계(64, 21 GB 배치)와 10-13 STEM 256(응답 5K, 약 24 GB)은 임계 아래였다.
+- **대응**: 사용자 결정으로 128 프롬프트(배치 42 GB → 워커당 약 80 GB)로 `hf_step_00175` 에서 새로 시작 (`61a1e8c4a`, 워밍업 0). 호스트 사용량 1.5 TB 경보를 watcher 에 추가. spill 디렉토리 이름 오류(함정 표 10-20)도 같이 바로잡음.
+- **교훈**: 프롬프트 수를 올릴 때 GPU 메모리만이 아니라 **호스트 메모리 = 배치 객체 크기 × CP 랭크 수(+ 복사본)** 를 먼저 계산한다. 256 을 다시 쓰려면 CP4×DP2(64K 패킹) 로 워커당 배치를 절반으로 줄이거나(R4·G2 재실행), 워커가 자기 몫만 받도록 데이터 경로를 바꿔야 한다.
+
 ## DAPO 동적 샘플링이 async 수집기를 교착시켰다 — 배치가 짧게 끝나면 아무도 깨우지 않음 (2026-10-20 ✅ `57f86ee1e`, `teacher_codemath_s3/s1` → `s2`)
 
 - **증상**: `teacher_codemath_s3/s1` (256 프롬프트 · 초과 할당 250 · `drop_zero_std_groups`) 이 step 0 검증 뒤 1,012 그룹을 생성하고(14:36) 학습을 시작하지 못했다. 드라이버는 "need 59 more trajectories for step 0" 로 대기, sub1 GPU 0%, 수집기는 "⏸️ Pausing collection: all target weights [0] … Waiting for weight update".
