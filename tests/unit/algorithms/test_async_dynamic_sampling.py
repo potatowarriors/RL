@@ -140,6 +140,8 @@ def test_dynamic_sampling_step_metrics():
     assert m["dynamic_sampling/all_wrong_fraction"] == 0.3
     assert m["dynamic_sampling/all_correct_fraction"] == 0.1
     assert dynamic_sampling_step_metrics({}, {})["dynamic_sampling/groups"] == 0.0
+    m2 = dynamic_sampling_step_metrics({}, {"kept": 3, "overlong": 1})
+    assert m2["dynamic_sampling/overlong_fraction"] == 0.25
 
 
 def test_zero_variance_group_is_dropped_resolved_and_logged(tmp_path):

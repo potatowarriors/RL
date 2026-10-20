@@ -1374,7 +1374,9 @@ class AsyncTrajectoryCollector:
         final_batch_cpu = rollout_result.final_batch.to("cpu")
         rollout_metrics = rollout_result.rollout_metrics
 
-        if self._drop_zero_std_groups or self._drop_groups_over_gen_tokens:
+        if self._drop_zero_std_groups:
+            # The over-length drop rides on dynamic sampling: only that mode
+            # wakes the loop and gap-fills a target left short by a drop.
             dropped = None
             if self._drop_groups_over_gen_tokens:
                 longest = max_generated_tokens(final_batch_cpu)
