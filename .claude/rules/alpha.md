@@ -55,7 +55,7 @@ alpha 지침은 여기와 [`examples/configs/alpha/CLAUDE.md`](../../examples/co
 승인 · 독립 검토 · 검증 · 공유 워킹트리 git · 기록 · 보고 문체는 사용자 공통 원칙 `/home/work/vidsearch/.claude-config/CLAUDE.md` 가 정본이다.
 여기에는 alpha 고유 적용만 둔다.
 - 체크포인트·레시피·브리지·플러그인을 바꾸면 `GATES.md` 의 재실행 조건을 따른다. 런 기동·재개·재시작은 `alpha-launch` skill 순서대로 한다.
-- **세션 점검**: 이 세션 컨텍스트에 "공통 작업 원칙" 이 없으면 설정 위치(`CLAUDE_CONFIG_DIR`)가 빠진 세션이다. 작업 전에 사용자에게 알리고 그 파일을 Read 로 읽는다.
+- **세션 점검**: 사용자 수준 CLAUDE.md(`/home/work/vidsearch/.claude-config/<노드>/CLAUDE.md`)의 내용이 이 세션 컨텍스트에 없으면 `CLAUDE_CONFIG_DIR` 없이 뜬 세션이다. 작업 전에 사용자에게 알리고 `/home/work/vidsearch/.claude-config/CLAUDE.md` 를 Read 로 읽는다.
 
 ## 커밋·이력 규칙
 

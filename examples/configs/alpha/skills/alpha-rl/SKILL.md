@@ -6,7 +6,7 @@ when_to_use: alpha 레시피 작성·수정; GRPO·RLVR 런 실행·감시·분�
 
 # alpha RL 문서 지도
 
-이 skill 은 **지도**다. 지침은 복사하지 않는다 — 작업 규칙과 upstream skill 적용표는 `.claude/rules/alpha.md`,
+이 skill 은 **지도**다. 지침은 복사하지 않는다 — 승인·검증·git·보고 원칙은 사용자 공통 원칙 `/home/work/vidsearch/.claude-config/CLAUDE.md`, 리포 고유 작업 규칙과 upstream skill 적용표는 `.claude/rules/alpha.md`,
 모델 불변량·레시피 규약·함정 표는 `examples/configs/alpha/CLAUDE.md` 가 정본이다.
 아래 경로는 리포 루트 기준이고, `alpha/` 는 `examples/configs/alpha/` 를 줄인 것이다.
 
@@ -40,4 +40,4 @@ when_to_use: alpha 레시피 작성·수정; GRPO·RLVR 런 실행·감시·분�
 
 Megatron-Bridge 와 Gym 의 skill 은 각 서브모듈 안의 `.claude/skills/` 에 있다. 그 서브모듈 파일을 Read·Edit 하기 전에는
 skill 목록에 나타나지 않는다. 필요하면 `alpha/docs/README.md` "upstream 참조" 표의 경로에서 `SKILL.md` 를 직접 읽는다.
-이 skill 들은 각 서브모듈 기여용으로 쓰였다 — 기술 내용만 가져오고, 커밋·문서 규칙은 `.claude/rules/alpha.md` 를 따른다.
+이 skill 들은 각 서브모듈 기여용으로 쓰였다 — 기술 내용만 가져오고, 커밋·문서 규칙은 공통 원칙과 `.claude/rules/alpha.md` 를 따른다.
