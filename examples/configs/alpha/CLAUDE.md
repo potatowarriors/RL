@@ -3,7 +3,7 @@
 alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "alpha"`) 의 RL 단계 허브다.
 이 파일은 **지침만** 담는다. 상태는 [`docs/STATUS.md`](docs/STATUS.md), 문서 색인은 [`docs/README.md`](docs/README.md),
 사고 서사는 [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md), 게이트는 [`docs/GATES.md`](docs/GATES.md).
-작업 규칙(검증·커밋·문서·보고)은 `.claude/rules/alpha.md`. 새 사실은 docs 에 쓰고 여기에는 한 줄만 둔다.
+작업 규칙은 `.claude/rules/alpha.md`(리포 고유)와 사용자 공통 원칙 `/home/work/vidsearch/.claude-config/CLAUDE.md`(승인·검증·git·보고). 새 사실은 docs 에 쓰고 여기에는 한 줄만 둔다.
 
 ## 모델 불변량 (RL 에 필요한 것만)
 
