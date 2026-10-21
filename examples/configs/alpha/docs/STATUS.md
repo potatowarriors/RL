@@ -63,12 +63,14 @@ _마지막 갱신: 2026-10-21 19:50 (배포·평가 GDN 상태 fp32 결정 반�
 | MiMo-V2.6-RL Code — agentic teacher(SWE) 후보 (사용자 2026-10-21) | 조사·기록 완료 (GPU 미사용). 진행하면 권고 1~5 대로 — 첫 작업은 alpha 통과율 측정 (`RL_PLAN.md` 결정 40) | MOPD1 뒤. 착수 때 `study/mimo_code_harbor.md` §7 재확인 (원본 갱신 · upstream Gym Harbor 학습 지원) |
 | Muon optimizer-state offload 포팅 (Pai 기능 #4) | R4 실측상 1노드 128K/CP8 에 불필요 (ES 조건) — 보류 | 컨텍스트 > 128K 이거나 ES 기각 시 |
 | logprob backward 메모리 절감 (int64 `one_hot` → scatter, chunk 축소, CP 호환 fused linear logprobs) | ES 로 128K 가 들어가 불필요 — 보류. chunk 1024 는 peak −3.8 GB 실측 | ES 기각 시 |
+| R4 하네스 보완 (2026-10-21 적대적 검토, `GATES.md` R4 행) | 합성 `prev_logprobs` · reference 경로 없음 · torch 밖 메모리 미측정 3건이 남음. 코드 변경이라 승인 대상 | 다음 R4 재실행 전 (CP4×DP2 검토 등) |
 | RL 환경 데이터의 도구 `description` 필수 검사 | 현 블렌드 0건이라 미착수 (R3 렌더 차이 #2) | 새 RL 환경 추가 시 |
 
 ## 완료
 
 | 트랙 | 결과 | 정본 |
 |---|---|---|
+| 검토 규칙 재설계 (2026-10-21, 사용자 결정) | 작업 종류별 사전 검토 → **문제 진단 독립 검증** + **스모크·게이트 적대적 검토** + **프론티어 비교표**. 규칙은 공통 원칙, 절차는 사용자 skill `problem-diagnosis`·`frontier-research`, 대장 `FRONTIER.md` (`8f9494e50`). 적용 전 검증: 10-20 OOM 블라인드 2단계 보정 6/6 (+ 새 관측 3, 미교차검증) · 발동 시험 3/3 · R4 원본 하네스 게이트 검토가 10-07 결함 2건을 다시 찾음 | 공통 원칙 · `docs/FRONTIER.md` |
 | 에이전트 설정 정리 (2026-10-21, 사용자 승인) | upstream skill 6개 끄기 `31c3e0964` · `alpha-launch` skill `e488c5c74` · 사람 수준 규칙을 공통 사용자 CLAUDE.md 로 이관 `37b30120b` (Pai `d8f8e8b`). 독립 검토(Opus·xhigh)는 사용자 지시로 적용과 병행: BLOCKER 0 · HIGH 2 (검토 전 적용 = 사용자 지시 · Pai 공유 index 경합 = 커밋으로 해소) · MEDIUM 5 · LOW 8 → 결함 수정 반영 (세션 점검 문구 · migrate/mirror 가 링크 삭제 · 일반 파일 백업 가드 · 낡은 참조 · 경로). 메모리 정리 완료 — 두 프로젝트 피드백 16건 삭제, ko_chat 결정 이력 1건 유지 (백업 `/home/work/vidsearch/.claude-config/memory_backup_20261021/`). 남은 것: 정본 이력 없음(D안 수용) · 세션 점검 문구는 단순 질문에서 무시됨(시험) · sub1 로드 검증은 sub1 로그인 뒤 | `/home/work/vidsearch/.claude-config/CLAUDE.md` · `.claude/rules/alpha.md` |
 | 첫 RLVR 런 · v2 · 속도 최적화 (2026-10-07 ~ 10-08, `RL_PLAN.md` 결정 15~18) | v1 첫 런은 정확성 결함 4건과 7스텝 멈춤으로 정지 → upstream 이식 7건 뒤 v2 설정 G8 PASS. 속도 레버 E1 채택 (정상 상태 15.8 → 12.3 분/스텝, KL 같음). rollout 긴 꼬리 계측 T0: 긴 요청 대기 0~3 s, 64K 디코딩 17~37분이 임계 경로 → 우선순위 시험 생략, 투기 디코딩 기각. advantage 0 제외는 Z1 PASS 뒤 기본 꺼짐 병합. 현 속도 E2E 1,650~1,830 tok/s/GPU 는 NeMo-RL H100 기준 범위이고 학습 MFU 는 약 5% 다. Ultra 형태 일정 42~44일 → 결정 18 로 규모 축소 (1차 teacher 트랙). 모두 1~10스텝 시험 런이라 학습된 모델은 없다 | `RLVR_READINESS.md` §5.1~§5.6 · `GATES.md` G8·Z1 |
 | RL 인프라 준비 (2026-08-12 ~ 08-21) | fork 3종 · AlphaBridge · vLLM 플러그인 · 게이트 M1~M3·K1·D1 · RL 블렌드 2종 · FlashQLA opt-in 통합 · 2노드 분리 토폴로지 확정 | `archive/POSTTRAIN_PREP_2026-08.md` |
