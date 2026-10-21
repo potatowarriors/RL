@@ -37,18 +37,18 @@ alpha 지침은 여기와 [`examples/configs/alpha/CLAUDE.md`](../../examples/co
 - upstream 훅(UserPromptSubmit)이 매 프롬프트 "skill 먼저 호출"을 요구한다. alpha 작업이면 **`alpha-rl` skill** 을 호출한다 —
   작업 유형별로 읽을 alpha 문서·upstream 문서·서브모듈 skill 의 지도다. upstream skill 은 아래 적용표를 따른다.
 
-## upstream skill 적용표 (2026-10-08)
+## upstream skill 적용표 (2026-10-08 · 끄기 설정 2026-10-21)
 
 | 분류 | skill | alpha 에서 |
 |---|---|---|
-| 적용 | `config-conventions`·`error-handling`·`linting-and-formatting`·`testing`(Ray pragma) | 본체 수정·upstream 이식 때 |
+| 적용 | `config-conventions`·`error-handling`·`linting-and-formatting`·`testing`(Ray pragma)·`review-pr`(로컬 브랜치 모드) | 본체 수정·upstream 이식·본체 패치 검토 때 |
 | 적용 | `contributing` | Conventional Commits + `git commit -s`. `/ok to test`(NVIDIA CI)만 무관 |
-| 적용 | `review-pr` 로컬 브랜치 모드 | 본체 패치 검토 |
 | 일부 | `nemo-rl-docs` | docstring 규칙만. "새 기능 문서는 `docs/` 에"는 alpha 기능에 적용하지 않는다 |
 | 일부 | `build-and-dependency` | 참고만. uv 0.11.28 고정·`clean_run.sh` 가 우선 (`alpha-submodules.md`·alpha `docs/SETUP.md`) |
 | 쓰지 않음 | `copyright` | alpha 고유 파일(`examples/configs/alpha/**`)에는 NVIDIA 저작권 헤더를 달지 않는다 (사용자 결정 2026-10-08) |
-| 쓰지 않음 | `nemo-rl-session-memory`·`nemo-rl-auto-research` | 상태는 `STATUS.md`, 실험 브랜치는 커밋 규칙 4 가 대신한다. `session/` 디렉토리를 만들지 않는다 |
-| 무관 | `launch-nemo-rl`(k8s)·`nemo-rl-brev-etiquette`(Brev)·`cicd`(NVIDIA CI)·`review-pr-team` | — |
+| 쓰지 않음 | `nemo-rl-session-memory`·`nemo-rl-auto-research` | 상태는 `STATUS.md`, 실험 브랜치는 커밋 규칙 4 가 대신한다. `session/` 디렉토리를 만들지 않는다. 설정 `off` |
+| 무관 | `launch-nemo-rl`(k8s)·`nemo-rl-brev-etiquette`(Brev)·`cicd`(NVIDIA CI)·`review-pr-team` | 설정 `user-invocable-only` — 모델은 고르지 않고 사용자가 `/이름` 으로만 부른다 |
+| 설정 | `.claude/settings.local.json` 의 `skillOverrides` (git 미추적, 이 표가 정본) | rebase 로 들어온 새 upstream skill 은 기본으로 켜진다 → 이 표에 분류하고 설정에 반영한다 |
 
 ## 승인 규칙 (사용자 지시 2026-10-10)
 
