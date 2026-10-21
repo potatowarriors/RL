@@ -59,6 +59,7 @@ _마지막 갱신: 2026-10-21 07:15 (3단계 `s5` step 12/167 정상 — step �
 | vLLM 롤아웃측 FlashQLA | prefill 한정 이득, vllm 코드 변경 필요 — 후순위 | 롤아웃이 병목일 때 |
 | fla 0.4.2 네이티브 GQA NaN upstream 보고 | 2026-08-18 "보고 예정" 기록 뒤 실행 여부 미기록 (mcore 는 MHA 확장으로 우회 중, 원장 #14) | — |
 | RL 데이터 후속 4건 (Gym 프리페치·Math-v2 복원·SWE 상한·litmus-bench) | 미착수 | `RL_DATA.md` §4 |
+| MiMo-V2.6-RL Code — agentic teacher(SWE) 후보 (사용자 2026-10-21) | 조사·기록 완료 (GPU 미사용). 진행하면 권고 1~5 대로 — 첫 작업은 alpha 통과율 측정 (`RL_PLAN.md` 결정 40) | MOPD1 뒤. 착수 때 `study/mimo_code_harbor.md` §7 재확인 (원본 갱신 · upstream Gym Harbor 학습 지원) |
 | Muon optimizer-state offload 포팅 (Pai 기능 #4) | R4 실측상 1노드 128K/CP8 에 불필요 (ES 조건) — 보류 | 컨텍스트 > 128K 이거나 ES 기각 시 |
 | logprob backward 메모리 절감 (int64 `one_hot` → scatter, chunk 축소, CP 호환 fused linear logprobs) | ES 로 128K 가 들어가 불필요 — 보류. chunk 1024 는 peak −3.8 GB 실측 | ES 기각 시 |
 | RL 환경 데이터의 도구 `description` 필수 검사 | 현 블렌드 0건이라 미착수 (R3 렌더 차이 #2) | 새 RL 환경 추가 시 |

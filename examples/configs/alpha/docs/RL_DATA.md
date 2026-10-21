@@ -43,6 +43,7 @@ RL 데이터의 현행 정본이다. 2026-10-07 이관 출처: Pai `SFT_RL_DATAS
 | `Multi-subject-RLVR` (ExamQA) | 573,002 (+ test 6,000) | Apache-2.0 | 변환 필요 (query·label) | 자유형 답 → LLM judge | 없음 | Ultra `reasoning.jsonl` 5,236행의 출처 |
 | `Nemotron-RL-instruction_following` | 46,391 | ODC-BY | `agent_ref` 추가 → instruction_following | 프로그램 (48개 id 모두 Gym 등록) | 없음 | Ultra IF 고유 15,166 을 모두 포함 |
 | `SWE-Gym` · `SWE-rebench-V2` | 2,438 · 32,079 | MIT · CC BY 4.0 + 저장소별 | 변환 필요 | 컨테이너 | — | 2차 agentic 용 |
+| `XiaomiMiMo/MiMo-V2.6-RL-oss` code (2026-10-21 조회, 내려받지 않음) | 2,602 (Harbor 판 `FineEnvs/…-harbor-code` 2,698 은 낡음) | Apache-2.0 | 변환 필요 → `swe_agents` + MiMo 처리기 (신규) | 컨테이너 — 태스크별 이미지 + 숨긴 테스트, 정답 패치 없음 | 없음 | Ultra 에 없음 · 2차 agentic 용, MOPD1 뒤 (`study/mimo_code_harbor.md`, `RL_PLAN.md` 결정 40) |
 
 기존 원천의 채점 보강 (같은 날 실측): Science-v1 은 ns_tools 90,566 (sandbox) + equivalence judge 60,078 행으로 **전부 judge 가 필요**하다 (물리 80.5%).
 ReasoningGym-v1 은 104개 과제 15,000행이고 Ultra 2,089행을 모두 포함한다. Math-v2 는 math_with_judge 3,865 + ns_tools 3,867 행이다.
