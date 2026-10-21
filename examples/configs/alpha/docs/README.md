@@ -17,6 +17,7 @@
 
 | 문서 | 한 줄 |
 |---|---|
+| [../skills/alpha-launch/SKILL.md](../skills/alpha-launch/SKILL.md) | 런 기동·재개·재시작 절차 skill — 기동 전 점검 → 승인 보고 → 실행 → 기동 직후 확인 → 기록 (2026-10-21) |
 | [SETUP.md](SETUP.md) | 환경 구축·운영 — Pai 컨테이너 공존 설치(기본), 셋업 재구성 제안(§1.1, 승인 대기), 환경 구조, 실행, RL 전용 세션 설치(구), 재생성 복원 |
 | [RL_PLAN.md](RL_PLAN.md) | 단계(결정 18: teacher 3종 → MOPD1 → agentic teacher → MOPD2) · 설계 결정 · SFT→RL 승계 범위 · 2노드 분리 토폴로지 · alpha 규모 적용 설계 · 평가 |
 | [RLVR_READINESS.md](RLVR_READINESS.md) | RLVR 이식 위험 보고(2026-10-07) — Pai SFT→NeMo-RL 설정 대응표 · 검증 범위 갭 · 위험 H1~H4·M1~M10 · 처리량(recompute·offload) · 게이트 G0~G7 · 결정 D1~D7 |

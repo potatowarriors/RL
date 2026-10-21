@@ -22,7 +22,7 @@ when_to_use: alpha 레시피 작성·수정; GRPO·RLVR 런 실행·감시·분�
 | 작업 | alpha 정본 | upstream ("upstream 참조" 표의 주제) |
 |---|---|---|
 | 레시피 작성·수정 | `alpha/CLAUDE.md` 레시피 규약 · `alpha/README.md` 레시피 표 · 실행 전 `alpha/tools/check_alpha_recipe.py` ERROR 0 | R3 · Muon · packing·CP · 환경변수 · Ultra 원형 |
-| 런 실행·감시 | `alpha/CLAUDE.md` Quick Commands · `alpha/docs/SETUP.md` · `alpha/docs/RLVR_READINESS.md` §5 | async GRPO·refit |
+| 런 실행·감시 | 기동·재개·재시작은 `alpha-launch` skill 순서대로 · `alpha/CLAUDE.md` Quick Commands · `alpha/docs/SETUP.md` · `alpha/docs/RLVR_READINESS.md` §5 | async GRPO·refit |
 | 게이트 재실행 (새 ckpt·브리지·플러그인 변경) | `alpha/docs/GATES.md` 재실행 조건 | 새 아키텍처·logprob 일관성 |
 | KL·logprob 어긋남 진단 | `alpha/docs/GATES.md` R1·G2·G3 · `alpha/tools/analyze_*_logprob_gap.py` · `alpha/docs/KNOWN_ISSUES.md` | 새 아키텍처·logprob 일관성 · R3 |
 | 학습 메모리·처리량 | `alpha/docs/GATES.md` R4·R5 · `alpha/docs/RLVR_READINESS.md` §5 | 학습 메모리·장문맥 |
