@@ -16,6 +16,7 @@ when_to_use: alpha 레시피 작성·수정; GRPO·RLVR 런 실행·감시·분�
 2. 아래 표에서 작업 행을 찾아 "alpha 정본"을 읽는다.
 3. 배경이 필요하면 "upstream" 열의 주제를 `alpha/docs/README.md` "upstream 참조" 표에서 찾아 읽는다.
    upstream 과 alpha 문서가 다르면 alpha 쪽이 이 모델에서 실측한 값이다.
+4. 문제가 생겼으면 해결책보다 먼저 `problem-diagnosis`, 학습 결과를 바꾸는 설정을 정하면 `frontier-research` (대장 `alpha/docs/FRONTIER.md`) 를 부른다.
 
 ## 작업 유형별
 
