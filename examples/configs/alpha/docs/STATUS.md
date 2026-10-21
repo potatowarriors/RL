@@ -4,7 +4,7 @@
 (메모리는 노드별이라 다른 세션이 못 본다). 날짜는 절대 표기. 끝난 트랙은 "완료" 절로 내리고 정본 링크만 남긴다.
 게이트 수치는 [`GATES.md`](GATES.md) 에 쓰고 여기에는 판정과 링크만 쓴다. Pai 쪽(SFT·벤치) 상태는 Pai `examples/alpha/docs/STATUS.md`.
 
-_마지막 갱신: 2026-10-21 07:15 (3단계 `s5` step 12/167 정상 — step 평균 35분, 유지율 41%, 과장 0, 메모리 임계 교차 0, 검증 0.584 → 0.594)_
+_마지막 갱신: 2026-10-21 19:50 (배포·평가 GDN 상태 fp32 결정 반영 — 아래 보류·추적); 이전: 07:15 (3단계 `s5` step 12/167 정상 — step 평균 35분, 유지율 41%, 과장 0, 메모리 임계 교차 0, 검증 0.584 → 0.594)_
 
 ## 진행 중
 
@@ -54,6 +54,7 @@ _마지막 갱신: 2026-10-21 07:15 (3단계 `s5` step 12/167 정상 — step �
 
 | 항목 | 판정 | 재평가 시점 |
 |---|---|---|
+| **배포·평가 GDN 재귀 상태 fp32 (사용자 결정 2026-10-21)** | 업계 조사(Qwen3.5~3.8·Nemotron 3 전부 fp32 기본, `KNOWN_ISSUES.md` GDN 재귀 상태 항목) 뒤 확정. Pai 서빙 스크립트 반영 `6ed19fc` · 문서 `ff82432`. 독립 검토(Opus 5.5 xhigh): BLOCKER 0 · HIGH 1 (fp32 + prefix caching align 미검증 → 벤치 fleet 사용 전 `prefix_cache_check` 재통과, 문서·스크립트 주석으로 반영) · MEDIUM 3 (align 모드 MAMBA_BLOCK 무효 정정 · 결과 기록에 dtype 없음 · 문서 갱신) 반영. **RL ckpt 를 Pai fleet 으로 평가하면 10-21 이전 teacher τ³ (bf16 상태) 와 계열이 다르다** | fleet 게이트 V1·V2 (GPU 승인 대기, Pai `STATUS.md` 열린 결정) |
 | 장문(128K 생성) 확장 때 비동기 staleness·클립 재검토 (사용자 2026-10-14) | 지금은 `max_trajectory_age_steps: 2` · 클립 0.2/0.28. 생성 128K 로 늘리면 궤적이 refit 2번 안에 못 끝나 age 초과 폐기가 늘므로, MiMo-V2.6 처럼 staleness 4 + 양의 advantage 클립 상한을 5.0 까지 여는 조합(엔트로피 연동 조절)을 검토한다 — `RL_PLAN.md` §2 검토 예정 둘째 항 | MOPD2 (SWE·장문 agentic) 레시피 때, 지표는 age 초과 폐기 비율·클립 발동률·gen KL |
 | FlashQLA E2E 스텝 이득 | 커널 단위 검증만 완료(K1·M2). 레시피 opt-in | 첫 장문 RL 런 |
 | vLLM 롤아웃측 FlashQLA | prefill 한정 이득, vllm 코드 변경 필요 — 후순위 | 롤아웃이 병목일 때 |

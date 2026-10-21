@@ -662,9 +662,9 @@ SFT 구성(Pai `configs/model/baseline_48L.yaml`)대로 플래그를 더해 다�
 **교훈**: ① 동등성 게이트에는 같은 측정을 구현만 바꾼 기준선을 둔다. ② 가중치 검증용 설정 도구를 forward·학습 하네스에 그대로 쓰지 않는다.
 ③ GDN `A_log` 는 SFT 에서도 bf16 으로 계산했으므로 RL 과 차이가 없다 (확인 완료).
 
-## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32)
+## GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다 — 디코드 토큰마다 반올림이 누적돼 rollout-vs-train logprob 이 생성 위치에 따라 벌어진다 (2026-10-06 ✅ RL 레시피 기본값 fp32 · 2026-10-21 ✅ 배포·평가 서빙도 fp32)
 
-원장 #21. 벤치 fleet·채팅·SDG 교사 서빙(전부 bf16 상태)의 처리 결정은 Pai 쪽 미결이다 — Pai `KNOWN_ISSUES.md` 10-06 항목과 Pai `STATUS.md` "열린 사용자 결정".
+원장 #21. **2026-10-21 사용자 결정: 배포·평가 기본값도 fp32.** 벤치 fleet·채팅 서빙 스크립트에 반영했다 (Pai `6ed19fc`, `SSM_STATE_DTYPE` 기본 float32). 10-21 이전 Pai 벤치와 RL teacher τ³ 는 bf16 상태로 측정됐다. fp32 + prefix caching 조합의 fleet 게이트와 계열 연속성 처리는 Pai `KNOWN_ISSUES.md` 10-06 · `STATUS.md` "열린 사용자 결정" 에 있다. SDG 교사 GLM-5.3-Flash 는 KDA 상태가 fp32 고정이라 해당 없다 (아래 조사).
 
 **발견 경위**: NeMo-RL alpha 8-GPU GRPO KL 게이트(agentic iter2400, `grpo_alpha_smoke.yaml`, main1, EP8·colocated·16×8 롤아웃·최대 4096 토큰)가 Generation KL 0.0042 / 0.0037 / 0.0040 으로 기준 0.002 FAIL.
 같은 환경의 1.5B dense 스모크는 0.0007, 같은 ckpt 의 refit 검증(10 토큰)은 mean(exp|Δ|) 1.0293 PASS 였다.
@@ -684,6 +684,21 @@ seed 가 같아 런 사이 롤아웃이 동일하다(생성 토큰 440,577 · Av
 
 **적용 (사용자 지시 2026-10-06)**: alpha RL 레시피 기본값에 `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true` (`grpo_alpha_smoke.yaml`, 모든 alpha GRPO 레시피가 상속). NeMo-RL upstream 의 Mamba 계열 레시피(Nemotron nano·super·ultra 등 12종)는 전부 float32 를 지정한다 — alpha 레시피에만 빠져 있었다.
 Muon 레시피(`grpo_alpha_smoke_muon.yaml`)도 같은 기본값으로 0.0015 / 0.0013 / 0.0013 PASS.
+
+**배포 관행 조사 (2026-10-21, GPU 미사용)** — 확인한 GDN·선형 attention 하이브리드는 전부 fp32 상태를 배포 기본값으로 둔다. 상태 dtype 선언이 없는 것은 Qwen3-Next 세대와 alpha 뿐이다.
+
+| 모델 | 순환 상태 | 체크포인트 선언 | vLLM 동작 | SGLang 동작 |
+|---|---|---|---|---|
+| Qwen3-Next-80B · Qwen3-Coder-Next | GDN | 없음 | bf16 | fp32 (엔진 기본값) |
+| Qwen3.5 0.8B·9B·35B-A3B·397B · 3.6 27B·35B-A3B · 3.8 27B·2.4T-A95B·Flash-Next | GDN 계열 | `mamba_ssm_dtype: float32` (9종 전부) | config 를 읽어 fp32 | config 를 읽어 fp32 |
+| Nemotron 3 Nano·Super | Mamba2 | `mamba_ssm_cache_dtype: float32` | fp32 (NemotronH 기본값 자체가 fp32) | fp32 |
+| Kimi Linear · GLM-5.3-Flash | KDA | 없음 | 재귀 상태 fp32 고정 (설정 무시) | 미확인 |
+| alpha | GDN | 없음 | **bf16** | 미지원 |
+
+- vLLM 0.25.1 에서 상태 dtype 을 바꾸는 모델별 훅은 NemotronH·Qwen3.5 둘뿐이다 (`model_executor/models/config.py` `NemotronHForCausalLMConfig`·`Qwen3_5ForConditionalGenerationConfig`, `MODELS_CONFIG_MAP`). alpha 플러그인은 `Qwen3NextForCausalLM` 을 상속하고 이 표에 없다 → 플래그가 없으면 bf16.
+- 근거 원문: vLLM PR #34489 (2026-02) "For Qwen3-Next, it should still be initialized with `--mamba-ssm-cache-dtype float32` which was previously a bug that's not discovered". PR #39032 (2026-04) 은 NemotronH 기본값을 fp16 → fp32 로 바꿨다 — "Only `float32` is known to have no accuracy issues by default". SGLang 은 환경변수 → config → 기본 float32 순서다 (`srt/configs/mamba_utils.py`).
+- KDA: `kda_state_dtype` 이 재귀 상태를 `torch.float32` 로 고정해 반환한다 (alpha 서빙 venv 0.25.1 `mamba_utils.py:119-125`, SDG venv 0.28.1rc1 `:133-139`). GLM-5.3-Flash(`Glm5NextForConditionalGeneration`)의 KDA 층이 이 함수를 쓴다 → SDG 교사 출력은 이 결함과 무관하다.
+- fp16 상태 + stochastic rounding 옵션(vLLM·SGLang)은 triton 백엔드가 SM100 전용이라 H100 에서 못 쓴다 (`vllm/config/mamba.py`).
 
 **교훈**: ① 시간축으로 누적되는 상태(GDN·Mamba·KDA)는 **저장 dtype** 이 정확도를 좌우한다. 토큰마다 새로 계산하는 값(라우터 logits)과 달리 오차가 다음 토큰으로 넘어간다.
 ② 짧은 검증은 이 누적을 못 본다 — forward 패리티는 teacher-forced prefill(디코드 없음), refit 검증은 10 토큰 디코드였다. 디코드 길이에 따른 **위치별 지표**로 본다.
