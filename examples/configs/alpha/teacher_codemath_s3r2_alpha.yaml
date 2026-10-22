@@ -18,7 +18,9 @@
 #   F3 데이터로더 가드는 dataset_name 만 비교 → 같은 NemoGymDataset 의 새 블렌드가 1바퀴 위치(샘플 수)를 이어받아 앞부분을 건너뛰거나 StopIteration.
 #      본체 패치 alpha/round2-resume (data_path 도 비교) 로 새 파일은 처음부터.
 #   에폭 클램프: max_num_epochs × len(새 데이터로더) 가 누적 max_num_steps 보다 커야 한다 (4 × 366 = 1,464 > 350).
-#   결정 대기: grpo.async_grpo.shuffle_train_batch (검토 F4 — 전역 배치 4개가 완료 순서대로 잘려 1번째가 짧은 code 그룹에 치우침; 본체 패치 alpha/round2-resume).
+#   사용자 결정 2026-10-22 12:30: F2 는 경로 A (load_optim=false, lr 3e-6 유지) · F4 는 grpo.async_grpo.shuffle_train_batch 적용 (전역 배치 4개가 완료 순서대로 잘려
+#   1번째가 짧은 code 그룹에 치우치는 편향 제거) · 동기 스모크 삭제 · 본체 패치 3건은 s5 종료 직후 alpha/post-train 에 병합 (실행 중인 잡이 import 하는 파일).
+#   shuffle_train_batch 키는 AsyncGRPOConfig(extra=allow) 라 병합 전 검사기도 통과하지만 코드는 병합 뒤에야 읽는다 — 병합 뒤 ① 을 다시 돌리고 스모크 로그의 "🔀 Shuffled" 줄로 확인한다.
 # 게이트 (단계별): ① check_alpha_recipe ERROR 0 · 손실 단위 테스트 · 설정 검증기·param group 짝짓기·데이터로더 가드 CPU 프로브
 #   ② teacher_codemath_s3r2_resume_smoke.yaml — ckpt 하드링크 사본에서 이 레시피로 1 step (약 20분). 동기 스모크 grpo_alpha_smoke_muon_4upd 는 검토 결과
 #      비동기·TIS·마스킹·패킹·재개를 하나도 안 거쳐 대체.
@@ -32,6 +34,8 @@ defaults: teacher_codemath_s3_alpha.yaml
 grpo:
   max_num_steps: 350                    # 누적 (1바퀴 167 + 2바퀴 약 183; 블렌드 확정 뒤 오버라이드로 맞춘다)
   max_num_epochs: 4                     # 클램프 비활성 (새 데이터로더 길이 × 4 > 누적 step)
+  async_grpo:
+    shuffle_train_batch: true           # 검토 F4 — step seed 로 행을 섞은 뒤 전역 배치 4개로 자른다 (본체 패치 alpha/round2-resume, 사용자 결정 2026-10-22)
 
 loss_fn:
   force_on_policy_ratio: false          # 롤아웃당 4회 업데이트 → 비율·clip 0.2/0.28 활성 (결정 40)
