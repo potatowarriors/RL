@@ -323,6 +323,9 @@ class MegatronCheckpointConfig(TypedDict, total=False):
     ckpt_fully_parallel_save_process_group: str  # "dp" | "ep_dp"
     ckpt_fully_parallel_load_process_group: str  # "dp" | "ep_dp"
     ckpt_fully_parallel_load_exchange_algo: str  # "broadcast" | "gather_rounds"
+    # False: resume weights, step, dataloader and replay buffer but build the
+    # optimizer and lr scheduler fresh from the config (needed when lr changes).
+    load_optim: bool
 
 
 class MegatronConfig(TypedDict):
