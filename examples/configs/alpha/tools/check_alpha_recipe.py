@@ -109,6 +109,12 @@ def check(cfg: dict) -> None:
         err(f"num_prompts×gens={n_samples} 가 train_global_batch_size={gbs} 로 나누어떨어지지 않는다 — 나머지 샘플이 조용히 빠진다")
     if loss.get("force_on_policy_ratio") and n_samples != gbs:
         err("force_on_policy_ratio 는 train_global_batch_size == num_prompts×gens 를 요구한다")
+    if loss.get("seq_logprob_error_in_loss") and not (loss.get("force_on_policy_ratio") and loss.get("token_level_loss")):
+        err("loss_fn.seq_logprob_error_in_loss 는 force_on_policy_ratio=true · token_level_loss=true 를 요구한다 (grpo.py _validate_seq_logprob_error_in_loss, "
+            "독립 검토 2026-10-22 F1) — 비율을 켜면 false 로 두고 별도 prev_logprob 패스에서 같은 임계로 마스킹한다")
+    if async_on and n_samples > gbs and not (grpo.get("async_grpo") or {}).get("shuffle_train_batch"):
+        warn(f"롤아웃당 전역 배치 {n_samples // gbs}개인데 grpo.async_grpo.shuffle_train_batch 가 꺼져 있다 — 배치가 완료 순서대로 잘려 1번째는 짧은 그룹에 치우친다 "
+             "(독립 검토 2026-10-22 F4; 본체 패치 alpha/round2-resume)")
 
     # M6·M7
     if async_on and not loss.get("use_importance_sampling_correction"):

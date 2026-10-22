@@ -1,3 +1,5 @@
+# [대체됨 2026-10-22] 독립 검토: 동기 루프 · TIS 없음 · 마스킹 없음 · CP1 · 패킹 없음 · 재개 없음이라 2바퀴 결함(F1~F3)을 하나도 못 잡는다
+#   → teacher_codemath_s3r2_resume_smoke.yaml 이 대신한다. 이 파일의 삭제는 결정 대기.
 # grpo_alpha_smoke_muon_4upd.yaml — 롤아웃당 4회 업데이트 분 단위 스모크 (단계별 검증 ②, 결정 40).
 # R1 Muon 스모크(16 프롬프트 × 8, 4K 문맥, 3 step)에 2바퀴 설정의 알고리즘 부분만 얹는다: GBS 128 → 32 (4회), force_on_policy_ratio 끔, lr 3e-6.
 # 확인할 것: 학습 전 logprob 계산이 실행되는지("▶ Computing logprobs") · step 당 optimizer.step 4회 · 지표 probs_ratio / probs_ratio_clamped / gen_kl_error 존재 ·
