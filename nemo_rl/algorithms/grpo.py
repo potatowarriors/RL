@@ -221,6 +221,12 @@ class AsyncGRPOConfig(BaseModel, extra="allow"):
     # several times policy.generation.max_new_tokens. Dropped groups are
     # logged with "dropped": "overlong" and refilled like zero-variance ones.
     drop_groups_over_gen_tokens: int = 0  # effective only with drop_zero_std_groups
+    # Shuffle the rows of the training batch with a per-step seed before the
+    # worker splits it into train_global_batch_size global batches. The async
+    # batch is in replay-buffer insertion order (= rollout completion order), so
+    # with several optimizer steps per rollout batch the first global batch
+    # would otherwise hold the short, easy groups and the last the long ones.
+    shuffle_train_batch: bool = False
 
 
 class RewardPenaltyTokenIdsConfig(BaseModel, extra="allow"):
@@ -2666,6 +2672,30 @@ def _resolve_logprob_skip_flags(
         opd_module._skip_prev_logprobs(master_config),
         master_config.grpo.skip_reference_policy_logprobs_calculation,
     )
+
+
+def shuffle_train_batch_rows(
+    train_data: BatchedDataDict[Any],
+    repeated_batch: BatchedDataDict[Any],
+    seed: int,
+) -> list[int]:
+    """Reorder ``train_data`` and ``repeated_batch`` rows with one seeded permutation.
+
+    Both batches are row-aligned (``train_data`` is derived from
+    ``repeated_batch``) and both are reordered so later consumers that pair
+    them stay aligned. Returns the permutation (row ``i`` gets sort key
+    ``perm[i]``, as ``BatchedDataDict.reorder_data`` expects).
+    """
+    assert train_data.size == repeated_batch.size, (
+        f"train_data rows {train_data.size} != repeated_batch rows {repeated_batch.size}"
+    )
+    perm = torch.randperm(
+        train_data.size, generator=torch.Generator().manual_seed(seed)
+    ).tolist()
+    train_data.reorder_data(perm)
+    repeated_batch.reorder_data(perm)
+    print(f"  🔀 Shuffled training batch rows (seed={seed})", flush=True)
+    return perm
 
 
 def compute_and_apply_seq_logprob_error_masking(
@@ -5225,6 +5255,9 @@ def async_grpo_train(
                     train_data["advantages"] = _clip_grpo_advantages(
                         train_data["advantages"], master_config.grpo
                     )
+
+                if getattr(master_config.grpo.async_grpo, "shuffle_train_batch", False):
+                    shuffle_train_batch_rows(train_data, repeated_batch, seed=step)
 
                 print("▶ Preparing for training...")
                 with timer.time("training_prep"):
