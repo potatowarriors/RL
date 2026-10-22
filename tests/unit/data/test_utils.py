@@ -223,6 +223,50 @@ class TestLoadDataloaderState:
         # Because state was NOT restored, iteration starts from index 0.
         assert next(iter(dl_new))[0] == "D2-0000"
 
+    def test_same_name_different_path_skips_state(self, tmp_path, capsys):
+        """A new data file under the same dataset class (e.g. a refreshed blend
+        for ``NemoGymDataset``) is a swap too: the saved position must not be
+        replayed into the new file."""
+        dl_save = _make_dl("D1", 20)
+        _consume(dl_save, 5)
+        _write_checkpoint(str(tmp_path), dl_save.state_dict(), saved_dataset_name="D1")
+        cfg_path = os.path.join(str(tmp_path), "config.yaml")
+        with open(cfg_path) as f:
+            saved = yaml.safe_load(f)
+        saved["data"]["train"]["data_path"] = "/blends/round1.jsonl"
+        with open(cfg_path, "w") as f:
+            yaml.safe_dump(saved, f)
+
+        dl_new = _make_dl("D1", 20)
+        load_dataloader_state(
+            dl_new,
+            str(tmp_path),
+            {"train": {"dataset_name": "D1", "data_path": "/blends/round2.jsonl"}},
+        )
+        captured = capsys.readouterr()
+        assert "Dataset swap detected" in captured.out
+        assert "round1.jsonl" in captured.out and "round2.jsonl" in captured.out
+        assert next(iter(dl_new))[0] == "D1-0000"
+
+    def test_same_name_same_path_restores_state(self, tmp_path):
+        dl_save = _make_dl("D1", 20)
+        _consume(dl_save, 5)
+        _write_checkpoint(str(tmp_path), dl_save.state_dict(), saved_dataset_name="D1")
+        cfg_path = os.path.join(str(tmp_path), "config.yaml")
+        with open(cfg_path) as f:
+            saved = yaml.safe_load(f)
+        saved["data"]["train"]["data_path"] = "/blends/round1.jsonl"
+        with open(cfg_path, "w") as f:
+            yaml.safe_dump(saved, f)
+
+        dl_new = _make_dl("D1", 20)
+        load_dataloader_state(
+            dl_new,
+            str(tmp_path),
+            {"train": {"dataset_name": "D1", "data_path": "/blends/round1.jsonl"}},
+        )
+        assert next(iter(dl_new))[0] == "D1-0005"
+
     def test_mismatch_with_short_new_dataset_does_not_crash(self, tmp_path):
         """Regression: when ``len(new_dataset) <= samples_yielded`` of the old
         dataset, the unguarded torchdata path crashes with ``StopIteration``

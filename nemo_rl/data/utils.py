@@ -56,6 +56,22 @@ def get_train_dataset_name(data_config: DataConfig) -> Optional[str]:
     return None
 
 
+def get_train_data_path(data_config: DataConfig) -> Optional[str]:
+    """Return the training ``data_path`` from a data config.
+
+    Same shape tolerance as :func:`get_train_dataset_name`; ``None`` when the
+    path cannot be determined.
+    """
+    if not data_config:
+        return None
+    train = data_config.get("train")
+    if isinstance(train, list):
+        train = train[0] if train else None
+    if isinstance(train, dict):
+        return train.get("data_path")
+    return None
+
+
 def load_dataloader_state(
     dataloader: Any,
     checkpoint_path: str,
@@ -67,7 +83,8 @@ def load_dataloader_state(
     Loads ``{checkpoint_path}/train_dataloader{suffix}.pt`` and, when a
     ``config.yaml`` is also present in the checkpoint dir (always written by
     ``CheckpointManager.init_tmp_checkpoint``), compares the saved
-    ``dataset_name`` to the current run's ``dataset_name``. On mismatch the
+    ``dataset_name`` and ``data_path`` to the current run's. On mismatch of
+    either (a new file under the same dataset class is also a swap) the
     dataloader state restore is **skipped** so the new dataset starts from
     index 0 — otherwise ``StatefulDataLoader`` would inherit ``samples_yielded``
     from the old run, silently skipping samples and (when the new dataset is
@@ -88,13 +105,22 @@ def load_dataloader_state(
             saved_config = yaml.safe_load(f) or {}
         saved_name = get_train_dataset_name(saved_config.get("data"))
         current_name = get_train_dataset_name(data_config)
-        if (
+        saved_path = get_train_data_path(saved_config.get("data"))
+        current_path = get_train_data_path(data_config)
+        name_swapped = (
             saved_name is not None
             and current_name is not None
             and saved_name != current_name
-        ):
+        )
+        path_swapped = (
+            saved_path is not None
+            and current_path is not None
+            and saved_path != current_path
+        )
+        if name_swapped or path_swapped:
             print(
-                f"  ⚠ Dataset swap detected: was {saved_name!r}, now {current_name!r}. "
+                f"  ⚠ Dataset swap detected: was {saved_name!r} ({saved_path!r}), "
+                f"now {current_name!r} ({current_path!r}). "
                 f"Skipping dataloader state restore; new dataset starts from index 0.",
                 flush=True,
             )
