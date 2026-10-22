@@ -1,4 +1,4 @@
-# teacher_codemath_s3r2_alpha.yaml — Code·Math 3단계 **2바퀴** (RL_PLAN.md 결정 40, 사용자 승인 2026-10-22).
+# teacher_codemath_s3r2_alpha.yaml — Code·Math 3단계 **2바퀴** (RL_PLAN.md 결정 41, 사용자 승인 2026-10-22).
 #
 # 1바퀴(teacher_codemath_s3_alpha.yaml, s5) 설정을 상속하고 세 가지를 바꾼다.
 #   - 롤아웃당 업데이트 1회 → **4회**: train_global_batch_size 2,048 → 512 (128 × 16 ÷ 4). 워커가 롤아웃 배치를 4개의 전역 배치로 잘라
@@ -38,12 +38,12 @@ grpo:
     shuffle_train_batch: true           # 검토 F4 — step seed 로 행을 섞은 뒤 전역 배치 4개로 자른다 (본체 패치 alpha/round2-resume, 사용자 결정 2026-10-22)
 
 loss_fn:
-  force_on_policy_ratio: false          # 롤아웃당 4회 업데이트 → 비율·clip 0.2/0.28 활성 (결정 40)
+  force_on_policy_ratio: false          # 롤아웃당 4회 업데이트 → 비율·clip 0.2/0.28 활성 (결정 41)
   seq_logprob_error_in_loss: false      # 검토 F1 — 비율이 켜지면 loss 안 마스킹 불가 → 별도 prev_logprob 패스에서 임계 2 마스킹 (student_rlvr1 의 true 를 되돌림)
 
 policy:
   train_global_batch_size: 512          # 128 × 16 ÷ 4 = 롤아웃당 전역 배치 4개 = 업데이트 4회
   megatron_cfg:
     optimizer:
-      lr: 3.0e-6                        # MiMo-V2.6 Muon lr (결정 40)
+      lr: 3.0e-6                        # MiMo-V2.6 Muon lr (결정 41)
       min_lr: 3.0e-6
