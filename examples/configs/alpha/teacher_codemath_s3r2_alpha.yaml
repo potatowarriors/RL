@@ -1,0 +1,34 @@
+# teacher_codemath_s3r2_alpha.yaml — Code·Math 3단계 **2바퀴** (RL_PLAN.md 결정 40, 사용자 승인 2026-10-22).
+#
+# 1바퀴(teacher_codemath_s3_alpha.yaml, s5) 설정을 상속하고 세 가지를 바꾼다.
+#   - 롤아웃당 업데이트 1회 → **4회**: train_global_batch_size 2,048 → 512 (128 × 16 ÷ 4). 워커가 롤아웃 배치를 4개의 전역 배치로 잘라
+#     각각 optimizer.step() (megatron_policy_worker.py). force_on_policy_ratio 를 끄면 비율 π_new/π_old 가 살아나 clip 0.2/0.28 (DAPO Clip-Higher) 이 발동하고,
+#     학습 전 logprob forward 가 한 번 추가된다 (step 은 생성 병목이라 시간은 거의 안 늘어남). 근거: FRONTIER.md (DAPO 16회 · R1 16회 · GSPO 4회 · MiMo staleness 4).
+#   - lr 5e-6 → **3e-6** (MiMo-V2.6 Muon 값; 롤아웃당 보폭이 4배가 되므로 낮춘다).
+#   - 데이터: 1바퀴 기록으로 갱신한 블렌드 (tools/build_codemath_round_blend.py: 16/16 제외 · 0/16 은 1/4 · code 1~2/16 중복).
+# 유지: 128 프롬프트 · 초과 125 · 나이 1 · DAPO 동적 샘플링 · 과장 가드 · 48K · 토큰 단위 손실 · TIS [0.2, 5] · KL 0 · 워밍업 0.
+#
+# 재개 (1바퀴 마지막 ckpt 에서 이어 학습, 옵티마이저 상태 포함): GBS·lr 이 바뀌므로 스케줄러는 **설정값으로 덮어쓴다** —
+#   ++policy.megatron_cfg.scheduler.override_opt_param_scheduler=true ++policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler=false
+#   (mcore optimizer_param_scheduler._check_and_set: override 면 class 값, 아니면 ckpt 값과 대조 assert — KNOWN_ISSUES 10-13).
+#   에폭 클램프: max_num_epochs × len(새 데이터로더) 가 누적 max_num_steps 보다 커야 한다. 데이터로더 위치는 새 파일이라 처음부터.
+# 게이트 (단계별): ① check_alpha_recipe ERROR 0 + 손실 단위 테스트 ② grpo_alpha_smoke_muon_4upd.yaml 분 단위 스모크 (코드 경로·클립 지표)
+#   ③ 이 런의 첫 3 step 으로 판정: gen KL < 0.002 · 마스킹 ≤ 1바퀴 수준 · 클립 발동률 기록 → 통과하면 그대로 학습 지속.
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_s3r2_alpha.yaml DATA=<round2 blend> VAL=<s2 _val> CKPT=<s5 ckpt128 dir> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_s3 r2 grpo.max_num_steps=<167 + 2바퀴 step> \
+#         ++policy.megatron_cfg.scheduler.override_opt_param_scheduler=true ++policy.megatron_cfg.scheduler.use_checkpoint_opt_param_scheduler=false
+defaults: teacher_codemath_s3_alpha.yaml
+
+grpo:
+  max_num_steps: 350                    # 누적 (1바퀴 167 + 2바퀴 약 183; 블렌드 확정 뒤 오버라이드로 맞춘다)
+  max_num_epochs: 4                     # 클램프 비활성 (새 데이터로더 길이 × 4 > 누적 step)
+
+loss_fn:
+  force_on_policy_ratio: false          # 롤아웃당 4회 업데이트 → 비율·clip 0.2/0.28 활성 (결정 40)
+
+policy:
+  train_global_batch_size: 512          # 128 × 16 ÷ 4 = 롤아웃당 전역 배치 4개 = 업데이트 4회
+  megatron_cfg:
+    optimizer:
+      lr: 3.0e-6                        # MiMo-V2.6 Muon lr (결정 40)
+      min_lr: 3.0e-6

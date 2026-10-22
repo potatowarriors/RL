@@ -22,6 +22,8 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `teacher_codemath_alpha.yaml` | 1차 Code·Math teacher 1단계 (32K) — code_gen + math-verify, judge 없음 → 롤아웃 8장, 64 배치 282 스텝 2 에폭, lr 5e-6, `rollout_overprovision: 4` (결정 31) | 결정 30·32·33. 블렌드 `teacher_codemath_s1_v1.jsonl` 9,028 (`tools/build_codemath_stage1_blend.py`). 2단계(48K)는 1단계 로그로 블렌드를 다시 뽑는다 |
 | `teacher_codemath_s2_alpha.yaml` | Code·Math 2단계 (32K) — 1단계 결과 `hf_step_00282` 시작, P0-4 난이도 지도의 학습 구간(1~7/8)만 · code 1~2/8 두 번, 175 step (1 에폭), held-out 검증 20 step 마다, 프롬프트별 롤아웃 기록 (결정 38) |
 | `teacher_codemath_s3_alpha.yaml` | Code·Math 3단계 (48K) — 2단계 결과 `hf_step_00175` 시작, 전체 후보 53,418행을 DAPO 동적 샘플링(`drop_zero_std_groups`)으로, 프롬프트 256 · 초과 할당 250 · 궤적 나이 1, 데이터 한 바퀴 115 step 씩 블렌드 갱신 (결정 39) |
+| `teacher_codemath_s3r2_alpha.yaml` | Code·Math 3단계 2바퀴 — 1바퀴 ckpt 재개, 롤아웃당 업데이트 4회(GBS 512, `force_on_policy_ratio` 끔, clip 0.2/0.28 활성), lr 3e-6, 갱신 블렌드 (결정 40) |
+| `grpo_alpha_smoke_muon_4upd.yaml` | 롤아웃당 4회 업데이트 분 단위 스모크 (단계별 검증 ②) — R1 Muon 스모크 + GBS 32 · 비율 활성 · lr 3e-6 |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
 | `teacher_code_math_alpha.yaml` · `teacher_general_alpha.yaml` | 1차 Code·Math · General teacher | 미작성 (lr 5e-6, 결정 23) |
 | `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
