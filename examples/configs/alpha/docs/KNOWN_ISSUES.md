@@ -6,6 +6,15 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## `s5` 가 step 62 refit 뒤 W&B 그림 기록 단계에서 정확히 60분 멈췄다 — 드라이버 주 스레드 futex 대기, 보조 스레드 1개 CPU 100% (2026-10-23 🔶 저절로 풀림, 기전 미확정)
+
+- **증상** (`teacher_codemath_s3/s5`): step 62(헤더) 학습·refit 완료 → 수집기 "Updated weight version to 62" → 드라이버가 `log_generation_metrics_to_wandb` 의 첫 그림(`per_worker_inflight_batch_sizes_62`, 05:40:47) 만 쓰고 정지. 두 번째 그림 `average_inflight_batch_sizes_62` 가 **06:41:11** (60분 24초 뒤) 에 기록되고 나머지 6장은 4초 안에 끝나 06:44 "Step 63/167" 로 이어졌다. 정체 동안 sub1 학습 8장 0%, main1 은 메움 라운드 생성을 계속했다. step 62 총 3시간 54분 (평소 1시간 40분~2시간).
+- **프로세스 관측** (ptrace 불가라 /proc 만): 주 스레드 CPU 0 · 문맥 전환 0 (`futex_wait`, 완전 정지). 스레드 1937532 (10-20 23:04:17 — `ray.init`·`wandb.init` 직전의 스레드 묶음에서 생성, wandb-core PID 1937535 바로 앞, 생애 CPU 162 core-min) 가 정체 동안만 user CPU 100% 로 돌다가 풀리자 0 이 됐다 — 둘은 결합돼 있다. Ray 대기 작업 없음(`ray list tasks`: Gym 롤아웃뿐), ReplayBuffer 0%, wandb-core 유휴, TB 큐는 GPU 모니터 샘플을 계속 받음, 드라이버 stdout 은 블록 버퍼(`PYTHONUNBUFFERED` 미설정 — 정지 중 출력 판정에 주의).
+- **못 밝힌 것**: 컨테이너에 `CAP_SYS_PTRACE` 가 없어 py-spy·`/proc/*/stack`·`syscall` 이 root 로도 거부됨 → 파이썬 스택 없음. wandb 0.28.1 · TB writer · Ray `print_logs` 코드에서 3,600초 상수는 못 찾았다. 60분이라는 길이는 어떤 시간 제한(네트워크·NFS·라이브러리)이 풀어 준 것으로 보이나 후보를 특정하지 못했다.
+- **선행 사례**: 이 리포 10-13 `main2r6` 가 같은 함수 `wandb run.log(figure)` 의 JSON 덤프에서 예외로 죽음 (디스크 가득 — 이번은 루트 399 GB 여유라 다름). 10-13 `main2r3` 1시간 정체·10-14 `main2r7` 6시간 정체는 리플레이 버퍼 낙오 궤적이라 기전이 다르다 (이번은 refit 뒤, 버퍼 131/128 로 충분). upstream·프론티어 조사는 하지 않았다.
+- **독립 검증**: 하지 않았다 (해결책을 내지 않았으므로).
+- **대응**: 06:00 푸시 알림, 06:44 회복 알림. 재발 감시를 걸었다 — W&B `media/plotly/generation_metrics` 에 한 step 의 그림이 8장 미만인 채 10분 이상 새 파일이 없으면 알림. 재발하면 그때 ① 그림 기록(`enable_vllm_metrics_logger`) 끄기 ② ptrace 가능한 호스트 셸에서 py-spy 확보 ③ 드라이버 `PYTHONUNBUFFERED=1` 을 선택지로 보고한다. `STATUS.md` 10-23 06:15·06:50 기록.
+
 ## 롤아웃 엔진이 2-step 마다 비고 step 시간이 20/100분으로 교대한다 — 원인은 DAPO 수집기의 첫 배치 크기·통째 예약, 나이 1 은 그것을 유휴로 바꾸는 문 (2026-10-22, 독립 검증 **반박** 뒤 정정)
 
 - **증상** (`teacher_codemath_s3/s5`, step 44~51): total 101/20/93/20/102/21/118/20분, `exposed_generation` 84/2분 교대, 완료 0 구간 23~35분, GPU 0% 실측 17:18~17:30 (12분). 생성 노드 nvidia-smi 에서 사용자가 관찰.
