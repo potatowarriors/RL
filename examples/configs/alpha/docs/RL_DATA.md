@@ -214,6 +214,8 @@ python 도구 과학을 넣고 주관식·객관식을 줄였다. 레시피 `tea
 
 - **2단계 롤백 블렌드 (2026-10-23, 결정 42)**: `teacher_blends/teacher_codemath_s2r_v1.jsonl` 14,586 행 (고유 14,013; 코드 1~2/16 중복 행 573 은 3단계 블렌드의 G=32 효과 그대로) · 수학 8,105 (55.6%) · 코드 6,481 (44.4%). 생성기 `tools/build_codemath_rollback_blend.py` (seed 20261023, 3단계 블렌드 53,418 행 + s5 롤아웃 기록 20,489 프롬프트 입력). 원칙은 2단계와 같다 — **현재 정책이 맞히기도 틀리기도 하는 문제만** 넣어 DAPO 없이도 폐기 없이 그룹 대부분에 학습 신호가 있게 한다 (2단계 실측 그룹의 87%). ① s5 기록에서 마지막 방문이 1~15/16 이었던 프롬프트 8,788 행 (출처: 2단계 기록 3,532 · P0-4 1,360 · 예비 3,896) ② s5 가 아직 안 본 2단계 기록 프롬프트 5,798 행 (2단계 학습 때 1~15/16). 제외: s5 에서 0/16 11,298 · 16/16 825 · s5 가 안 본 예비 18,086 · P0-4 0/8·8/8 미방문 8,623 (신호 증거 없음) · 검증셋 256 (겹침 0). 데이터셋별: nano_v3_sft_profiled_skywork_no_omni 3,850 · nano_v3_sft_profiled_dapo17k 2,482 · nano_v3_sft_profiled_comp_coding_50tests 2,148 · taco 1,506 · open-r1/codeforces 857 · code_contests 841 · super_v3_lcsft_step1000_skyworks 817 · ultra_sft_step3200_comp_coding 576 · super_v3_lcsft_step1000_comp_coding 517 · super_v3_lcsft_step1000_skyworks_no_omni 505 · super_v3_lcsft_step1000_dapo17k 266 · None 185 · apps 36. 행에 `rollback_source`(s5_mixed · s2_unvisited) 와 3단계 필드(`stage3_source` · `stage3_last_correct`)를 남겼다. 한계: ① 의 라벨은 s5 중간 정책(48K, step 1~65)에서 잰 것이라 시작점 `hf_step_00175` 에서는 일부가 0/16·16/16 일 수 있다 — 첫 5 step 의 mixed 그룹 비율로 확인한다 (2단계 87% 기준). 1 에폭 = 227 step (64 프롬프트). D1 OK.
 
+- **코드 2배 중복 중단 (2026-10-23, 결정 43)**: 코드 하위 구간을 두 번 넣어 실질 그룹 크기 32 를 만들던 방식(2단계 1,609 · 3단계 661 · 롤백 573 행)은 이후 블렌드부터 쓰지 않는다. 생성기 기본값 중복 없음. 진행 중 런의 블렌드는 바꾸지 않는다.
+
 ### 5.6 착수 전 작업 (P0)과 순서
 
 | # | 작업 | 자원 | 비고 |

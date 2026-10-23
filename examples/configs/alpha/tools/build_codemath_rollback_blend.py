@@ -1,7 +1,9 @@
 """Rollback blend: stage-3 blend rows restricted to prompts with confirmed learning signal.
 Keep a row when (a) its pool_key's LAST visit in s5's rollout record was mixed (1..15/16), or
 (b) it was never visited in s5 and came from the stage-2 record (stage3_source s2_log / s2_log_dup, mixed in stage 2).
-Drop: all-wrong / all-right last visits, and unvisited reserve / p04 rows (no signal evidence)."""
+Drop: all-wrong / all-right last visits, and unvisited reserve / p04 rows (no signal evidence).
+Note: the 573 code *_dup rows inherited from the stage-3 blend (effective G=32) were kept in teacher_codemath_s2r_v1 (built 2026-10-23 10:01);
+decision 43 (user, 2026-10-23) stops code duplication from the next blend on — new blends collapse *_dup rows by pool_key."""
 import json, random, collections, sys
 PREV="/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/teacher_blends/teacher_codemath_s3_v1.jsonl"
 LOG="/home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_codemath_s3/s5/rollout_groups.jsonl"

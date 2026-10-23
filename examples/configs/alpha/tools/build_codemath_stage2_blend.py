@@ -4,6 +4,7 @@ P0-4 난이도 지도(`teacher_pool/p04_passmap.jsonl`, 1단계 결과 hf_step_0
 학습 구간(정답 1~7/8)만 고른다. 0/8(못 품)·8/8(다 품)은 advantage 가 0 이라 뺀다.
   - 검증셋: 학습 구간에서 도메인당 --val-per-domain 개를 무작위로 떼어 학습에서 제외한다.
   - code 하위 구간(정답 1~2/8)은 학습 파일에 두 번 넣는다 — 프롬프트당 샘플 32개(G=32)와 같은
+    (결정 43, 2026-10-23: 이후 블렌드는 중복 없음 — 기본 --dup-code-max-k 0)
     "양성 예시를 얻을 확률" 을 생성 비용 2배로 얻는다 (사용자 2026-10-18 논의, 결정 38).
   - 행 내용은 측정 풀(`teacher_pool/{math,code}_measure.jsonl`)의 행 그대로이고, 측정값을 `stage2_k8` 로 덧붙인다.
 
@@ -42,7 +43,7 @@ def main():
     ap.add_argument("--passmap", default=f"{POOL}/p04_passmap.jsonl")
     ap.add_argument("--seed", type=int, default=20261019)
     ap.add_argument("--val-per-domain", type=int, default=128)
-    ap.add_argument("--dup-code-max-k", type=int, default=2, help="code 프롬프트 중 정답 k/8 ≤ 이 값이면 두 번 넣는다")
+    ap.add_argument("--dup-code-max-k", type=int, default=0, help="code 프롬프트 중 정답 k/8 ≤ 이 값이면 두 번 넣는다. 결정 43 (2026-10-23) 으로 기본 0 = 중복 없음 (2단계 블렌드 s2_v1 재현은 --dup-code-max-k 2)")
     a = ap.parse_args()
     rng = random.Random(a.seed)
 

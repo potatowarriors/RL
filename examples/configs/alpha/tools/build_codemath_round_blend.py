@@ -3,7 +3,8 @@
 이전 바퀴의 롤아웃 기록(rollout_groups.jsonl)으로 다음 바퀴 블렌드를 만든다.
   - 마지막 방문이 전부 정답(16/16)인 문제는 뺀다.
   - 마지막 방문이 전부 오답(0/16)인 문제는 --zero-keep (기본 0.25) 비율만 무작위로 남긴다 — 학습 중 풀리기 시작하는 문제를 잡기 위해.
-  - 그 밖(1~15/16, 미방문, 과장으로 버린 그룹)은 그대로 넣는다. code 1~2/16 은 두 번 넣는다 (G=32 효과).
+  - 그 밖(1~15/16, 미방문, 과장으로 버린 그룹)은 그대로 넣는다. code 1~2/16 두 번 넣기(G=32 효과)는 결정 43 (사용자 2026-10-23) 으로
+    기본 끔 — 이전 블렌드의 *_dup 행도 pool_key 로 접어 한 번만 넣는다. 켜려면 --dup-code-max-correct 2.
   - 검증셋(2단계 _val.jsonl) 은 계속 뺀다. 행 내용은 이전 블렌드 행 그대로이고 round 필드(stage3_round, stage3_last_correct)를 갱신한다.
 
 사용:
@@ -40,7 +41,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--val", default="/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/teacher_blends/teacher_codemath_s2_v1_val.jsonl")
     ap.add_argument("--zero-keep", type=float, default=0.25)
-    ap.add_argument("--dup-code-max-correct", type=int, default=2)
+    ap.add_argument("--dup-code-max-correct", type=int, default=0, help="code 정답 수가 1~이 값이면 두 번 넣는다. 결정 43 (2026-10-23) 으로 기본 0 = 중복 없음")
     ap.add_argument("--seed", type=int, default=20261022)
     a = ap.parse_args()
     rng = random.Random(a.seed)
