@@ -1,0 +1,43 @@
+# teacher_codemath_s2r_b_alpha.yaml — Code·Math 2단계 롤백 재개, **안 B: 2단계 방식 그대로** (64 프롬프트 · step 당 업데이트 1회 · step 마다 refit).
+# 안 A(teacher_codemath_s2r_alpha.yaml: 256 프롬프트 · 롤아웃당 4회 업데이트)와 데이터·시작점·가드·워밍업 0 은 같고, 업데이트 1회의 배치(64 × 16 = 1,024)도 같다.
+# 다른 점: 롤아웃 64 프롬프트가 모이면 바로 1회 업데이트하고 refit 한다 (사용자가 2026-10-23 에 설명한 동작 = 2단계 s2 와 동일). 비율·clip 은 2단계처럼 꺼진 채(on-policy 강제),
+#   lr 5e-6 (2단계 값 — 롤아웃당 1회라 결정 41 의 3e-6 근거가 없다). 호스트 메모리는 2단계 실측(64 × 32K)과 같아 위험 없음.
+# 1 에폭 = 14,586 ÷ 64 = 227 step → max_num_steps 228 (업데이트 228 회 = 안 A 와 같음). 검증 20 step 마다 + 시작·끝.
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_s2r_b_alpha.yaml DATA=<teacher_codemath_s2r_v1.jsonl> VAL=<teacher_codemath_s2_v1_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_s2r s1 policy.model_name=<teacher_codemath_s2/hf/hf_step_00175>
+defaults: teacher_codemath_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_s2r"
+  save_period: 5                        # 2단계 값 (step 약 8.5분 → 약 40분마다, keep_top_k 2). 보존은 runs 의 하드링크 보존 루프 (25 step)
+
+grpo:
+  num_prompts_per_step: 64              # 2단계 값
+  max_num_steps: 228                    # 14,586 행 ÷ 64 = 227 step (1 에폭) + 1
+  max_num_epochs: 2                     # 데이터로더 여유
+  val_period: 20                        # 2단계 값
+  val_at_start: true
+  val_at_end: true
+  async_grpo:
+    max_trajectory_age_steps: 2         # 2단계 값
+    rollout_overprovision: 4            # 2단계 값 (결정 31)
+    rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
+    drop_groups_over_gen_tokens: ${policy.generation.max_new_tokens}   # 가드 (KNOWN_ISSUES 10-20)
+
+env:
+  nemo_gym:
+    code_gen_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1                  # 가드: 에이전트 재호출 금지
+    math_with_judge_simple_agent:
+      responses_api_agents:
+        simple_agent:
+          max_steps: 1
+
+policy:
+  generation:
+    max_new_tokens: 32768               # 2단계 값
+  megatron_cfg:
+    scheduler:
+      lr_warmup_iters: 0                # 워밍업 제거 (사용자 2026-10-23)
