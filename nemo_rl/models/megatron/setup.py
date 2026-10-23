@@ -1176,6 +1176,13 @@ def _create_checkpoint_config(
         "ckpt_fully_parallel_save_process_group",
         "ckpt_fully_parallel_load_process_group",
         "ckpt_fully_parallel_load_exchange_algo",
+        # Resume with a changed optimizer hyperparameter: Megatron-Core pairs saved
+        # and current parameter groups by (max_lr, min_lr, ...) and raises when a
+        # group key is missing, so a resume that changes lr has to skip the
+        # optimizer state (``load_optim: false``). Weights, the step counter, the
+        # dataloader position and the replay buffer still resume; the optimizer
+        # and the lr scheduler start fresh from the config.
+        "load_optim",
     )
     for field in _optional_ckpt_fields:
         if field in cfg:
