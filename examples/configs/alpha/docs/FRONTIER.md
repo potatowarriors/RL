@@ -44,6 +44,7 @@
 |---|---|---|---|---|---|
 | 학습 데이터·에폭 | DAPO | DAPO-Math-17K: 고유 프롬프트 약 17.9K(정수 답), HF parquet 은 **1,791,700 행 = 100배 복제**; 레시피 `total_epochs=1` 은 이 복제본 기준 → 고유 프롬프트로는 최대 100 바퀴. 논문 그림 1 x축은 '기울기 업데이트 step'(절대값 본문 미기재), 롤아웃 step 수·에폭 수 공개 안 됨 | HF `BytedTsinghua-SIA/DAPO-Math-17k` (행 수), 논문 §3.5, verl 레시피 README | 2026-10-22 | 동적 샘플링은 0/16·16/16 그룹을 버리고 gen 배치를 반복 (`max_num_gen_batches` 상한) |
 | 학습 데이터·에폭 | MiMo-V2.6 | 도메인 비율 agentic·경쟁 코딩 68% · 도구 12% · 디자인 13% · 문맥 3% · 보안 4%; 25개 프로파일 소스, 환경 "수천 개", 공개 환경 4종 약 7K 과제 (§7.2 표 5); 프롬프트 총수·재사용(에폭) **공개 안 됨**; 동적 샘플러가 all-pass/all-fail 그룹 제거 | 보고서 §4.2.2·§5.1·§6.3·§7.2 | 2026-10-22 | 데이터는 저장소 기반 데이터 플레인(메타데이터·페이로드 분리)으로 공급 |
+| 난이도 필터 | Skywork-OR1 · Kimi K2 | Skywork §3.1: 기준 모델 정답률 0·1 프롬프트 제거 + 각 단계 시작 때 직전에 다 푼 문제 제거(온라인); K2 §3.2.1: 수학은 SFT pass@k 로 중간 난이도만 | arXiv 2505.22312 §3.1 · 2507.20534 §3.2.1 | 2026-10-24 | alpha 롤백·라운드 블렌드의 "1~15/16 만 + 0/16 의 1/4" 와 같은 원칙 |
 
 ## 보상 · 벌점 · 길이 제어
 
@@ -55,7 +56,13 @@
 
 | 항목 | 모델 | 값 | 원천 | 조사일 | 비고 |
 |---|---|---|---|---|---|
-| — | — | 아직 조사 없음 | — | — | — |
+| 도메인 순서 (코드·수학 분리 vs 혼합) | Qwen3 (235B-A22B 등) | Reasoning RL(§4.2)은 **3,995 query-verifier 쌍 하나의 세트**(수학·코드·논리·STEM 하위 도메인 넓게)로 GRPO 1회 단계; AIME'24 70.1 → 85.1 (170 RL step). 도메인별 분리 런 없음. §4.7: Thinking Mode Fusion·General RL 뒤 AIME'24·LiveCodeBench 가 **하락** ("performance in thinking mode actually decreases after these two training stages") — 넓은 학습이 전문 능력을 깎는 상충을 수용 | arXiv 2505.09388 §4.1·4.2·4.7 (HTML 판 직접 열람) | 2026-10-24 | 혼합 단일 런. 단계 사이의 능력 퇴행을 보고한 유일한 사례 — 분리 학습의 위험 근거 |
+| 도메인 순서 | DeepSeek-R1 (671B/37B) | §2.3.2 추론 RL 은 "coding, mathematics, science, and logic reasoning" 을 **한 RL 과정**으로 수렴까지; §2.3.4 전 시나리오 RL 은 규칙 보상(수학·코드·논리) + 보상 모델(일반) 혼합. 도메인별 분리 런 없음 | arXiv 2501.12948 §2.3.2·2.3.4 (HTML) | 2026-10-24 | 혼합 |
+| 도메인 순서 · 전문가 분리 | GLM-4.5 (355B/32B) | §3: 1단계 **Reasoning · Agent · General chat 세 전문가를 따로** 학습(expert iteration), 2단계 self-distillation 으로 통합. Reasoning 전문가 안에서 수학·코드·과학은 분리 서술 없음. §3.2: 난이도 2단계 커리큘럼(중간 → 매우 어려움), 64K **단일 단계 RL 이 점진 길이 단계보다 나음**("multi-stage approach is less effective than a single-stage RL process"), 보상 수렴 시 온도 상향(성능 1% 이내 하락 최대값). §3.3.2: 검색·SWE RL 이 다른 과제로 일반화 | arXiv 2508.06471 §3·3.2·3.3.2 (HTML) | 2026-10-24 | 분리는 "추론 vs 에이전트 vs 대화" 수준. 코드·수학 분리의 선례는 아님 |
+| 도메인 순서 | Kimi K2 (1T/32B) | 초록 "a joint reinforcement learning (RL) stage"; §3.2.1 검증 보상 Gym = 수학·STEM·논리·지시 따르기·충실성·코딩·SWE·안전 **한 단계 공동 학습**; §3.2.3 PTX loss 로 공동 RL 중 망각 방지; 수학은 SFT pass@k 로 "moderate difficulty" 만 선별. 도메인 비율·순서 공개 안 됨 | arXiv 2507.20534 초록·§3.2.1·3.2.3 (HTML) | 2026-10-24 | 혼합 |
+| 도메인 순서 · 수학 전용 모델 | Skywork-OR1 (7B·32B) | §6.1 수학 약 105K + 코드 13.7K(LeetCode 2.7K · TACO 11K) 를 "curated mixture" 로 한 런(비율 공개 안 됨); **Math-7B 는 수학만**(별도 모델, step 2160); §3.1 오프라인 필터 정답률 0·1 제거 + 단계 시작마다 다 푼 문제 제거; 길이 단계 8K → 16K. 코드↔수학 전이 주장 없음 (표 13: Math-7B LCB 43.6 vs OR1-7B 47.6) | arXiv 2505.22312 §3.1·3.2.2·6.1·8.1·8.2 (HTML) | 2026-10-24 | 도메인 전용 = 별도 모델. 같은 모델에 순차 적용 사례 아님 |
+| 도메인 순서 | MiMo-V2.6 | 도메인 비율 혼합(§데이터 표 행 참조), 동적 샘플러 | 보고서 §4.2.2·§5.1 (대장 데이터 행) | 2026-10-22 | 혼합 |
+| 도메인 순서 (기준선) | Nemotron 3 Ultra (NeMo-RL 레시피) | `reasoning_teacher.yaml` 머리말: "non-STEM RLVR data blend (**math, MCQA, equivalence-judging, code, NS-tools**)" — 추론 teacher 하나가 수학·코드를 **혼합** 학습; teacher 분리는 ifbench · rlhf · swe · reasoning 수준 | `examples/nemo_gym/nemotron-3-ultra/reasoning_teacher.yaml` 5행 | 2026-10-24 | 혼합. alpha 의 "코드 라운드 → 수학 라운드" 순차 분리는 프론티어·기준선 모두에 선례 없음 (사용자 결정 2026-10-24, RL_PLAN 결정 44) |
 
 ## 학습 중 문제와 해결 (속도 · 메모리 · 안정성)
 

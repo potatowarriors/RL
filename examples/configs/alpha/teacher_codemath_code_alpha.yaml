@@ -1,0 +1,21 @@
+# teacher_codemath_code_alpha.yaml — Code·Math 롤백 런(teacher_codemath_s2r/s1, step 228)에서 **코드만** 이어 학습하는 라운드 (사용자 결정 2026-10-24, RL_PLAN 결정 44).
+#
+# 재개: s2r 최종 Megatron 체크포인트 step_228 을 옵티마이저 상태째 이어받는다 (CKPT = step_228 하드링크 사본 디렉토리 + latest_checkpoint_status.json).
+#   설정은 teacher_codemath_s2r_b_alpha.yaml 그대로 (64 프롬프트 · step 당 1회 · 32K · 나이 2 · 초과 4 · DAPO 없음 · lr 5e-6 · 워밍업 0 · 가드 2개). 바뀌는 것은 데이터와 step 수뿐.
+#   - 데이터: teacher_codemath_code_r1_v1.jsonl 5,050 행 (코드만; s2r 기록에서 1~15/16 4,940 + 미방문 19 + 0/16 의 1/4 91; 16/16 599 제외; 중복 없음 — 결정 43). 검증은 2단계 _val 256 (코드 128 + 수학 128) 그대로 — 수학 퇴행도 같이 본다.
+#   - step: 228 + 78 (1 에폭 = 5,050 ÷ 64) = 306. max_num_epochs 는 클램프가 걸리지 않게 20 (20 × 78 = 1,560 > 306; KNOWN_ISSUES 10-13 에폭 클램프).
+#   재개 네 가지 (alpha-launch 1-5): ① 스케줄러 — lr 상수 5e-6 · 워밍업 0 · GBS 1,024 그대로라 param group 이 일치, 플래그 불필요 ② 에폭 클램프 — 위 ③ 데이터로더 위치 — 가드가
+#   data_path 를 비교해 새 파일은 0 번째 행부터 (`4ea4f2f90`, 로그 "Dataset swap detected" 확인) ④ 종료 판정 — 감시 스크립트 MAXSTEP 306.
+#   리플레이 버퍼: 사본에서 replay_buffer.pt 를 빼면 빈 버퍼로 시작한다 (s2r 마지막 142 궤적 = 수학 포함 9 그룹을 섞지 않음, 권고). rollouts.pt 도 빼면 Gym task index 가 0 부터 — 로그 식별자뿐.
+# 판정 (실제 런 첫 step 들): step 229 학습 통과 (재개 첫 step 의 NCCL 메모리 함정 10-11 → NCCL_MAX_NCHANNELS 16 은 부모에 있음) · "Dataset swap detected" · 롤아웃 그룹 전부 code_gen · train/lr 5e-6 ·
+#   gen KL ≤ 0.002 · step ≈ 8분 · 첫 검증 step 240 (코드 ≥ 0.70 유지, 수학은 기록만).
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_code_alpha.yaml DATA=<teacher_codemath_code_r1_v1.jsonl> VAL=<teacher_codemath_s2_v1_val.jsonl> CKPT=<results/alpha/teacher_codemath_code/ckpt (step_228 하드링크 사본)> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_code s1 policy.model_name=<teacher_codemath_s2/hf/hf_step_00175>
+defaults: teacher_codemath_s2r_b_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_code"
+
+grpo:
+  max_num_steps: 306                    # 228 (s2r) + 78 (코드 1 에폭)
+  max_num_epochs: 20                    # 클램프 비활성 (20 × 78 > 306)

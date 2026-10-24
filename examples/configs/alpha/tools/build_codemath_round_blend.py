@@ -42,6 +42,7 @@ def main():
     ap.add_argument("--val", default="/home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/teacher_blends/teacher_codemath_s2_v1_val.jsonl")
     ap.add_argument("--zero-keep", type=float, default=0.25)
     ap.add_argument("--dup-code-max-correct", type=int, default=0, help="code 정답 수가 1~이 값이면 두 번 넣는다. 결정 43 (2026-10-23) 으로 기본 0 = 중복 없음")
+    ap.add_argument("--agent", choices=["all", "code", "math"], default="all", help="한 도메인만 남긴다 (결정 44, 2026-10-24: 코드·수학 분리 학습)")
     ap.add_argument("--seed", type=int, default=20261022)
     a = ap.parse_args()
     rng = random.Random(a.seed)
@@ -55,6 +56,9 @@ def main():
     rows, stats = [], collections.Counter()
     for k, r in prev.items():
         dom = "code" if "code" in r["agent_ref"]["name"] else "math"
+        if a.agent != "all" and dom != a.agent:
+            stats[f"{dom}_excluded_agent_filter"] += 1
+            continue
         if k in val_keys:
             stats[f"{dom}_excluded_val"] += 1
             continue
@@ -93,13 +97,13 @@ def main():
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     out = {
-        "prev": a.prev, "log": a.log, "seed": a.seed, "zero_keep": a.zero_keep,
+        "prev": a.prev, "log": a.log, "seed": a.seed, "zero_keep": a.zero_keep, "agent": a.agent,
         "visited_prompts": len(lv), "train_rows": len(rows),
         "train_unique_prompts": len({r["pool_key"] for r in rows}),
         "by_agent": dict(collections.Counter(r["agent_ref"]["name"] for r in rows)),
         "counts": dict(sorted(stats.items())),
         "val_train_overlap": len(val_keys & {r["pool_key"] for r in rows}),
-        "steps_per_pass_at_128_keep0.5": len(rows) * 0.5 // 128,
+        "steps_per_pass_at_128_keep0.5": len(rows) * 0.5 // 128, "steps_per_epoch_at_64": len(rows) // 64,
     }
     with open(a.out.replace(".jsonl", "_stats.json"), "w") as f:
         json.dump(out, f, indent=1, ensure_ascii=False)
