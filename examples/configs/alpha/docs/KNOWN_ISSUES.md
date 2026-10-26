@@ -6,6 +6,14 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## Codeforces 벤치를 만들었으나 적대적 검토 "신뢰 불가" — 공개 CF 시험셋은 SFT·RL 학습 데이터에 이미 들어 있다 (2026-10-27 🔶 기준선 미실행, 사용자 결정 대기)
+
+- **배경**: 사용자 지시 "lcb, codeforce 벤치 테스트 진행해". LCB 322 는 AtCoder 198 · LeetCode 124 로 Codeforces 0 → 공개 HF `open-r1/codeforces` `verifiable_tests` test split (422문제, 2024-08~2025-02 대회) 로 `tools/build_cf_bench.py` 를 만들었다 (특수 채점기 45 · 학습 풀 13-gram 겹침 160 · 테스트 예산 초과 3 제외 → 214문제, 문제당 테스트 8 MB 상한). 채점 대조(조회표 통과 · 오답·근접오답·빈 출력·무한루프 실패) 20문제 100/100.
+- **RL 학습 풀 오염 (요청자 측정)**: 422문제 중 180문제가 학습 코드 풀의 한 행과 13-gram 60% 이상 일치 (140문제 90% 이상) — 출처 `nano_v3_sft_profiled_comp_coding_50tests` 145 · `open-r1/codeforces` 27 · `super_v3_lcsft_step1000_comp_coding` 8. 학습 풀은 LCB v5 와만 대조했었다.
+- **독립 검토 (Opus 5.5 xhigh, 읽기 전용, 기준선 실행 전) 판정: 신뢰 불가.** BLOCKER: 214문제 중 **212문제가 SFT 블렌드 멤버 cp_v2 (Nemotron-SFT-Competitive-Programming-v2) python 분할에 원문으로 있다** (13-gram 포함률 중앙값 0.927; 같은 스캔에서 LCB 322 는 0/322). HIGH: 입력을 무시한 상수 출력이 7문제 통과 · 제약 대비 테스트가 수백 바이트뿐인 9문제 (완전 탐색 통과) · 대소문자 불일치 7 + 다중 정답 7 (맞는 프로그램이 실패) — RL 체크포인트가 스스로 hardcode·fallback 이라 적은 프로그램 비율(s1 34% · s2 18% · code_500 8%)에 점수를 줄 수 있다. MEDIUM: 작은 테스트부터 채운 8 MB 예산으로 103문제가 잘림(잘린 문제는 테스트 23% 만 남음) · 대조 시험이 상수 출력·샘플 출력 대조를 빠뜨림 · 쌍대 차 SE 1.3~1.6 pp · 테스트당 10 s 벽시계 (CF TL 미사용). 정상: 비교기는 줄 추가·삭제·순서 교환 16/16 검출, 운영 Gym code_gen 과 diff 0, RL 풀 대조는 건전 (상용구 오제외 1). 보고 원문 job `tmp/cf_review/review.md`.
+- **선행 사례**: 공개 Codeforces 시험셋(open-r1, CodeContests)은 Nemotron SFT·RL 데이터의 원천과 겹친다 — 공개 데이터로 만든 벤치는 학습 데이터 원천과 반드시 대조한다 (LCB 변환 때는 학습 풀만 대조했고 SFT 는 대조하지 않았다 — LCB 는 이번 스캔에서 SFT 0/322 로 확인).
+- **대응**: 기준선 실행하지 않음. 도구 3개는 머리말에 판정을 적어 커밋. 선택지는 사용자 보고 (2026-10-27).
+
 ## Code·Math RL 의 보상 상승이 느리다 — 진단 "측정 구조·예산·entropy" 는 독립 검증에서 반박, 확인된 것은 "2단계까지는 빨랐고 그 뒤 문제당 개선 속도가 1/4 로 떨어졌다" (2026-10-26 🔶 원인 증거 부족, 판별 측정 대기)
 
 - **증상 (사용자 2026-10-26)**: 학습 보상이 s2r 0.483 → 0.524, 코드 라운드 0.271 → 0.275 로 평탄. 프론티어 보고의 빠른 상승과 다르다. (사용자가 "DAPO 식 1~15/16 샘플링 부재" 설명은 제외하라고 지시.)
