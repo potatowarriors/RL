@@ -1,0 +1,21 @@
+# teacher_codemath_code2_alpha.yaml — 코드 라운드 2 (사용자 결정 2026-10-27 "이 블렌드로 3epoch 학습을 진행하자", RL_PLAN 결정 46).
+#
+# 재개: 코드 라운드 1 (teacher_codemath_code/s1) 최종 Megatron ckpt step_601 을 옵티마이저 상태째 이어받는다 (CKPT = step_601 하드링크 사본, replay_buffer.pt·rollouts.pt 제거 → 빈 버퍼).
+#   설정은 teacher_codemath_code_alpha.yaml 그대로 (64 프롬프트 · step 당 1회 · 32K · 나이 2 · 초과 4 · DAPO 없음 · lr 5e-6 · 워밍업 0 · 가드 2개 · 검증 2단계 _val 256 · 20 step 마다).
+#   바뀌는 것은 데이터와 step 수뿐.
+#   - 데이터: teacher_codemath_code_r2_v1.jsonl 11,826 행 = 코드 풀 − 검증 − nano comp_coding 10,646 − 라운드 1 마지막 방문 16/16 1,371 (한 번도 못 푼 6,062 · 가끔 푼 5,746 · 미측정 18).
+#     생성 tools/build_codemath_round_blend.py --agent code --zero-keep 1.0 --exclude-dataset nano_v3_sft_profiled_comp_coding_50tests. 중복 없음 (결정 43).
+#   - step: 3 에폭 = 11,826 × 3 ÷ 64 = 554 → 601 + 554 = 1,155. 에폭 클램프는 누적 step 과 비교한다 (grpo.py: min(max_num_steps, max_num_epochs × len(dataloader)), len = 184)
+#     → max_num_epochs 7 (7 × 184 = 1,288 > 1,155).
+# 재개 네 가지 (alpha-launch 1-5): 스케줄러 — lr 상수·GBS 불변이라 그대로 · 에폭 클램프 — 위 · 데이터로더 위치 — data_path 가 바뀌어 "Dataset swap detected" 로 0 행부터 · 종료 판정 — 감시 MAXSTEP 1,155.
+# 판정 (실제 런 첫 step): step 602 학습 통과 · 로그 "Dataset swap detected" · 롤아웃 그룹 전부 code_gen · nano 0 · lr 5e-6 · gen KL ≤ 0.002 · step ≈ 8~9분 · 섞인 그룹 비율 ≈ 0.49 (블렌드 가정).
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_code2_alpha.yaml DATA=<teacher_codemath_code_r2_v1.jsonl> VAL=<teacher_codemath_s2_v1_val.jsonl> CKPT=<results/alpha/teacher_codemath_code2/ckpt> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_code2 s1 policy.model_name=<teacher_codemath_s2/hf/hf_step_00175>
+defaults: teacher_codemath_code_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_code2"
+
+grpo:
+  max_num_steps: 1155                   # 601 (라운드 1 끝) + 554 (11,826 행 × 3 에폭 ÷ 64)
+  max_num_epochs: 7                     # 클램프 비활성 (7 × 184 = 1,288 > 1,155, 누적 step 기준)
