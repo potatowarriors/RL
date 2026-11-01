@@ -6,6 +6,13 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## LCB 벤치 서빙 엔진 1개가 FlashInfer GDN prefill 교착으로 멈춰 측정이 93% 에서 1시간 40분 정지 (2026-11-01 ✅ 정리 뒤 재측정, 근본 대책 미적용)
+
+- **증상**: `eval_lcb.sh lcb_code2_1155` 가 1,203/1,288 에서 14:22 부터 진척 없음. sub1 엔진 :8007 이 요청 7개를 잡고 `vllm:generation_tokens_total` 1 (30 s 간격 불변), GPU 7 util 100% · 전력 116 W (유휴 수준), 나머지 15 엔진은 완료. 실행기에 시간 제한이 없어 저절로 끝나지 않음.
+- **원인**: 10-11 함정 표 "FlashInfer 0.6.13 SM90 GDN prefill JIT 커널 mbarrier 교착" 과 같은 증상. 학습 레시피는 `vllm_kwargs.gdn_prefill_backend: triton` 으로 피했지만, 벤치 서빙 스크립트(Pai `eval_sft/serve_alpha.sh` · `p0_measure/serve_fleet.sh`)에는 그 설정이 없다. LCB 9회 중 1회. 이미 확인된 사고와 증상이 같아 독립 검증은 생략.
+- **대응 (사용자 승인 11-01)**: gym eval 에 SIGTERM → 실행기가 fleet 정리 → 부분 결과는 `p0_measure/lcb_code2_1155_stuck_partial` 로 옮기고 재측정 (정상, 16:32). 재측정 중 감시 스크립트가 setsid 래퍼 PID 를 봐 "종료" 로 오판 → 같은 측정을 중복 기동 → 중복분은 fleet 기동 전 GPU 대기 단계에서 중지 (첫 실행 영향 없음). 교훈: 감시는 `pgrep` 으로 실제 bash 실행기 PID 를 잡는다.
+- **근본 대책 (미적용, 측정 설정 변경이라 승인 대상)**: 벤치 서빙에도 `--gdn-prefill-backend triton` (또는 같은 의미의 vLLM 인자). 이전 LCB 와의 비교 가능성은 같은 체크포인트 재측정으로 확인해야 한다.
+
 ## 학습이 검증 뒤 27분(10-27)·refit 뒤 62분(10-23) 멈췄다 — 생성 코드의 SyntaxWarning 12만 줄이 W&B 콘솔 캡처를 막아 드라이버의 동기 W&B 호출이 기다림 (2026-10-27 ✅ 원인 확인, 해결책 승인 대기)
 
 - **증상**: `teacher_codemath_code2/s1` step 620 검증 종료(TB `timing/validation/*` 13:15:08) 뒤 체크포인트 시작(13:42:01)까지 26.9분 드라이버 출력 없음 · GPU 16장 0% · 주 스레드 futex 대기 → 13:46 step 621 로 저절로 진행. 같은 step 의 드라이버 측 단계가 비정상으로 느렸다 (data_processing 156 s vs 평소 3 s, reward 63 s vs 0.5 s, advantage 54 s vs 0.1 s). 10-23 `teacher_codemath_s3/s5` step 62 refit 뒤 62분 18초 정지(위 10-23 항목)와 같은 기전.
