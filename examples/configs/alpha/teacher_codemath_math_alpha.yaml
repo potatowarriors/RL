@@ -1,0 +1,21 @@
+# teacher_codemath_math_alpha.yaml — 수학 라운드 (사용자 결정 2026-11-02: "수학 학습은 1에폭" · "step 228 에서 AIME·HMMT 검증하고 바로 수학 학습을 시작", RL_PLAN 결정 47).
+#
+# 재개: 롤백 런 teacher_codemath_s2r/s1 의 Megatron ckpt step_228 (코드만 학습하기 전 마지막 코드·수학 혼합 체크포인트) 을 옵티마이저 상태째 이어받는다
+#   (CKPT = step_228 하드링크 사본, replay_buffer.pt·rollouts.pt 제거 → 빈 버퍼). 코드 라운드 1·2 체크포인트는 쓰지 않는다 (라운드 2 는 LCB 를 4.6 pp 떨어뜨림, 수학 검증 0.539 → 0.39).
+#   설정은 teacher_codemath_s2r_b_alpha.yaml 그대로 (64 프롬프트 · step 당 1회 · 32K · 나이 2 · 초과 4 · DAPO 없음 · lr 5e-6 · 워밍업 0 · 가드 2개 · 검증 2단계 _val 256 · 20 step 마다).
+#   - 데이터 (결정 45 "도메인 풀 전부"): teacher_codemath_math_all_v1.jsonl = 수학 풀 29,406 − 검증 128 = 29,278 행 (tools/build_math_all_blend.py; nano 17,941 · super 8,901 · mathv2 2,436;
+#     최신 라벨 섞임 6,948 · 전부 오답 10,082 · 전부 정답 1,522 · 미측정 10,726). 중복 없음 (결정 43).
+#   - step: 1 에폭 = 29,278 ÷ 64 = 457 → 228 + 457 = 685. 에폭 클램프는 누적 step 기준 (grpo.py) → max_num_epochs 3 (3 × 457 = 1,371 > 685).
+#   - 판정은 검증 파일의 수학 128 만 쓴다 (코드 128 은 측정만 — 사용자 2026-10-24 코드·수학 분리 원칙).
+# 재개 네 가지: 스케줄러 — lr·GBS 불변 · 에폭 클램프 — 위 · 데이터로더 — data_path 가 바뀌어 "Dataset swap detected" 로 0 행부터 · 종료 판정 — 감시 MAXSTEP 685.
+# 판정 (실제 런 첫 step): step 229 학습 통과 · "Dataset swap detected" · 롤아웃 그룹 전부 math_with_judge · lr 5e-6 · gen KL ≤ 0.002 · step ≈ 8~9분.
+# 실행: RECIPE=examples/configs/alpha/teacher_codemath_math_alpha.yaml DATA=<teacher_codemath_math_all_v1.jsonl> VAL=<teacher_codemath_s2_v1_val.jsonl> CKPT=<results/alpha/teacher_codemath_math/ckpt> \
+#         examples/configs/alpha/runs/launch.sh teacher_codemath_math s1 policy.model_name=<teacher_codemath_s2/hf/hf_step_00175>
+defaults: teacher_codemath_s2r_b_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_codemath_math"
+
+grpo:
+  max_num_steps: 685                    # 228 (s2r) + 457 (수학 풀 1 에폭)
+  max_num_epochs: 3                     # 클램프 비활성 (누적 step 기준, 3 × 457 > 685)
