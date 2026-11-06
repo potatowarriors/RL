@@ -17,8 +17,8 @@ genrm_compare_resources_server:
         top_p: 0.95
       comparison_strategy: circular      # 그룹 16 → 비교 16회
       num_judges_per_comparison: 1
-      use_principle: true                # identity 행(alpha-RL-Identity-Following-v1)의 기준을 넘긴다 — 49B 는 principle 역할이 없어
-      default_principle: ""              #   alpha_genrm_model 이 system 메시지로 넣는다. 기본값 "" = principle 없는 행에는 아무것도 붙이지 않음
+      use_principle: true                # identity 행 · Ultra GenRM 행의 평가 기준을 넘긴다 — 49B 는 principle 역할이 없어
+      default_principle: ""              #   alpha_genrm_model 이 마지막 user 메시지 뒤에 붙인다. 기본값 "" = principle 없는 행에는 아무것도 붙이지 않음
       aggregator_method: simple_tiebreaker
       reasoning_bonus: 0.0               # 길이 제어 4개는 레시피가 정한다 (General 결정 대기)
       answer_bonus: 0.0
@@ -45,7 +45,7 @@ genrm_model:
       return_token_id_information: false
       uses_reasoning_parser: false       # 서버에 reasoning parser 가 없어 <think> 가 본문에 섞인다 — app.py 가 </think> 뒤만 읽는다
       supports_principle_role: false
-      principle_as_system: true          # 2026-11-06 실측: identity 기준 없음 "정답 vs 나는 ChatGPT" 순위 3 → system 메시지 1
+      principle_as_user_suffix: true     # GenRM chat template 이 system 메시지를 버린다 (2026-11-06 템플릿 확인) — user 메시지에 붙여야 보인다
 genrm_simple_agent:
   responses_api_agents:
     simple_agent:

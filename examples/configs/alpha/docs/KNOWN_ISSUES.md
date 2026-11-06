@@ -6,6 +6,18 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## GenRM principle 을 system 메시지로 넣은 변경이 효과가 없었다 — "순위 3 → 1" 은 단일 표본 잡음 (2026-11-06 ✅ user 메시지 뒤로 옮김)
+
+- **증상**: 49B GenRM (`nvidia/Llama-3_3-Nemotron-Super-49B-GenRM`, 결정 49) 은 principle 역할이 없다. identity 행 기준(principle)을 system 메시지로 넣으면
+  "정답 정체성 vs '나는 ChatGPT'" 순위가 3 → 1 로 뚜렷해진다고 판단해 플러그인에 넣었다 (`4950cc6bf`).
+- **원인**: GenRM chat template (리비전 `3160979`) 은 system 을 `'detailed thinking on'` 으로 고정하고, Conversation Context 에 user · assistant 역할만 그린다.
+  system 메시지는 렌더링에서 조용히 버려진다 → 프롬프트가 기준 없음과 같았다. 판단 근거는 temperature 0.6 단일 표본 3쌍이었다 (같은 조건 "기준 없음" 도 3 이었다).
+- **수정**: `alpha_genrm_model` 이 principle 을 마지막 user 메시지 뒤에 `[Evaluation criteria for judging the responses]` 로 붙인다 (`principle_as_user_suffix`).
+  템플릿이 system 을 버린다는 사실을 테스트로 고정했다 (`tests/data/genrm49b_chat_template.jinja`). 같은 probe 의 "user 덧붙임" 은 순위 2 · 6 · 1 이었지만
+  역시 단일 표본이라 효과 크기는 확정하지 않았다.
+- **교훈**: 모델 서버의 chat template 을 읽기 전에 역할 주입 효과를 판단하지 않는다. 확률적 판정기 비교는 반복 표본으로 한다.
+- **선행 사례**: Gym `genrm_compare` README — principle 은 템플릿이 `principle` 역할을 지원하는 GenRM 에만 쓴다 (Qwen3-Nemotron-235B GenRM 은 미지원 표기).
+
 ## LCB 벤치 서빙 엔진 1개가 FlashInfer GDN prefill 교착으로 멈춰 측정이 93% 에서 1시간 40분 정지 (2026-11-01 ✅ 정리 뒤 재측정, 근본 대책 미적용)
 
 - **증상**: `eval_lcb.sh lcb_code2_1155` 가 1,203/1,288 에서 14:22 부터 진척 없음. sub1 엔진 :8007 이 요청 7개를 잡고 `vllm:generation_tokens_total` 1 (30 s 간격 불변), GPU 7 util 100% · 전력 116 W (유휴 수준), 나머지 15 엔진은 완료. 실행기에 시간 제한이 없어 저절로 끝나지 않음.

@@ -162,7 +162,7 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 
 - 모자란 두 그룹은 반복하지 않고 전부 쓰고 남는 몫을 IF 로 돌렸다. 필터: 참조 pass_rate (0,1) — 원천에 1 인 행은 없어 참조 SFT 가 못 푼 행만 빠진다 (abstention 957 · IF 8,037 · 구조화 8,859 고유) · abstention 원본 데이터셋의 블렌드 밖 648행 추가 (pass_rate 0 으로 뺀 과제가 원본 사본으로 되살아나지 않게 막음) · 벤치 대조 IFEval 10행 제외 · 프롬프트 상한 GenRM 16,384 (GenRM 창 49,152) 173행 · LLM judge 28,672 (Gemma 창 65,536) 14행 제외 — 원래 최대 144,317 토큰 행이 학습 창 128K 를 넘었다.
 - Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif (다른 채점 서버) 라 넣지 않았다. calendar · IPI 는 뺐다 (§5.3).
-- GenRM 행의 principle (프롬프트별 평가 기준): Ultra 원천 100% · Super 26~35% 가 갖는다 — 49B GenRM 에 system 메시지로 넘긴다 (결정 49 플러그인).
+- GenRM 행의 principle (프롬프트별 평가 기준): Ultra 원천 100% · Super 26~35% 가 갖는다 — 49B GenRM 에 마지막 user 메시지 뒤에 붙여 넘긴다 (결정 49 플러그인; GenRM chat template 이 system 메시지를 버린다).
 
 judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없다. calendar 는 모든 런에서 보상 0 이라 원인을 찾을 때까지 뺀다.
 도구 계열(tau·swe_pivot·toolcall_schema·IPI·workplace)은 2차 agentic 으로 넘긴다.

@@ -103,22 +103,28 @@ def normalize_response_dict(resp: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]
     return resp, True
 
 
-def inject_genrm_roles(body_dict: Dict[str, Any], supports_principle_role: bool, principle_as_system: bool = False) -> Dict[str, Any]:
+def inject_genrm_roles(body_dict: Dict[str, Any], supports_principle_role: bool, principle_as_user_suffix: bool = False) -> Dict[str, Any]:
     """Gym `GenRMModelMixin` 과 같은 역할 주입. metadata 는 소비하고 vLLM 으로 넘기지 않는다.
 
-    principle 역할을 모르는 GenRM (49B) 에는 `principle_as_system` 이면 principle 을 system 메시지로 앞에 둔다
-    (이미 system 이 있으면 그 앞에 붙인다). 2026-11-06 identity 행 실측: 기준 없음 "정답 vs 나는 ChatGPT" 순위 3 → system 1.
+    principle 역할을 모르는 GenRM (49B) 에는 `principle_as_user_suffix` 이면 principle 을 마지막 user 메시지 뒤에 붙인다.
+    49B GenRM chat template 은 system 을 'detailed thinking on' 으로 고정하고 대화에서 user · assistant 역할만 그린다 —
+    system 메시지로 넣으면 조용히 버려진다 (2026-11-06 템플릿 확인; 그 전 "system 메시지 순위 3 → 1" 은 단일 표본 잡음이었다).
     """
     metadata = body_dict.pop("metadata", None) or {}
     messages = body_dict["messages"]
     principle = metadata.get("principle")
     if supports_principle_role and principle:
         messages.append({"role": "principle", "content": principle})
-    elif principle_as_system and principle:
-        if messages and messages[0].get("role") == "system" and isinstance(messages[0].get("content"), str):
-            messages[0] = {**messages[0], "content": principle + "\n\n" + messages[0]["content"]}
-        else:
-            messages.insert(0, {"role": "system", "content": principle})
+    elif principle_as_user_suffix and principle:
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                c = messages[i].get("content")
+                suffix = "\n\n[Evaluation criteria for judging the responses]\n" + principle
+                if isinstance(c, list):
+                    messages[i] = {**messages[i], "content": c + [{"type": "text", "text": suffix}]}
+                else:
+                    messages[i] = {**messages[i], "content": (c or "") + suffix}
+                break
     if metadata.get("response_1") is not None:
         messages.append({"role": "response_1", "content": metadata["response_1"]})
     if metadata.get("response_2") is not None:
@@ -126,13 +132,23 @@ def inject_genrm_roles(body_dict: Dict[str, Any], supports_principle_role: bool,
     return body_dict
 
 
+def _last_scores(resp: Dict[str, Any]) -> Dict[str, int]:
+    """normalize_response_dict 가 써 넣은 점수 JSON (마지막 output_text) 을 읽는다."""
+    for item in reversed(resp.get("output") or []):
+        if item.get("type") == "message":
+            for part in reversed(item.get("content") or []):
+                if part.get("type") == "output_text" and part.get("text"):
+                    return json.loads(part["text"])
+    raise ValueError("normalized GenRM response has no score text")
+
+
 class AlphaGenRMModelConfig(VLLMModelConfig):
     """외부 GenRM endpoint 설정. principle 역할은 49B GenRM 이 지원하지 않는다."""
 
     supports_principle_role: bool = False
-    # principle 을 system 메시지로 넣는다 (identity 행의 기준). genrm_compare 는 use_principle 일 때만 넘기고,
-    # default_principle 을 "" 로 두면 principle 이 없는 일반 대화 행에는 아무것도 붙지 않는다.
-    principle_as_system: bool = True
+    # principle (identity 행의 기준 · Ultra GenRM 행의 프롬프트별 평가 기준) 을 마지막 user 메시지 뒤에 붙인다.
+    # genrm_compare 는 use_principle 일 때만 넘기고, default_principle 을 "" 로 두면 principle 없는 행에는 아무것도 붙지 않는다.
+    principle_as_user_suffix: bool = True
 
 
 class AlphaGenRMModel(VLLMModel):
@@ -141,11 +157,16 @@ class AlphaGenRMModel(VLLMModel):
     config: AlphaGenRMModelConfig
 
     _stats_lock: Any = PrivateAttr(default_factory=Lock)
-    _stats: Dict[str, int] = PrivateAttr(default_factory=lambda: {"requests": 0, "parsed": 0, "parse_failed": 0})
+    _stats: Dict[str, int] = PrivateAttr(default_factory=lambda: {
+        "requests": 0, "parsed": 0, "parse_failed": 0, "principle_injected": 0, "score_tie": 0,
+        **{f"rank{i}": 0 for i in range(1, 7)}})
 
     def _preprocess_chat_completion_create_params(self, request: Request, body_dict: Dict[str, Any]) -> Dict[str, Any]:
         body_dict = super()._preprocess_chat_completion_create_params(request, body_dict)
-        return inject_genrm_roles(body_dict, self.config.supports_principle_role, self.config.principle_as_system)
+        if ((body_dict.get("metadata") or {}).get("principle")) and self.config.principle_as_user_suffix and not self.config.supports_principle_role:
+            with self._stats_lock:
+                self._stats["principle_injected"] += 1
+        return inject_genrm_roles(body_dict, self.config.supports_principle_role, self.config.principle_as_user_suffix)
 
     def setup_webserver(self) -> FastAPI:
         app = super().setup_webserver()
@@ -164,10 +185,15 @@ class AlphaGenRMModel(VLLMModel):
         with self._stats_lock:
             self._stats["requests"] += 1
             self._stats["parsed" if ok else "parse_failed"] += 1
+            if ok:
+                sc = _last_scores(resp_dict)
+                self._stats[f"rank{sc['ranking']}"] += 1
+                self._stats["score_tie"] += int(sc["score_1"] == sc["score_2"])
             snap = dict(self._stats)
         if not ok or snap["requests"] % 50 == 0:
-            # 런이 끝나면 서버와 함께 집계가 사라지므로 로그에 누적값을 남긴다 (워커 프로세스마다 따로 센다 → pid 로 구분)
-            logger.warning(f"[alpha_genrm] stats pid={os.getpid()} requests={snap['requests']} parsed={snap['parsed']} parse_failed={snap['parse_failed']}")
+            # 런이 끝나면 서버와 함께 집계가 사라지므로 로그에 누적값을 남긴다 (워커 프로세스마다 따로 센다 → pid 로 구분).
+            # 순위 분포는 위치 편향(response_1 만 고름)·상수 판정을 잡는다 — circular 비교는 같은 응답을 두 자리에 한 번씩 넣는다.
+            logger.warning(f"[alpha_genrm] stats pid={os.getpid()} " + " ".join(f"{k}={v}" for k, v in snap.items()))
         if not ok:
             logger.warning(f"[alpha_genrm] parse_failed pid={os.getpid()}; output text left unchanged for genrm_compare retry")
             return response

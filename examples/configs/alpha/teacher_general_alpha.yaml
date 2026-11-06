@@ -8,7 +8,7 @@
 # 채점:
 #   - 규칙: instruction_following · structured_outputs (v1·v3) · citation_format · freeform_formatting
 #   - GenRM: genrm_simple_agent(+_reasoning_off), identity 행 포함 — 외부 49B GenRM (결정 49), alpha 플러그인 alpha_genrm_model
-#     (boxed 점수 → JSON, principle → system 메시지). 길이 제어는 Ultra IFBench teacher 값 (아래 genrm_compare).
+#     (boxed 점수 → JSON, principle → 마지막 user 메시지 뒤 — GenRM template 은 system 을 버린다). 길이 제어는 Ultra IFBench teacher 값 (아래 genrm_compare).
 #   - LLM judge: multichallenge · inverse_if · abstention · jailbreak 5종 · over_refusal — 전부 judge_model (Gemma-4-31B-it, 롤아웃 노드 2장).
 #     Gym 기본값은 multichallenge = 정책 자신, abstention = genrm_model, jailbreak = Nemotron 안전 judge(전용 형식) 라 여기서 바꾼다.
 #
@@ -28,12 +28,12 @@ grpo:
   max_num_steps: 640                    # 규모 B (결정 19): 40,960 프롬프트 1 에폭
   max_num_epochs: 2                     # 데이터로더 여유 (클램프 = min(640, 2 × 640))
   val_period: 20
-  val_at_start: true                    # step 0 기준선
+  val_at_start: true                    # step 0 기준선. 검증셋에는 GenRM · identity 행이 없다 — genrm_compare 는 응답 16개가 모여야 끝나는데 검증은 2개뿐이라 멈춘다 (JG1 검토)
   val_at_end: true
   async_grpo:
     rollout_overprovision: 4            # 결정 31
     rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
-    drop_groups_over_gen_tokens: ${policy.generation.max_new_tokens}   # 가드 (KNOWN_ISSUES 10-20)
+    drop_groups_over_gen_tokens: ${policy.generation.max_new_tokens}   # drop_zero_std_groups(DAPO) 가 꺼져 있으면 동작하지 않는다 (grpo.py) — 에이전트 1회 호출이라 넘을 일도 없다. Code·Math 와 같게 둔다
 
 policy:
   generation:

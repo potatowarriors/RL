@@ -15,6 +15,9 @@ Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif 라 (다른
 - 그룹 비율 = §5.3 (IF 35 · 구조화 15 · GenRM 25 · multichallenge·inverse_if 10 · abstention 8 · 안전 6 · identity 1).
   그룹 안은 agent 별 고유 행 수에 비례. 풀이 모자란 그룹은 반복하지 않고 전부 쓴 뒤 남는 몫을 IF 로 돌린다.
 - 검증셋(--n-val)은 그룹 비율대로 먼저 떼고 학습에서 뺀다. 출력 옆에 .stats.json 을 남긴다.
+  GenRM · identity 몫은 검증 파일에 쓰지 않는다 (--val-drop-groups): genrm_compare 는 같은 키의 응답 16개(num_rollouts_per_prompt)가
+  모일 때까지 기다리는데 검증은 프롬프트당 2개뿐이고 task 번호가 찍히지 않아 끝나지 않는다 (JG1 적대적 검토 2026-11-06). 학습 행 수는 그대로다.
+- 원천 행에 남은 Gym 기록 필드(`_ng_task_index` · `_ng_rollout_index` 등 `_ng_` 로 시작하는 키)는 지운다 — task 번호는 학습 때 수집기가 새로 찍는다.
 
   python examples/configs/alpha/tools/build_general_blend.py --out <dir>/teacher_general_v1.jsonl [--n-train 40960] [--n-val 512] [--seed 20261106]
 """
@@ -162,6 +165,11 @@ def collect(bench):
                 if key in pools[ag]:
                     st[ag]["duplicate"] += 1
                     continue
+                stale = [k for k in row if k.startswith("_ng_")]
+                for k in stale:
+                    del row[k]
+                if stale:
+                    st[ag]["stripped_ng_fields"] += 1
                 b = contaminated(last_user_text(row), bench, index)
                 if b:
                     st[ag][f"bench_overlap_{b}"] += 1
@@ -198,6 +206,7 @@ def main() -> int:
     ap.add_argument("--n-val", type=int, default=512)
     ap.add_argument("--seed", type=int, default=20261106)
     ap.add_argument("--tokenizer", default=SFT_HF)
+    ap.add_argument("--val-drop-groups", default="genrm,identity", help="검증 파일에 쓰지 않을 그룹 (쉼표). 빈 문자열이면 모두 쓴다")
     ap.add_argument("--procs", type=int, default=64)
     a = ap.parse_args()
     if os.path.exists(a.out):
@@ -247,6 +256,8 @@ def main() -> int:
         val.append(train.pop())
     rng.shuffle(train)
     rng.shuffle(val)
+    drop_val = {g for g in a.val_drop_groups.split(",") if g}
+    val = [(ag, k) for ag, k in val if AGENT2GROUP[ag] not in drop_val]
     out_val = a.out.replace(".jsonl", "_val.jsonl")
     for path, items in ((a.out, train), (out_val, val)):
         with open(path, "wb") as fo:
@@ -264,6 +275,7 @@ def main() -> int:
             "bench_items": collections.Counter(b for b, _, _ in bench),
             "prompt_caps": {"train": CAP_TRAIN, "genrm": CAP_GENRM, "llm_judge": CAP_LLM_JUDGE},
             "max_prompt_tokens_before_caps": max_prompt_before_caps,
+            "val_dropped_groups": sorted(drop_val),
         }
         with open(path + ".stats.json", "w") as fs:
             json.dump(info, fs, indent=1, ensure_ascii=False)

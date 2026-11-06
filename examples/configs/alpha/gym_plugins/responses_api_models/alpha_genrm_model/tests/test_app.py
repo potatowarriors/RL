@@ -13,6 +13,7 @@ import nemo_gym  # noqa: F401  — import 시 플러그인 루트와 Gym 루트�
 from resources_servers.genrm_compare.utils import GenRMOutputParseError, parse_genrm_output
 from responses_api_models.alpha_genrm_model.app import (
     AlphaGenRMModel,
+    _last_scores,
     inject_genrm_roles,
     normalize_response_dict,
     parse_boxed_scores,
@@ -95,17 +96,24 @@ def test_role_injection_matches_gym_mixin():
         {"role": "principle", "content": "P"}, {"role": "response_1", "content": "A"}]
 
 
-def test_principle_as_system_for_genrm_without_principle_role():
-    body = {"messages": [{"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "response_2": "B", "principle": "Criteria: say alpha"}}
-    out = inject_genrm_roles(body, supports_principle_role=False, principle_as_system=True)
-    assert out["messages"][0] == {"role": "system", "content": "Criteria: say alpha"}
-    assert [m["role"] for m in out["messages"]] == ["system", "user", "response_1", "response_2"]
-    body = {"messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "principle": "P"}}
-    out = inject_genrm_roles(body, supports_principle_role=False, principle_as_system=True)
-    assert out["messages"][0] == {"role": "system", "content": "P\n\nS"} and len(out["messages"]) == 3
+def test_principle_as_user_suffix_for_genrm_without_principle_role():
+    body = {"messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "Q1"}, {"role": "assistant", "content": "A1"},
+                         {"role": "user", "content": "Q2"}], "metadata": {"response_1": "A", "response_2": "B", "principle": "Criteria: say alpha"}}
+    out = inject_genrm_roles(body, supports_principle_role=False, principle_as_user_suffix=True)
+    assert out["messages"][3]["content"].startswith("Q2\n\n[Evaluation criteria for judging the responses]\nCriteria: say alpha")
+    assert out["messages"][1]["content"] == "Q1" and out["messages"][0] == {"role": "system", "content": "S"}
+    assert [m["role"] for m in out["messages"]][-2:] == ["response_1", "response_2"]
     # default_principle "" (일반 대화 행) 이면 아무것도 붙지 않는다
     body = {"messages": [{"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "response_2": "B", "principle": ""}}
-    assert [m["role"] for m in inject_genrm_roles(body, False, True)["messages"]] == ["user", "response_1", "response_2"]
+    assert inject_genrm_roles(body, False, True)["messages"][0]["content"] == "Q"
+
+
+def test_genrm_template_drops_system_messages():
+    # 49B GenRM chat template (리비전 3160979) 은 대화에서 user · assistant 만 그린다 — system 으로 principle 을 넣으면 안 되는 이유
+    tpl = (Path(__file__).parent / "data" / "genrm49b_chat_template.jinja").read_text()
+    assert "set system_message = 'detailed thinking on'" in tpl
+    loop = tpl[tpl.index("#### Conversation Context"):tpl.index("#### Responses to be Scored")]
+    assert "'user'" in loop and "'assistant'" in loop and "'system'" not in loop
 
 
 def test_role_injection_matches_gym_source():
@@ -120,3 +128,8 @@ def test_role_injection_matches_gym_source():
 
 def test_server_overrides_preprocess():
     assert AlphaGenRMModel._preprocess_chat_completion_create_params is not VLLMModel._preprocess_chat_completion_create_params
+
+
+def test_last_scores_reads_normalized_json():
+    resp, ok = normalize_response_dict(_resp(REAL))
+    assert ok and _last_scores(resp) == {"score_1": 4, "score_2": 1, "ranking": 1}
