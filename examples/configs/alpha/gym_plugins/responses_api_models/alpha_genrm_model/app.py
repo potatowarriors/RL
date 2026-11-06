@@ -16,6 +16,7 @@ Gym 플러그인 루트(`NEMO_GYM_EXTRA_ROOTS=<이 리포>/examples/configs/alph
 
 import json
 import logging
+import os
 import re
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
@@ -163,9 +164,12 @@ class AlphaGenRMModel(VLLMModel):
         with self._stats_lock:
             self._stats["requests"] += 1
             self._stats["parsed" if ok else "parse_failed"] += 1
-            failed, total = self._stats["parse_failed"], self._stats["requests"]
+            snap = dict(self._stats)
+        if not ok or snap["requests"] % 50 == 0:
+            # 런이 끝나면 서버와 함께 집계가 사라지므로 로그에 누적값을 남긴다 (워커 프로세스마다 따로 센다 → pid 로 구분)
+            logger.warning(f"[alpha_genrm] stats pid={os.getpid()} requests={snap['requests']} parsed={snap['parsed']} parse_failed={snap['parse_failed']}")
         if not ok:
-            logger.warning(f"[alpha_genrm] parse_failed ({failed}/{total}); output text left unchanged for genrm_compare retry")
+            logger.warning(f"[alpha_genrm] parse_failed pid={os.getpid()}; output text left unchanged for genrm_compare retry")
             return response
         return NeMoGymResponse.model_validate(resp_dict)
 
