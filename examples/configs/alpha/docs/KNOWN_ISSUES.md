@@ -6,6 +6,15 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## inverse_if 행 약 20% 의 judge 지시문이 Gym 파서가 못 읽는 `answer_score` 형식을 요구한다 (2026-11-06 JG1 스모크 FAIL 원인, 미조치)
+
+- **증상**: JG1 스모크에서 inverse_if 엄격 파싱 실패 121/836 (14.5%) — 기준 3% 초과. 다른 judge 경로는 모두 통과.
+- **원인**: inverse_if 행은 판정 지시문(`judge_system_prompt`)을 행마다 들고 온다. 블렌드 924행 중 약 180행이 `[JSON]: {"answer_score": 0|1}` 형식을, 나머지가
+  `{"result": "PASS"/"FAIL"}` 형식을 요구한다. Gym v0.6.0 `inverse_if/app.py` `_extract_verdict` 는 `result` 형식만 읽고, 못 읽으면 마지막 5줄에서 PASS·FAIL 낱말을
+  찾고 없으면 FAIL 로 둔다. Gemma 는 지시문대로 `answer_score` 를 냈다 → 120/120 대체 판정 (PASS 46 · FAIL 74, "failed" 같은 낱말 우연). `result` 형식 행은 715/716 엄격 파싱.
+- **영향**: 블렌드의 약 0.44% 가 낱말 우연으로 채점된다. 기준(3%)은 agent 단위라 FAIL.
+- **선행 사례**: 확인 못 함 (Gym upstream 이슈 검색은 하지 않았다). 원인이 데이터와 파서 코드에서 직접 보이는 자명한 경우라 진단 절차는 생략했다.
+
 ## GenRM principle 을 system 메시지로 넣은 변경이 효과가 없었다 — "순위 3 → 1" 은 단일 표본 잡음 (2026-11-06 ✅ user 메시지 뒤로 옮김)
 
 - **증상**: 49B GenRM (`nvidia/Llama-3_3-Nemotron-Super-49B-GenRM`, 결정 49) 은 principle 역할이 없다. identity 행 기준(principle)을 system 메시지로 넣으면
