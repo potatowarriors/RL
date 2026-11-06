@@ -6,7 +6,7 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
-## inverse_if 행 약 20% 의 judge 지시문이 Gym 파서가 못 읽는 `answer_score` 형식을 요구한다 (2026-11-06 JG1 스모크 FAIL 원인, 미조치)
+## inverse_if 행 약 20% 의 judge 지시문이 Gym 파서가 못 읽는 `answer_score` 형식을 요구한다 (2026-11-06 JG1 스모크 FAIL 원인, ✅ 해당 행 제외 — 결정 53)
 
 - **증상**: JG1 스모크에서 inverse_if 엄격 파싱 실패 121/836 (14.5%) — 기준 3% 초과. 다른 judge 경로는 모두 통과.
 - **원인**: inverse_if 행은 판정 지시문(`judge_system_prompt`)을 행마다 들고 온다. 블렌드 924행 중 약 180행이 `[JSON]: {"answer_score": 0|1}` 형식을, 나머지가

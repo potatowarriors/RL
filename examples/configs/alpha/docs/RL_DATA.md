@@ -155,10 +155,10 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 | IF | 20,413 | 49.8% | 35% → 남는 몫 받음 | 28,302 |
 | 구조화 출력 (v1 · v3 · citation · freeform) | 8,750 | 21.4% | 15% → 남는 몫 받음 | 14,649 |
 | GenRM 대화 (+ reasoning off) | 3,277 | 8.0% | 8% (결정 51, 원래 25%) | 92,549 |
-| multichallenge · inverse_if | 2,625 | 6.4% | 10% | 2,657 |
+| multichallenge · inverse_if | 2,448 | 6.0% | 10% | 2,478 (inverse_if 757 — 결정 53) |
 | abstention | 2,166 | 5.3% | 8% | 2,193 |
-| 안전 (jailbreak 5종 · over_refusal) | 3,479 | 8.5% | 6% → 남는 몫 받음 | 5,733 |
-| identity | 410 | 1.0% | 1% | 16,510 |
+| 안전 (jailbreak 5종 · over_refusal) | 3,498 | 8.5% | 6% → 남는 몫 받음 | 5,733 |
+| identity | 408 | 1.0% | 1% | 16,510 |
 
 - 모자란 두 그룹과 GenRM 을 줄인 몫(결정 51)은 반복하지 않고 IF · 구조화 · 안전에 §5.3 비율 35:15:6 으로 나눴다 (결정 52 — 전부 IF 로 보내면 58.3%). 필터: 참조 pass_rate (0,1) — 원천에 1 인 행은 없어 참조 SFT 가 못 푼 행만 빠진다 (abstention 957 · IF 8,037 · 구조화 8,859 고유) · abstention 원본 데이터셋의 블렌드 밖 648행 추가 (pass_rate 0 으로 뺀 과제가 원본 사본으로 되살아나지 않게 막음) · 벤치 대조 IFEval 10행 제외 · 프롬프트 상한 GenRM 16,384 (GenRM 창 49,152) 173행 · LLM judge 28,672 (Gemma 창 65,536) 14행 제외 — 원래 최대 144,317 토큰 행이 학습 창 128K 를 넘었다.
 - Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif (다른 채점 서버) 라 넣지 않았다. calendar · IPI 는 뺐다 (§5.3).
