@@ -102,13 +102,22 @@ def normalize_response_dict(resp: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]
     return resp, True
 
 
-def inject_genrm_roles(body_dict: Dict[str, Any], supports_principle_role: bool) -> Dict[str, Any]:
-    """Gym `GenRMModelMixin` 과 같은 역할 주입. metadata 는 소비하고 vLLM 으로 넘기지 않는다."""
+def inject_genrm_roles(body_dict: Dict[str, Any], supports_principle_role: bool, principle_as_system: bool = False) -> Dict[str, Any]:
+    """Gym `GenRMModelMixin` 과 같은 역할 주입. metadata 는 소비하고 vLLM 으로 넘기지 않는다.
+
+    principle 역할을 모르는 GenRM (49B) 에는 `principle_as_system` 이면 principle 을 system 메시지로 앞에 둔다
+    (이미 system 이 있으면 그 앞에 붙인다). 2026-11-06 identity 행 실측: 기준 없음 "정답 vs 나는 ChatGPT" 순위 3 → system 1.
+    """
     metadata = body_dict.pop("metadata", None) or {}
     messages = body_dict["messages"]
     principle = metadata.get("principle")
     if supports_principle_role and principle:
         messages.append({"role": "principle", "content": principle})
+    elif principle_as_system and principle:
+        if messages and messages[0].get("role") == "system" and isinstance(messages[0].get("content"), str):
+            messages[0] = {**messages[0], "content": principle + "\n\n" + messages[0]["content"]}
+        else:
+            messages.insert(0, {"role": "system", "content": principle})
     if metadata.get("response_1") is not None:
         messages.append({"role": "response_1", "content": metadata["response_1"]})
     if metadata.get("response_2") is not None:
@@ -120,6 +129,9 @@ class AlphaGenRMModelConfig(VLLMModelConfig):
     """외부 GenRM endpoint 설정. principle 역할은 49B GenRM 이 지원하지 않는다."""
 
     supports_principle_role: bool = False
+    # principle 을 system 메시지로 넣는다 (identity 행의 기준). genrm_compare 는 use_principle 일 때만 넘기고,
+    # default_principle 을 "" 로 두면 principle 이 없는 일반 대화 행에는 아무것도 붙지 않는다.
+    principle_as_system: bool = True
 
 
 class AlphaGenRMModel(VLLMModel):
@@ -132,7 +144,7 @@ class AlphaGenRMModel(VLLMModel):
 
     def _preprocess_chat_completion_create_params(self, request: Request, body_dict: Dict[str, Any]) -> Dict[str, Any]:
         body_dict = super()._preprocess_chat_completion_create_params(request, body_dict)
-        return inject_genrm_roles(body_dict, self.config.supports_principle_role)
+        return inject_genrm_roles(body_dict, self.config.supports_principle_role, self.config.principle_as_system)
 
     def setup_webserver(self) -> FastAPI:
         app = super().setup_webserver()

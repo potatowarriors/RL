@@ -95,6 +95,19 @@ def test_role_injection_matches_gym_mixin():
         {"role": "principle", "content": "P"}, {"role": "response_1", "content": "A"}]
 
 
+def test_principle_as_system_for_genrm_without_principle_role():
+    body = {"messages": [{"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "response_2": "B", "principle": "Criteria: say alpha"}}
+    out = inject_genrm_roles(body, supports_principle_role=False, principle_as_system=True)
+    assert out["messages"][0] == {"role": "system", "content": "Criteria: say alpha"}
+    assert [m["role"] for m in out["messages"]] == ["system", "user", "response_1", "response_2"]
+    body = {"messages": [{"role": "system", "content": "S"}, {"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "principle": "P"}}
+    out = inject_genrm_roles(body, supports_principle_role=False, principle_as_system=True)
+    assert out["messages"][0] == {"role": "system", "content": "P\n\nS"} and len(out["messages"]) == 3
+    # default_principle "" (일반 대화 행) 이면 아무것도 붙지 않는다
+    body = {"messages": [{"role": "user", "content": "Q"}], "metadata": {"response_1": "A", "response_2": "B", "principle": ""}}
+    assert [m["role"] for m in inject_genrm_roles(body, False, True)["messages"]] == ["user", "response_1", "response_2"]
+
+
 def test_role_injection_matches_gym_source():
     # Gym 원본 소스와 같은 순서·조건인지 원문으로 대조한다 (원본은 import 하면 vllm 을 요구해 직접 부를 수 없다)
     src = (Path(nemo_gym.__file__).parent.parent / "responses_api_models" / "genrm_model" / "app.py").read_text()
