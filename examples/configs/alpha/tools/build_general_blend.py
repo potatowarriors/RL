@@ -19,6 +19,8 @@ Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif 라 (다른
 - 검증셋(--n-val)은 그룹 비율대로 먼저 떼고 학습에서 뺀다. 출력 옆에 .stats.json 을 남긴다.
   GenRM · identity 몫은 검증 파일에 쓰지 않는다 (--val-drop-groups): genrm_compare 는 같은 키의 응답 16개(num_rollouts_per_prompt)가
   모일 때까지 기다리는데 검증은 프롬프트당 2개뿐이고 task 번호가 찍히지 않아 끝나지 않는다 (JG1 적대적 검토 2026-11-06). 학습 행 수는 그대로다.
+- inverse_if 행 중 자기 judge 지시문(judge_system_prompt)이 `{"result": "PASS"/"FAIL"}` 이 아닌 형식(`[JSON]: {"answer_score": …}`)을
+  요구하는 행은 뺀다 — Gym inverse_if 파서가 못 읽어 낱말 우연으로 채점된다 (RL_PLAN.md 결정 53, JG1 스모크 120/120 대체 판정).
 - 원천 행에 남은 Gym 기록 필드(`_ng_task_index` · `_ng_rollout_index` 등 `_ng_` 로 시작하는 키)는 지운다 — task 번호는 학습 때 수집기가 새로 찍는다.
 
   python examples/configs/alpha/tools/build_general_blend.py --out <dir>/teacher_general_v1.jsonl [--n-train 40960] [--n-val 512] [--seed 20261106]
@@ -172,6 +174,11 @@ def collect(bench):
                     del row[k]
                 if stale:
                     st[ag]["stripped_ng_fields"] += 1
+                if ag == "inverse_if_simple_agent":
+                    sysp = (row.get("judge_system_prompt") or "") + (row.get("judge_prompt_template") or "")
+                    if row.get("judge_system_prompt") and '"result"' not in sysp:
+                        st[ag]["dropped_judge_format_not_result"] += 1
+                        continue
                 b = contaminated(last_user_text(row), bench, index)
                 if b:
                     st[ag][f"bench_overlap_{b}"] += 1
