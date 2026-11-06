@@ -148,6 +148,22 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 
 - **생성 길이 실측 (2026-11-06, General 시작점 SFT 2862 의 Pai IFEval 응답 4,328개 = 541 × 8, 서빙 상한 40,960 · 생성 상한 32,768)**: 평균 3,126 · 중앙 1,164 · p90 4,795 · p95 14,937 토큰. 구간별 ≤8K 4,040 (93.3%) · 8~16K 77 (1.8%) · 16~32K 27 (0.6%) · 상한 도달 184 (4.3%). 상한 도달 184개는 91% 가 끝 2만 자 zlib 압축률 < 0.1 인 반복 루프이고 사고 닫힘 33% 다 — 길이 분포가 짧은 응답과 상한까지 가는 폭주로 갈린다. 16K 상한이 자르는 4.9% 중 폭주가 아닌 응답은 약 0.6% 다. RL Code·Math 1단계 282 도 같은 모양 (>16K 5.1%). 측정 `ifeval_len.py` · `ifeval_tail.py` (세션 tmp). LogicKor · SimpleQA 표본은 앞 400~500 자만 저장돼 길이를 잴 수 없다.
 
+**최종 `teacher_general_v1.jsonl` (2026-11-06, 결정 50 — §5.3 비율, 사전 측정 없음)** — 40,960행 (= 640 step × 64) + 검증 512, 구조 게이트 OK, 렌더 프롬프트 최대 28,483 토큰, 검사기 ERROR 0. 생성 `tools/build_general_blend.py` (seed 20261106).
+
+| 그룹 | 학습 행 | 비중 | 목표 | 고유 풀 (필터 뒤) |
+|---|---:|---:|---:|---:|
+| IF | 16,919 | 41.3% | 35% | 28,302 |
+| 구조화 출력 (v1 · v3 · citation · freeform) | 6,144 | 15.0% | 15% | 14,649 |
+| GenRM 대화 (+ reasoning off) | 10,240 | 25.0% | 25% | 92,549 |
+| multichallenge · inverse_if | 2,624 | 6.4% | 10% | 2,657 |
+| abstention | 2,166 | 5.3% | 8% | 2,193 |
+| 안전 (jailbreak 5종 · over_refusal) | 2,457 | 6.0% | 6% | 5,733 |
+| identity | 410 | 1.0% | 1% | 16,510 |
+
+- 모자란 두 그룹은 반복하지 않고 전부 쓰고 남는 몫을 IF 로 돌렸다. 필터: 참조 pass_rate (0,1) — 원천에 1 인 행은 없어 참조 SFT 가 못 푼 행만 빠진다 (abstention 957 · IF 8,037 · 구조화 8,859 고유) · abstention 원본 데이터셋의 블렌드 밖 648행 추가 (pass_rate 0 으로 뺀 과제가 원본 사본으로 되살아나지 않게 막음) · 벤치 대조 IFEval 10행 제외 · 프롬프트 상한 GenRM 16,384 (GenRM 창 49,152) 173행 · LLM judge 28,672 (Gemma 창 65,536) 14행 제외 — 원래 최대 144,317 토큰 행이 학습 창 128K 를 넘었다.
+- Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif (다른 채점 서버) 라 넣지 않았다. calendar · IPI 는 뺐다 (§5.3).
+- GenRM 행의 principle (프롬프트별 평가 기준): Ultra 원천 100% · Super 26~35% 가 갖는다 — 49B GenRM 에 system 메시지로 넘긴다 (결정 49 플러그인).
+
 judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없다. calendar 는 모든 런에서 보상 0 이라 원인을 찾을 때까지 뺀다.
 도구 계열(tau·swe_pivot·toolcall_schema·IPI·workplace)은 2차 agentic 으로 넘긴다.
 

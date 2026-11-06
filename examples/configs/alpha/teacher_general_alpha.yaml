@@ -1,0 +1,168 @@
+# teacher_general_alpha.yaml — 1차 General(chat·IF) teacher (RL_PLAN.md 결정 18·19·50, docs/RL_DATA.md §5.3).
+#
+# 판은 STEM teacher (teacher_stem_alpha.yaml: student_rlvr1 의 검증된 RLVR 설정 + judge 분할 + Gemma judge + 생성 32K + lr 5e-6 + warmup 10).
+# 여기에 Code·Math 에서 굳힌 운영 설정을 얹는다: 초과 할당 4 (결정 31) · save_period 5 · 롤아웃 그룹 기록 · 상한 초과 그룹 가드 ·
+# 에이전트 재호출 금지 · 검증 20 step 마다. 생성 상한 32,768 = DeepSeek-R1 general RL (결정 50, 사용자 2026-11-06).
+#
+# 블렌드: teacher_general_v1.jsonl (40,960 = 640 step × 64, 1 에폭) + _val.jsonl 512 — tools/build_general_blend.py, RL_DATA.md §5.3 비율.
+# 채점:
+#   - 규칙: instruction_following · structured_outputs (v1·v3) · citation_format · freeform_formatting
+#   - GenRM: genrm_simple_agent(+_reasoning_off), identity 행 포함 — 외부 49B GenRM (결정 49), alpha 플러그인 alpha_genrm_model
+#     (boxed 점수 → JSON, principle → system 메시지). 길이 제어는 Ultra IFBench teacher 값 (아래 genrm_compare).
+#   - LLM judge: multichallenge · inverse_if · abstention · jailbreak 5종 · over_refusal — 전부 judge_model (Gemma-4-31B-it, 롤아웃 노드 2장).
+#     Gym 기본값은 multichallenge = 정책 자신, abstention = genrm_model, jailbreak = Nemotron 안전 judge(전용 형식) 라 여기서 바꾼다.
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_general_alpha.yaml \
+#                        data.train.data_path=<teacher_general_v1.jsonl>
+# 실행: RECIPE=examples/configs/alpha/teacher_general_alpha.yaml DATA=<teacher_general_v1.jsonl> VAL=<teacher_general_v1_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_general <tag> policy.model_name=<hfmodel_0002862>
+# 전제: GenRM endpoint https://gemma4.withai.cj.net:10206/v1 (served name genrm) 가 떠 있어야 한다 — 죽어도 genrm_compare 는 무승부로 삼킨다.
+#   확인: curl -s https://gemma4.withai.cj.net:10206/health · 집계 GET <alpha_genrm_model 서버>/alpha_genrm/stats. Gemma 가중치 /home/work/vidsearch/models/gemma-4-31B-it
+defaults: teacher_stem_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_general"
+  save_period: 5                        # Code·Math 값 (손실 축소). 보존은 runs 의 하드링크 보존 루프 (25 step)
+
+grpo:
+  max_num_steps: 640                    # 규모 B (결정 19): 40,960 프롬프트 1 에폭
+  max_num_epochs: 2                     # 데이터로더 여유 (클램프 = min(640, 2 × 640))
+  val_period: 20
+  val_at_start: true                    # step 0 기준선
+  val_at_end: true
+  async_grpo:
+    rollout_overprovision: 4            # 결정 31
+    rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl
+    drop_groups_over_gen_tokens: ${policy.generation.max_new_tokens}   # 가드 (KNOWN_ISSUES 10-20)
+
+policy:
+  generation:
+    max_new_tokens: 32768               # 결정 50 (R1 general RL 과 같은 값)
+
+env:
+  _override_: true
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
+    skip_venv_if_present: true
+    port_range_low: 5000
+    port_range_high: 5999
+    effort_levels:                      # 부모와 같다 (블렌드의 effort 마커는 build_general_blend.py 가 지웠다)
+      low_string: "{reasoning effort: efficient}"
+      low_weight: 0.1
+      low_penalty: 1
+      low_ub: 15000
+    invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
+    thinking_tags: ["<think>", "</think>"]
+    config_paths:
+      # NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins (launch.sh 가 넘긴다)
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml           # strict 유지 정책 서버 (결정 13)
+      - responses_api_models/alpha_genrm_model/configs/alpha_genrm_compare.yaml                    # alpha 플러그인 — 외부 GenRM + genrm 2 agent
+      - resources_servers/instruction_following/configs/instruction_following.yaml
+      - resources_servers/structured_outputs/configs/structured_outputs_json_yaml_xml_v1.yaml
+      - resources_servers/structured_outputs/configs/structured_outputs_v3.yaml                    # 같은 structured_outputs 서버 + v3 agent
+      - resources_servers/format_verification/configs/citation_format.yaml
+      - resources_servers/format_verification/configs/freeform_formatting.yaml
+      - resources_servers/multichallenge/configs/multichallenge_nrl.yaml
+      - resources_servers/inverse_if/configs/inverse_if.yaml
+      - resources_servers/abstention/configs/abstention.yaml
+      - resources_servers/jailbreak_detection/configs/jailbreak_detection_nemotron_combined_reward_tp8.yaml
+      - configs/over_refusal_detection_alpha.yaml                                                  # alpha 사본 — 원본의 openai judge_model 블록 제거
+    policy_model:
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 8
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs: null
+    policy_model_reasoning_off:
+      _copy: policy_model
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 2
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs:
+            enable_thinking: false
+    # judge: Gemma-4-31B-it — STEM 과 같은 블록 (thinking 끔, Ray 가 롤아웃 노드의 남은 GPU 2장에 TP2).
+    judge_model:
+      responses_api_models:
+        local_vllm_model:
+          entrypoint: app.py
+          model: /home/work/vidsearch/models/gemma-4-31B-it
+          return_token_id_information: false
+          uses_reasoning_parser: false
+          hf_home: /home/work/vidsearch/tools/nemo_rl/hf
+          debug: false
+          ray_worker_py_executable: /home/work/vidsearch/tools/nemo_rl/venvs/nemo_rl.models.generation.vllm.vllm_worker_async.VllmAsyncGenerationWorker/bin/python
+          vllm_serve_env_vars:
+            VLLM_RAY_DP_PACK_STRATEGY: strict
+            HF_HUB_OFFLINE: "1"
+          vllm_serve_kwargs:
+            tensor_parallel_size: 2
+            data_parallel_size: 1
+            pipeline_parallel_size: 1
+            gpu_memory_utilization: 0.9
+            max_model_len: 65536
+            language_model_only: true
+            enable_chunked_prefill: true
+            max_num_seqs: 256
+    # GenRM 길이 제어 = Ultra IFBench teacher 값 (ifbench_teacher.yaml 569~574행): 그룹 길이 벌점 0.1 (사고·답 각각) · 상위 20% 중 최단 보너스 0.5.
+    # 작은 정책이 GenRM 보상을 길이로 따는 해킹 대비 (Ultra 보고서 · DeepSeek-R1 Fig. 6). 끄려면 네 값을 0 으로.
+    genrm_compare_resources_server:
+      resources_servers:
+        genrm_compare:
+          reasoning_bonus: 0.5
+          answer_bonus: 0.5
+          top_percentile: 0.2
+          group_reasoning_length_penalty_coeff: 0.1
+          group_answer_length_penalty_coeff: 0.1
+    multichallenge:
+      resources_servers:
+        multichallenge:
+          judge_model_server:
+            type: responses_api_models
+            name: judge_model           # Gym 기본값은 정책 자신 (policy_model)
+          judge_responses_create_params:
+            input: []
+            max_output_tokens: 512
+            temperature: 0.0
+    abstention:
+      resources_servers:
+        abstention:
+          judge_model_server:
+            type: responses_api_models
+            name: judge_model           # Gym 기본값은 genrm_model — 49B GenRM 은 쌍대 채점 전용이라 일반 판정에 쓰지 않는다
+    inverse_if:
+      resources_servers:
+        inverse_if:
+          judge_model_server:
+            type: responses_api_models
+            name: judge_model
+    jailbreak_detection:
+      resources_servers:
+        jailbreak_detection:
+          judge_model_server:
+            type: responses_api_models
+            name: judge_model           # Gym 기본값은 Nemotron 안전 judge (safety_judge_model)
+          use_nemotron_format: false    # Nemotron 안전 judge 전용 입출력 형식을 끄고 표준 [[SAFE]]/[[UNSAFE]] 판정 프롬프트를 쓴다
+    # 단일 응답 agent 는 정책 재호출 금지 (Code·Math 가드와 같다)
+    instruction_following_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    structured_outputs_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    structured_outputs_v3_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    citation_format_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    freeform_formatting_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    genrm_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    genrm_simple_agent_reasoning_off: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    multichallenge_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    inverse_if_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    abstention_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_detection_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_refusal_with_explanation: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_hard_refusal_with_helplines: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_engagement_with_disclaimer: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_hard_refusal_no_redirection: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    over_refusal_detection_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+
+logger:
+  wandb:
+    project: alpha-rl
