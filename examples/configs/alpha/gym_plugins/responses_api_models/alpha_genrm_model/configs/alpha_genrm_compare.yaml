@@ -1,0 +1,74 @@
+# alpha General teacher 의 GenRM 쌍대 비교 (RL_PLAN.md 결정 49). Gym resources_servers/genrm_compare/configs/genrm_compare.yaml 과 같은 구성인데
+# GenRM 모델 서버만 외부 endpoint 용 alpha_genrm_model 로 바꿨다 (Gym 원본은 235B 를 직접 띄우는 local genrm_model 블록을 함께 담아 그대로 쓸 수 없다).
+# 사용: NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins 를 주고 env.nemo_gym.config_paths 에 이 파일을 넣는다.
+# endpoint: gemma4 인스턴스 (Backend.AI) 의 vLLM — 외부 https://gemma4.withai.cj.net:10206 → 내부 :8000, served name genrm, API 키 없음.
+genrm_compare_resources_server:
+  resources_servers:
+    genrm_compare:
+      entrypoint: app.py
+      genrm_model_server:
+        type: responses_api_models
+        name: genrm_model
+      num_rollouts_per_prompt: 16
+      genrm_responses_create_params:
+        input: []
+        max_output_tokens: 8192          # 49B GenRM 실측 출력 758~1,084 토큰 (2026-11-06). Gym 기본 16384 는 max_model_len 49,152 안의 입력 몫을 줄인다
+        temperature: 0.6
+        top_p: 0.95
+      comparison_strategy: circular      # 그룹 16 → 비교 16회
+      num_judges_per_comparison: 1
+      use_principle: false               # 49B GenRM 은 principle 역할을 지원하지 않는다
+      aggregator_method: simple_tiebreaker
+      reasoning_bonus: 0.0               # 길이 제어 4개는 레시피가 정한다 (General 결정 대기)
+      answer_bonus: 0.0
+      top_percentile: 0.2
+      group_reasoning_length_penalty_coeff: 0.0
+      group_answer_length_penalty_coeff: 0.0
+      group_style_penalty_coeff: 0.0
+      default_score: 3.0
+      default_ranking: 3.5
+      debug_logging: false
+      genrm_parse_retries: 3
+      genrm_parse_retry_sleep_s: 0.2
+      domain: rlhf
+      verified: false
+      description: GenRM pairwise comparison for RLHF training (alpha external GenRM)
+      value: Compare multiple candidate responses using GenRM model
+genrm_model:
+  responses_api_models:
+    alpha_genrm_model:
+      entrypoint: app.py
+      base_url: https://gemma4.withai.cj.net:10206/v1
+      api_key: dummy                     # endpoint 에 키가 없다 (vLLM --api-key 없음)
+      model: genrm
+      return_token_id_information: false
+      uses_reasoning_parser: false       # 서버에 reasoning parser 가 없어 <think> 가 본문에 섞인다 — app.py 가 </think> 뒤만 읽는다
+      supports_principle_role: false
+genrm_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: genrm_compare_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      datasets:
+      - name: example
+        type: example
+        jsonl_fpath: resources_servers/genrm_compare/data/example.jsonl
+genrm_simple_agent_reasoning_off:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: genrm_compare_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model_reasoning_off
+      datasets:
+      - name: example
+        type: example
+        jsonl_fpath: resources_servers/genrm_compare/data/example.jsonl
