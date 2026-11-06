@@ -3,7 +3,7 @@ identity 는 롤아웃 그룹 기록 dataset) 와 서로 다른 행으로 만든
 import json, os, shutil, subprocess, sys
 A = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analyze_general_smoke.py")
 BASE = sys.argv[1]  # 합성 입력을 쓸 빈 디렉토리
-# 사용: python3 negctl_general_smoke.py <빈 디렉토리> — 마지막 줄 '음성 대조: 14/14 기대대로'
+# 사용: python3 negctl_general_smoke.py <빈 디렉토리> — 마지막 줄 '음성 대조: 16/16 기대대로'
 RULE = ["instruction_following_simple_agent", "structured_outputs_simple_agent", "structured_outputs_v3_simple_agent",
         "citation_format_simple_agent", "freeform_formatting_simple_agent"]
 GENRM = ["genrm_simple_agent", "genrm_simple_agent_reasoning_off"]
@@ -25,8 +25,9 @@ def healthy():
         lab = "[[COMPLIED]]" if ag.startswith("over") else "[[SAFE]]"
         rows[ag] = [{"reward": 1.0, "response": resp(f"no {i}"), "model_response_text": f"I can't help {i}",
                      "judge_evaluation": {"verdict_label": lab, "response": resp(f"reason {i}\n{lab}")}} for i in range(N)]
-    for i, x in enumerate(rows["jailbreak_refusal_with_explanation"]):
-        x.pop("judge_evaluation"); x["response_policy"] = "refusal_with_explanation"; x["verifier_labels"] = {"refusal": "[[REFUSED]]", "explanation": "[[HAS_EXPLANATION]]"}
+    for ag in ("jailbreak_refusal_with_explanation", "jailbreak_hard_refusal_with_helplines", "jailbreak_engagement_with_disclaimer", "jailbreak_hard_refusal_no_redirection"):
+        for i, x in enumerate(rows[ag]):
+            x.pop("judge_evaluation"); x["response_policy"] = ag; x["verifier_labels"] = {"check_a": "[[YES]]", "check_b": "[[NO]]"}
     groups = [{"agent": ag, "rewards": [1.0, 0.0], "time": 2e9, "dataset": "x"} for ag in rows]
     groups += [{"agent": "genrm_simple_agent", "rewards": [3.1, 2.9], "time": 2e9, "dataset": "identity_nosys.alpha_v1"}] * 2
     groups += [{"agent": "genrm_simple_agent", "rewards": [3.1, 2.9], "time": 2e9, "dataset": "ultra"}] * 2
@@ -59,7 +60,17 @@ def m_echo_mismatch(r, g, l):
         x["judge_evaluation"] = {"verdict_label": "[[SAFE]]", "response": resp(f"Respond with either [[SAFE]] or [[UNSAFE]]. analysis {i}\n[[UNSAFE]]")}
     return r, g, l
 def m_policy_none(r, g, l):
-    for x in r["jailbreak_refusal_with_explanation"][:10]: x["verifier_labels"] = {"refusal": None, "explanation": None}
+    for x in r["jailbreak_refusal_with_explanation"][:40]: x["verifier_labels"] = {"check_a": None, "check_b": None}
+    return r, g, l
+def m_policy_path_off(r, g, l):
+    for ag in ("jailbreak_refusal_with_explanation", "jailbreak_hard_refusal_with_helplines", "jailbreak_engagement_with_disclaimer", "jailbreak_hard_refusal_no_redirection"):
+        for i, x in enumerate(r[ag]):
+            x.pop("response_policy", None); x.pop("verifier_labels", None)
+            x["judge_evaluation"] = {"verdict_label": "[[SAFE]]", "response": resp(f"legacy {i}\n[[SAFE]]")}
+    return r, g, l
+def m_label_after_verdict(r, g, l):
+    for i, x in enumerate(r["jailbreak_detection_simple_agent"][:30]):
+        x["judge_evaluation"] = {"verdict_label": "[[SAFE]]", "response": resp(f"analysis {i}\n[[SAFE]]\n(It is not [[UNSAFE]] because it refused.)")}
     return r, g, l
 def m_genrm_fallback(r, g, l):
     return r, g, l + "[GenRM] Error in comparison for pair (0, 1): connection\n" * 5
@@ -88,6 +99,8 @@ ok = [run("healthy", lambda r, g, l: (r, g, l), None),
       run("judge_failed_rows", m_judge_fail, "P5a"),
       run("safety_echo_then_opposite_verdict", m_echo_mismatch, "P5d"),
       run("policy_verifier_none", m_policy_none, "P5e"),
+      run("policy_path_silently_off", m_policy_path_off, "P5f"),
+      run("label_mentioned_after_verdict_passes", m_label_after_verdict, None),
       run("genrm_fallback", m_genrm_fallback, "P6a"),
       run("genrm_position_bias", m_position_bias, "P6c"),
       run("rule_constant_with_penalty_zero", m_rule_constant, "P4 citation_format"),
