@@ -190,8 +190,8 @@ class AlphaGenRMModel(VLLMModel):
                 self._stats[f"rank{sc['ranking']}"] += 1
                 self._stats["score_tie"] += int(sc["score_1"] == sc["score_2"])
             snap = dict(self._stats)
-        if not ok or snap["requests"] % 50 == 0:
-            # 런이 끝나면 서버와 함께 집계가 사라지므로 로그에 누적값을 남긴다 (워커 프로세스마다 따로 센다 → pid 로 구분).
+        if not ok or snap["requests"] % 10 == 0:
+            # 런이 끝나면 서버와 함께 집계가 사라지므로 10회마다 로그에 누적값을 남긴다 (워커 프로세스마다 따로 센다 → pid 로 구분).
             # 순위 분포는 위치 편향(response_1 만 고름)·상수 판정을 잡는다 — circular 비교는 같은 응답을 두 자리에 한 번씩 넣는다.
             logger.warning(f"[alpha_genrm] stats pid={os.getpid()} " + " ".join(f"{k}={v}" for k, v in snap.items()))
         if not ok:

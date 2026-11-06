@@ -223,14 +223,17 @@ def main():
         tot.update(kv)
     req = tot["requests"]
     check("P6b alpha_genrm 파싱 실패 ≤ 2%", req > 0 and tot["parse_failed"] <= 0.02 * req,
-          f"{tot['parse_failed']}/{req} (워커 {len(last)}개, 50회 단위 스냅샷)")
+          f"{tot['parse_failed']}/{req} (워커 {len(last)}개, 10회 단위 스냅샷)")
     ranks = [tot[f"rank{i}"] for i in range(1, 7)]
     r1 = sum(ranks[:3]) / max(1, sum(ranks))
     check("P6c 순위 분포: response_1 우세 비율 0.2~0.8 (위치 편향·상수 판정)", sum(ranks) > 0 and 0.2 <= r1 <= 0.8,
           f"순위 1~6 = {ranks}, response_1 우세 {r1:.2f}")
     tie = tot["score_tie"] / max(1, tot["parsed"])
     check("P6d 개별 점수 동점 ≤ 50%", tot["parsed"] > 0 and tie <= 0.5, f"{tot['score_tie']}/{tot['parsed']} = {tie:.2f}")
-    print(f"[기록] principle 주입 {tot['principle_injected']} (스냅샷 하한) — principle 행 표본 {sum(1 for ag in GENRM for r in rows.get(ag, []) if find(r, 'principle'))}")
+    prin_rows = sum(1 for ag in GENRM for r in rows.get(ag, []) if find(r, "principle"))
+    # circular 비교는 그룹 16개 응답에 비교 16회 — principle 있는 행 수 = principle 실린 비교 수. 스냅샷이 워커마다 최대 9 적게 잡는다
+    check("P6e principle 주입 ≥ 50% (identity · Ultra 평가 기준이 GenRM 에 닿음)", prin_rows > 0 and tot["principle_injected"] >= 0.5 * prin_rows,
+          f"주입 {tot['principle_injected']} / principle 행 {prin_rows}")
     print("[기록] 그룹 보상이 모두 같은 그룹 비율 (판정에 쓰지 않음):",
           {ag: round(sum(1 for g in gs if len(set(g['rewards'])) <= 1) / len(gs), 2) for ag, gs in sorted(groups.items())})
     n_fail = sum(1 for _, ok in verdicts if not ok)

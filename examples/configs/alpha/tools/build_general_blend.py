@@ -12,7 +12,8 @@ Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif 라 (다른
 - 프롬프트 길이 상한 (alpha chat template 렌더 토큰, measure_blend_prompt_lengths.py 와 같은 렌더): 넘으면 런이 멈추거나 judge 요청이
   실패해 채점기가 기본값(무승부·0)으로 삼킨다. 학습 창 131,072 − 생성 32,768 = 98,304 · GenRM 창 49,152 (대화 + 두 최종 답 + 출력 8K)
   → 16,384 · Gemma judge 창 65,536 (대화 + 답 최대 32K) → 28,672.
-- 그룹 비율 = §5.3 (IF 35 · 구조화 15 · GenRM 25 · multichallenge·inverse_if 10 · abstention 8 · 안전 6 · identity 1).
+- 그룹 비율 = §5.3 (IF 35 · 구조화 15 · GenRM 25 · multichallenge·inverse_if 10 · abstention 8 · 안전 6 · identity 1) 에서
+  GenRM 만 8% 로 줄였다 (RL_PLAN.md 결정 51 — 49B GenRM 부하 측정: 비교 270건 19.9분, step 병목).
   그룹 안은 agent 별 고유 행 수에 비례. 풀이 모자란 그룹은 반복하지 않고 전부 쓴 뒤 남는 몫을 IF 로 돌린다.
 - 검증셋(--n-val)은 그룹 비율대로 먼저 떼고 학습에서 뺀다. 출력 옆에 .stats.json 을 남긴다.
   GenRM · identity 몫은 검증 파일에 쓰지 않는다 (--val-drop-groups): genrm_compare 는 같은 키의 응답 16개(num_rollouts_per_prompt)가
@@ -52,7 +53,7 @@ GROUPS = {  # 이름: (agent 들, 비중)
     "if": (["instruction_following_simple_agent"], 0.35),
     "struct": (["structured_outputs_simple_agent", "structured_outputs_v3_simple_agent",
                 "citation_format_simple_agent", "freeform_formatting_simple_agent"], 0.15),
-    "genrm": (["genrm_simple_agent", "genrm_simple_agent_reasoning_off"], 0.25),
+    "genrm": (["genrm_simple_agent", "genrm_simple_agent_reasoning_off"], 0.08),  # 25% → 8% (결정 51: GenRM 처리량 병목)
     "multi": (["multichallenge_simple_agent", "inverse_if_simple_agent"], 0.10),
     "abstention": (["abstention_simple_agent"], 0.08),
     "safety": (["jailbreak_detection_simple_agent", "jailbreak_refusal_with_explanation",
