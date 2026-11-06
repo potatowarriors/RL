@@ -14,7 +14,8 @@ Multichallenge-v1 · InverseIFEval-v1 원본은 agent 가 turing_vif 라 (다른
   → 16,384 · Gemma judge 창 65,536 (대화 + 답 최대 32K) → 28,672.
 - 그룹 비율 = §5.3 (IF 35 · 구조화 15 · GenRM 25 · multichallenge·inverse_if 10 · abstention 8 · 안전 6 · identity 1) 에서
   GenRM 만 8% 로 줄였다 (RL_PLAN.md 결정 51 — 49B GenRM 부하 측정: 비교 270건 19.9분, step 병목).
-  그룹 안은 agent 별 고유 행 수에 비례. 풀이 모자란 그룹은 반복하지 않고 전부 쓴 뒤 남는 몫을 IF 로 돌린다.
+  그룹 안은 agent 별 고유 행 수에 비례. 풀이 모자란 그룹은 반복하지 않고 전부 쓴다. 남는 몫(모자란 그룹 + GenRM 을 줄인 몫)은
+  --surplus-groups (기본 IF · 구조화 · 안전) 에 §5.3 비율(35:15:6)대로 나눈다 (RL_PLAN.md 결정 52 — 전부 IF 로 보내면 IF 58%).
 - 검증셋(--n-val)은 그룹 비율대로 먼저 떼고 학습에서 뺀다. 출력 옆에 .stats.json 을 남긴다.
   GenRM · identity 몫은 검증 파일에 쓰지 않는다 (--val-drop-groups): genrm_compare 는 같은 키의 응답 16개(num_rollouts_per_prompt)가
   모일 때까지 기다리는데 검증은 프롬프트당 2개뿐이고 task 번호가 찍히지 않아 끝나지 않는다 (JG1 적대적 검토 2026-11-06). 학습 행 수는 그대로다.
@@ -207,6 +208,7 @@ def main() -> int:
     ap.add_argument("--n-val", type=int, default=512)
     ap.add_argument("--seed", type=int, default=20261106)
     ap.add_argument("--tokenizer", default=SFT_HF)
+    ap.add_argument("--surplus-groups", default="if,struct,safety", help="남는 몫을 §5.3 비율대로 받을 그룹 (쉼표)")
     ap.add_argument("--val-drop-groups", default="genrm,identity", help="검증 파일에 쓰지 않을 그룹 (쉼표). 빈 문자열이면 모두 쓴다")
     ap.add_argument("--procs", type=int, default=64)
     a = ap.parse_args()
@@ -228,9 +230,21 @@ def main() -> int:
         if want_g[g] > group_pool[g]:
             surplus += want_g[g] - group_pool[g]
             want_g[g] = group_pool[g]
-    want_g["if"] += total - sum(want_g.values())  # 모자란 그룹의 남는 몫 + 반올림 오차
-    if want_g["if"] > group_pool["if"]:
-        raise SystemExit(f"IF 풀 부족: 필요 {want_g['if']} > {group_pool['if']}")
+    residual = total - sum(want_g.values())  # 모자란 그룹의 남는 몫 + 반올림 오차
+    sg = [g for g in a.surplus_groups.split(",") if g]
+    while residual > 0:
+        elig = [g for g in sg if want_g[g] < group_pool[g]]
+        if not elig:
+            raise SystemExit(f"남는 몫 {residual} 을 받을 그룹의 풀이 모두 찼다: {sg}")
+        base = sum(GROUPS[g][1] for g in elig)
+        add = {g: int(residual * GROUPS[g][1] / base) for g in elig}
+        rest = residual - sum(add.values())
+        for g in sorted(elig, key=lambda g: -GROUPS[g][1])[:rest]:
+            add[g] += 1
+        for g in elig:
+            take = min(add[g], group_pool[g] - want_g[g])
+            want_g[g] += take
+            residual -= take
     want = {}
     for g, (ags, _) in GROUPS.items():
         sizes = {x: len(keys.get(x, [])) for x in ags}
