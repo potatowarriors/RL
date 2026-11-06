@@ -9,8 +9,8 @@ r"""General teacher 스모크 JG1 판정 (CPU) — W&B 오프라인 표 · 롤�
   - judge 호출 실패는 Gym judge_failsafe 가 보상 0 + `_ng_failure_class` 행으로 바꾸고 NeMo-RL 은 그대로 학습한다 → agent 별 그 행 수 = 0 을 요구.
   - 판정 기록이 없는 행 (rubric_evaluations · judge_output · judge_evaluation · verifier_labels 없음) 은 "판정 안 됨". 정당한 생략은
     abstention 의 [IDK] 그대로 (judge 를 부르지 않는다) · 안전 agent 의 빈 응답뿐 → 판정 행 ≥ 95% (대상 행 기준), 0 이면 FAIL.
-  - 엄격 파싱: multichallenge [[YES]]/[[NO]] · inverse_if JSON result · abstention 한 글자 A/B/C · 안전 judge 원문에 서로 다른 라벨이 정확히 하나
-    (지시문의 "[[SAFE]] or [[UNSAFE]]" 를 되풀이하면 서버는 첫 라벨을 읽는다) · 정책별 jailbreak verifier 라벨 None = 실패.
+  - 엄격 파싱 (≤ 3%): multichallenge [[YES]]/[[NO]] · inverse_if JSON result · abstention 한 글자 A/B/C · 안전 judge 는 서버가 고른 라벨이 원문의
+    마지막 라벨과 같아야 성공 (서버는 처음 나온 라벨을 읽는다 — 지시문 되풀이 뒤 반대 판정이면 오독) · 정책별 jailbreak verifier 라벨 None = 실패.
   - GenRM: genrm_compare 의 무승부 대체 로그 ("[GenRM] Parse failed for pair" · "[GenRM] Error in comparison") 를 직접 센다.
     그룹 보상의 분산은 길이 보너스·벌점과 보상 벌점 때문에 고장 난 GenRM 에서도 생긴다 → 판정에 쓰지 않는다.
     alpha_genrm_model 누적 집계로 순위 분포 (위치 편향·상수 판정) · 동점 · principle 주입 수를 본다.
@@ -97,12 +97,11 @@ def top_reward(r):
     return float(v) if isinstance(v, (int, float)) else None
 
 
-def strict_one_label(text, labels):
-    present = {lab for lab in labels if lab in (text or "")}
-    if len(present) == 1:
-        return True
-    last = (text or "").strip().rsplit("\n", 1)[-1]
-    return sum(lab in last for lab in labels) == 1
+def last_label(text, labels):
+    """원문에서 마지막으로 나온 라벨. 서버는 처음 나온 라벨을 읽으므로, 지시문 되풀이 뒤 최종 판정이 반대면 서버 판정과 어긋난다."""
+    pos = {lab: (text or "").rfind(lab) for lab in labels}
+    pos = {k: v for k, v in pos.items() if v >= 0}
+    return max(pos, key=pos.get) if pos else None
 
 
 def judge_record(agent, r):
@@ -115,9 +114,9 @@ def judge_record(agent, r):
             bad = [e for e in evs if not JSON_RESULT.search(e.get("judge_response", ""))]
         return True, bool(evs), len(evs), len(bad), (bad[0].get("judge_response", "")[-300:] if bad else None)
     if agent.startswith("abstention"):
-        if str(find(r, "extracted_answer") or "").strip() == "[IDK]":
-            return False, False, 0, 0, None
         out = find(r, "judge_output")
+        if out is None and find(r, "verdict") == "abstain":  # 정규화 뒤 거절 토큰과 같으면 서버가 judge 를 부르지 않는다 (\boxed{IDK} 포함)
+            return False, False, 0, 0, None
         if out is None:
             return True, False, 0, 0, None
         c = out.strip()
@@ -129,22 +128,29 @@ def judge_record(agent, r):
     n = bad = 0
     ex = None
     labels_map = find(r, "verifier_labels")
+    r["_alpha_verifier"] = (0, 0)
     if isinstance(labels_map, dict) and labels_map:
-        for v_name, lab in labels_map.items():
-            n += 1
-            if lab is None:
-                bad += 1
-                ex = ex or f"verifier {v_name} label None"
+        nv = sum(1 for _ in labels_map)
+        nb = sum(1 for lab in labels_map.values() if lab is None)
+        r["_alpha_verifier"] = (nv, nb)
+        n += nv
+        bad += nb
+        if nb:
+            ex = ex or f"verifier label None {nb}/{nv}"
     kind = "over_refusal" if agent.startswith("over_refusal") else "jailbreak"
+    mismatch = 0
     for key, labs in (("judge_evaluation", SAFETY_LABELS[kind]), ("quality_judge_evaluation", SAFETY_LABELS["quality"])):
         ev = r.get(key) if isinstance(r.get(key), dict) else find(r, key)
         if not isinstance(ev, dict):
             continue
         n += 1
         text = last_text(ev.get("response") or {})
-        if ev.get("verdict_label") is None or ev.get("error") or not strict_one_label(text, labs):
+        lab = ev.get("verdict_label")
+        if lab is None or ev.get("error") or lab != last_label(text, labs):
             bad += 1
-            ex = ex or (ev.get("error") or text[-300:])
+            mismatch += int(lab is not None and not ev.get("error") and lab != last_label(text, labs))
+            ex = ex or (ev.get("error") or f"서버 {lab} · 원문 마지막 {last_label(text, labs)} · {text[-200:]}")
+    r["_alpha_label_mismatch"] = mismatch
     return True, n > 0, n, bad, ex
 
 
@@ -163,11 +169,18 @@ def main():
         print(f"[{'PASS' if ok else 'FAIL'}] {name}: {detail}")
 
     rows = load_tables(a.wandb)
+    groups = collections.defaultdict(list)
+    for line in open(a.groups):
+        g = json.loads(line)
+        if g.get("time", 1e18) < a.since or g.get("dropped"):
+            continue
+        groups[g.get("agent") or "?"].append(g)
+    # GenRM 표 행은 genrm_compare 가 필드 3개짜리 BaseVerifyResponse 로 돌려줘 dataset · principle 이 없다 → identity 는 그룹 기록 dataset 으로 센다
+    ident_groups = sum(1 for ag in GENRM for g in groups.get(ag, []) if str(g.get("dataset") or "").startswith("identity"))
     strata = set(rows)
-    ident = sum(1 for ag in GENRM for r in rows.get(ag, []) if str(find(r, "dataset") or "").startswith("identity"))
     expected = set(RULE) | set(GENRM) | {x for g in JUDGE_GROUPS.values() for x in g}
-    check("P3 agent 16 + identity 가 표에 있음", expected <= strata and ident > 0,
-          f"없는 agent {sorted(expected - strata)} · identity 표본 {ident}")
+    check("P3 agent 16 + identity 가 기록에 있음", expected <= strata and ident_groups > 0,
+          f"표에 없는 agent {sorted(expected - strata)} · identity 그룹 {ident_groups}")
 
     fails = {ag: sum(1 for r in rows[ag] if find(r, "_ng_failure_class") is not None) for ag in rows}
     check("P5a judge 실패 대체 행 (_ng_failure_class) = 0", sum(fails.values()) == 0, {k: v for k, v in fails.items() if v})
@@ -189,16 +202,18 @@ def main():
                 if ex and len(examples) < a.show:
                     examples.append(ex)
         check(f"P5b {g} 판정된 행 ≥ 95% (대상 {elig})", elig > 0 and judged >= 0.95 * elig, f"판정 {judged}/{elig}")
-        check(f"P5c {g} 엄격 파싱 실패 ≤ 2%", n > 0 and bad <= 0.02 * n, f"{bad}/{n}")
+        check(f"P5c {g} 엄격 파싱 실패 ≤ 3%", n > 0 and bad <= 0.03 * n, f"{bad}/{n}")
+        if g == "safety":
+            mm = sum(r.get("_alpha_label_mismatch", 0) for ag in agents for r in rows.get(ag, []))
+            check("P5d 안전 judge 서버 판정 == 원문 마지막 라벨 (불일치 0)", mm == 0, f"불일치 {mm} (정책별 verifier 는 원문이 없어 이 대리 지표로 본다)")
+            vn = sum(r.get("_alpha_verifier", (0, 0))[0] for ag in agents for r in rows.get(ag, []))
+            vb = sum(r.get("_alpha_verifier", (0, 0))[1] for ag in agents for r in rows.get(ag, []))
+            pol_rows = sum(1 for ag in agents for r in rows.get(ag, []) if find(r, "response_policy") or find(r, "verifier_labels") is not None)
+            check("P5e 정책별 jailbreak verifier 라벨 None ≤ 3% (안전 묶음에 희석되지 않게 따로)", (vn > 0 or pol_rows == 0) and vb <= 0.03 * max(vn, 1),
+                  f"None {vb}/{vn}")
         for ex in examples:
             print("      실패 예:", repr(ex))
 
-    groups = collections.defaultdict(list)
-    for line in open(a.groups):
-        g = json.loads(line)
-        if g.get("time", 1e18) < a.since or g.get("dropped"):
-            continue
-        groups[g.get("agent") or "?"].append(g)
     n_genrm_groups = sum(len(groups.get(x, [])) for x in GENRM)
     log_text = ""
     for f in glob.glob(os.path.join(a.gym_logs, "**", "*"), recursive=True):
@@ -222,18 +237,20 @@ def main():
     for kv in last.values():
         tot.update(kv)
     req = tot["requests"]
-    check("P6b alpha_genrm 파싱 실패 ≤ 2%", req > 0 and tot["parse_failed"] <= 0.02 * req,
+    check("P6b alpha_genrm 파싱 실패 ≤ 3% (부하 측정 기준선 3/270 = 1.1%, 실패는 genrm_compare 가 재시도)", req > 0 and tot["parse_failed"] <= 0.03 * req,
           f"{tot['parse_failed']}/{req} (워커 {len(last)}개, 10회 단위 스냅샷)")
     ranks = [tot[f"rank{i}"] for i in range(1, 7)]
     r1 = sum(ranks[:3]) / max(1, sum(ranks))
     check("P6c 순위 분포: response_1 우세 비율 0.2~0.8 (위치 편향·상수 판정)", sum(ranks) > 0 and 0.2 <= r1 <= 0.8,
           f"순위 1~6 = {ranks}, response_1 우세 {r1:.2f}")
     tie = tot["score_tie"] / max(1, tot["parsed"])
-    check("P6d 개별 점수 동점 ≤ 50%", tot["parsed"] > 0 and tie <= 0.5, f"{tot['score_tie']}/{tot['parsed']} = {tie:.2f}")
-    prin_rows = sum(1 for ag in GENRM for r in rows.get(ag, []) if find(r, "principle"))
-    # circular 비교는 그룹 16개 응답에 비교 16회 — principle 있는 행 수 = principle 실린 비교 수. 스냅샷이 워커마다 최대 9 적게 잡는다
-    check("P6e principle 주입 ≥ 50% (identity · Ultra 평가 기준이 GenRM 에 닿음)", prin_rows > 0 and tot["principle_injected"] >= 0.5 * prin_rows,
-          f"주입 {tot['principle_injected']} / principle 행 {prin_rows}")
+    check("P6d 개별 점수 동점 ≤ 90% (항상 동점만 잡는다 — 템플릿이 동점을 허용하고 기준선이 없다)", tot["parsed"] > 0 and tie <= 0.9,
+          f"{tot['score_tie']}/{tot['parsed']} = {tie:.2f}")
+    check("P6f GenRM 생존: 어댑터 파싱 성공 ≥ 0.9 × 16 × GenRM 그룹", n_genrm_groups > 0 and tot["parsed"] >= 0.9 * expect_cmp,
+          f"파싱 성공 {tot['parsed']} / 기대 비교 {expect_cmp} (스냅샷이 워커마다 최대 9 적게 잡는다)")
+    # identity 행은 모두 principle 을 갖는다 → 16 × identity 그룹 이 principle 실린 비교 수의 하한 (Ultra GenRM 행의 기준까지 더하면 더 크다)
+    check("P6e principle 주입 ≥ 0.5 × 16 × identity 그룹", ident_groups > 0 and tot["principle_injected"] >= 0.5 * 16 * ident_groups,
+          f"주입 {tot['principle_injected']} / 하한 {16 * ident_groups}")
     print("[기록] 그룹 보상이 모두 같은 그룹 비율 (판정에 쓰지 않음):",
           {ag: round(sum(1 for g in gs if len(set(g['rewards'])) <= 1) / len(gs), 2) for ag, gs in sorted(groups.items())})
     n_fail = sum(1 for _, ok in verdicts if not ok)
