@@ -218,7 +218,7 @@ def main():
         check(f"P5c {g} 엄격 파싱 실패 ≤ 3%", n > 0 and bad <= 0.03 * n, f"{bad}/{n}")
         if g == "safety":
             mm = sum(r.get("_alpha_label_mismatch", 0) for ag in agents for r in rows.get(ag, []))
-            legacy_n = sum(1 for ag in agents for r in rows.get(ag, []) if isinstance(find(r, "judge_evaluation"), dict))
+            legacy_n = sum(isinstance(find(r, k), dict) for ag in agents for r in rows.get(ag, []) for k in ("judge_evaluation", "quality_judge_evaluation"))  # 판정 단위 (불일치 계수와 같은 단위)
             check("P5d 안전 judge 서버 판정 == 최종 판정 라벨, 불일치 ≤ 0.5%", mm <= 0.005 * max(legacy_n, 1),
                   f"불일치 {mm}/{legacy_n} (정책별 verifier 는 원문이 없어 이 대리 지표로 본다)")
             pol_elig = [r for ag in POLICY_AGENTS for r in rows.get(ag, []) if str(find(r, "model_response_text") or "").strip()]
