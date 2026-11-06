@@ -146,6 +146,8 @@ teacher 3종(General = chat·IF · STEM · Code·Math)의 블렌드 제안이다
 | 안전 | jailbreak 4종 · jailbreak_detection · over_refusal (safety judge) | 6% | 1,118 · 4,365 · 561 | |
 | identity | genrm + alpha principle | 1% | 16,510 | 상한 0.3~1.0% (§3) |
 
+- **생성 길이 실측 (2026-11-06, General 시작점 SFT 2862 의 Pai IFEval 응답 4,328개 = 541 × 8, 서빙 상한 40,960 · 생성 상한 32,768)**: 평균 3,126 · 중앙 1,164 · p90 4,795 · p95 14,937 토큰. 구간별 ≤8K 4,040 (93.3%) · 8~16K 77 (1.8%) · 16~32K 27 (0.6%) · 상한 도달 184 (4.3%). 상한 도달 184개는 91% 가 끝 2만 자 zlib 압축률 < 0.1 인 반복 루프이고 사고 닫힘 33% 다 — 길이 분포가 짧은 응답과 상한까지 가는 폭주로 갈린다. 16K 상한이 자르는 4.9% 중 폭주가 아닌 응답은 약 0.6% 다. RL Code·Math 1단계 282 도 같은 모양 (>16K 5.1%). 측정 `ifeval_len.py` · `ifeval_tail.py` (세션 tmp). LogicKor · SimpleQA 표본은 앞 400~500 자만 저장돼 길이를 잴 수 없다.
+
 judge 없이 되는 부분은 50% 다. chat 품질 신호는 judge 없이는 없다. calendar 는 모든 런에서 보상 0 이라 원인을 찾을 때까지 뺀다.
 도구 계열(tau·swe_pivot·toolcall_schema·IPI·workplace)은 2차 agentic 으로 넘긴다.
 
