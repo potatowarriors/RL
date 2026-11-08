@@ -6,6 +6,19 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## s2r 228 · 수학 685 의 AIME·HMMT 를 Pai 가 금지한 조건(GDN 상태 fp32 + prefix caching 켬, 게이트 V2 미통과)에서 쟀다 (2026-11-08 발견, ✅ General 벤치부터 prefix caching 끔)
+
+- **증상**: 수학 685 측정(2026-11-06) 서버 로그 `/home/work/vidsearch/tools/fleet_logs/serve_8005.log` 머리줄이 `prefix_cache=1 ssm_state=float32` 다.
+  s2r 228 (2026-11-02) 도 같은 명령(`run_suite.sh … t1`, PREFIX_CACHE 미지정)으로 쟀다 — 서버 로그는 685 측정이 덮어써 직접 확인할 수 없다.
+- **원인 (자명한 절차 누락이라 진단 절차에서 제외)**: `run_suite.sh` 는 `PREFIX_CACHE` 기본값 1 로 fleet 을 띄운다. Pai `SFT_BENCHMARKS.md` 표와
+  Pai `KNOWN_ISSUES.md` GDN 재귀 상태 항목은 "fp32 + prefix caching(align) 은 `prefix_cache_check.py` 게이트(V1·V2) 재통과 전 벤치 금지" 로 정했고,
+  이 게이트는 2026-10-21 부터 실행되지 않았다 (이 리포 `STATUS.md` 보류·추적 "배포·평가 GDN 재귀 상태 fp32" 행). 기동 때 이 금지를 확인하지 않았다.
+- **영향**: 228 과 685 를 같은 조건에서 쟀으므로 둘의 비교(결정 48, Code·Math teacher = s2r 228)는 유지된다. 두 값의 절대 수준(AIME25 15.2 · 13.8)은 검증되지 않은
+  서빙 경로의 수치다. 10-21 이전 bf16 계열(SFT 전 행 · 282 · 175)과는 dtype 도 다르다 (`study/benchmark_results.md` §5).
+- **대응**: General 벤치(2026-11-08 사용자 승인 1번)부터 `PREFIX_CACHE=0 SSM_STATE_DTYPE=float32` 로 SFT 2862 · General step 400 · 640 을 같은 조건에서 잰다.
+  서버 로그 `prefix_cache=0 ssm_state=float32` · vLLM `prefix_caching=False` 를 기동 직후 확인했다.
+- **교훈**: Pai 스위트를 부를 때는 `run_suite.sh` 머리말의 환경변수 기본값을 Pai `SFT_BENCHMARKS.md` 서빙 조건 표와 대조한다.
+
 ## inverse_if 행 약 20% 의 judge 지시문이 Gym 파서가 못 읽는 `answer_score` 형식을 요구한다 (2026-11-06 JG1 스모크 FAIL 원인, ✅ 해당 행 제외 — 결정 53)
 
 - **증상**: JG1 스모크에서 inverse_if 엄격 파싱 실패 121/836 (14.5%) — 기준 3% 초과. 다른 judge 경로는 모두 통과.

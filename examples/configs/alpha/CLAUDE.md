@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-08 | s2r 228·수학 685 AIME·HMMT 가 fp32 + prefix caching 켬(Pai 게이트 V2 미통과, 벤치 금지 조건)에서 측정됨 | `run_suite.sh` 기본 `PREFIX_CACHE=1` → Pai 스위트는 `PREFIX_CACHE=0` 으로 부르고 서버 로그 `prefix_cache=0 ssm_state=float32` 확인 |
 | 10-13 | 256 프롬프트 런이 step 729 에서 죽음 — raylet `No space left on device` (`/tmp/ray/…/ray_spilled_objects`) 뒤 W&B 그림 로깅 예외 (`main2r6`) | 배치 4배로 궤적 객체가 main1 객체 저장소(`/dev/shm`, Pai 와 공유)를 넘쳐 루트 디스크로 spill (누적 555 GB) → 루트에 쌓인 Claude scratchpad 잔재 257 GB 와 합쳐 고갈. 큰 배치 런 전에 `df -h /` ≥ 300 GB 확인, 근본 대책은 클러스터 재기동 때 spill 경로 NFS (`KNOWN_ISSUES.md` 10-13) |
 | 10-27 | 학습이 검증·refit 뒤 수십 분 멈추고 GPU 0%, 주 스레드 futex 대기, 저절로 풀림 (10-23 62분 · 10-27 27분) | 생성 코드의 SyntaxWarning 12만 줄이 Ray 로그로 드라이버 stdout 에 들어와 W&B 콘솔 캡처 백로그 (클라이언트 asyncio 전송 O(n²)) → 동기 `run.log` 대기. 판별은 로그의 SyntaxWarning 수와 W&B debug-internal `flowcontrol` (KNOWN_ISSUES 10-27). 대응 후보 `WANDB_CONSOLE=off` (`EXTRA_ENV`) |
 | 10-20 | spill 경로를 NFS 로 돌리려고 `{session}/ray_spilled_objects` 심링크를 만들었으나 Ray 는 `ray_spilled_objects_<node_id>` 에 쓴다 — 효과 없음, 3단계 첫 step 에 루트로 1.1 TB spill | 심링크·spill 설정은 **노드 ID 접미사 이름**으로, 세션의 첫 spill 전에 (`external_storage.py` `DEFAULT_OBJECT_PREFIX_{node_id}`). 정석은 `ray start --system-config object_spilling_config` |

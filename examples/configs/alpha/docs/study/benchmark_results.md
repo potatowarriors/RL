@@ -162,6 +162,8 @@ fleet 는 main1 8장(`p0_measure/serve_fleet.sh`, GDN 상태 fp32) + sub1 8장(P
   그래서 2단계 175 의 AIME25 17.4 와 s2r 228 의 15.2 는 dtype 이 다르다.
 - LCB: main1 절반은 처음부터 fp32 다. sub1 절반은 Pai `serve_alpha.sh` 기본값을 따라 10-20 측정 3건(SFT 2862 · 282 · 175)은 bf16, 10-27 이후는 fp32 다 (11-01 서버 로그 `ssm_state=float32` 확인; 10-20 로그는 덮어써져 직접 확인 불가).
 
+**prefix caching — 2026-11-08 발견**: s2r 228 · 수학 685 의 AIME·HMMT 는 fp32 + prefix caching 켬 조건에서 쟀다. Pai 는 이 조합을 게이트 V2 통과 전 벤치 금지로 정했다 (`KNOWN_ISSUES.md` 2026-11-08). 228 과 685 는 같은 조건이라 서로 비교할 수 있다. General 벤치부터는 prefix caching 을 끈다.
+
 **재지 않은 벤치**: Codeforces 벤치는 독립 검토에서 "신뢰 불가" 판정을 받아 돌리지 않았다 — 214문제 중 212문제가 SFT 블렌드에 들어 있다 (`KNOWN_ISSUES.md` 2026-10-27).
 
 **학습 중 검증셋은 벤치가 아니다**: RL 런의 검증(코드 128 + 수학 128 × 2회) 추이는 `STATUS.md` 의 각 런 기록에 있다.
