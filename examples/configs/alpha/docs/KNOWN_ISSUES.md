@@ -6,6 +6,18 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## MOPD 의 grad_norm 이 5~7 로 GRPO 런(0.03~0.22)의 30~200배다 — 결함이 아니라 OPD 목적 함수의 결과 (2026-11-09 관찰, ✅ 독립 검증 확인 · 조치 없음)
+
+- **증상**: `mopd1/s1` step 1·2 grad_norm 6.61 · 6.67, ms1b 6.78 · 4.91 · 5.52. GRPO teacher 런 중앙값 0.042 (s2r) ~ 0.18 (도구). `clip_grad: 1.0` 이라 MOPD 는 매 step 클립된다.
+- **기전 (독립 검증 확인)**: OPD 이점 A = clip(logπ_T − logπ_S, ±5) 는 모든 생성 토큰에 0 이 아니고 (100%), 학생 logprob 과 상관한다 (corr(A, log p) 0.39~0.48, 기울기 0.20~0.27 — teacher 분포 ≈ 학생 분포^1.2).
+  그래서 모든 토큰에 공통인 "분포를 뾰족하게" 방향이 생겨 토큰 평균으로도 줄지 않는다 (신호 지배). GRPO 는 이점 0 토큰이 52~66%, corr ≈ 0, 노름이 1/√N 잡음으로 정해진다 (6개 런 norm×√N ≈ 100~190 일정, 지수 −0.44).
+  판별: 프롬프트 64 → 1,024 (토큰 0.73M → 12.4M, 17배) 에도 노름이 그대로 — 토큰 평균 + 신호 지배 조합만 맞는다 (합 정규화 결함이면 4~17배, 잡음 지배면 0.24배). train/loss = −mean(clip A) 확인 (`loss_functions.py:763-767`). ms1b 노름 비 1 : 0.72 : 0.81 = 실제 teacher 토큰 비율 비 1 : 0.71 : 0.82.
+- **클립의 영향**: 없음 (추정 포함). Muon 은 모멘텀을 Newton–Schulz 로 정규화하고 (‖X‖_F + 1e-7), Adam 은 m̂/√v̂ 라 일정한 클립 계수에 불변. s1 의 step 간 노름 변동 6.606~6.672 → 모멘텀 가중 왜곡 ≤ 1%. eps 영향은 4~5자리 아래 (추정). 부작용: grad_norm 이 spike 감지 지표 구실을 못 한다.
+- **선행 사례**: Nemotron 3 Ultra MOPD 레시피도 같은 손실 설정 (`examples/nemo_gym/nemotron-3-ultra/mopd.yaml:148` `token_level_loss: true`, `:315` max_grad_norm 1.0, Adam 2e-6). Ultra · Cascade 2 의 grad norm 값은 공개 안 됨. upstream nightly MOPD 는 학생 = teacher 라 비교 불가.
+- **독립 검증**: Opus xhigh 블라인드 2단계 — 1단계 (증상만) 에서 "결함 없음, 목적 함수 결과" 를 독립 도출, 2단계 **확인**. 반론 요지: 진단서의 "역 KL 이라 방향이 일관" 은 공통 성분 (corr(A, log p)) 없이는 입증이 안 된다 → 위 수치로 대체 · ms1b 실제 teacher 토큰 비율 58% → 3 step 합 68.9% (82 / 58 / 67%) 로 정정.
+- **부수 발견 (확인)**: token_level_loss 의 정의 (Σ 토큰 ÷ 전역 토큰 수) 때문에 teacher 별 기울기 비중이 프롬프트 비중과 다르다 — s1 step 1~3: Code·Math 63~67% · STEM 23~28% · General 9~10% · 도구 0.3~0.4% (프롬프트 30 / 30 / 30 / 10%). 결정 대기 (STATUS).
+- **교훈**: MOPD 에서는 grad_norm 크기로 이상을 판단하지 않는다. 볼 지표는 teacher−학생 차이의 감소, approx_entropy 급락, is_oob.
+
 ## MOPD 스모크 `ms1b` 가 정상 완료 뒤 rc=1 — 종료 GC 의 `TeacherWorkerGroup.__del__` 가 내려간 Ray 에 다시 접속해 CoreWorker CHECK (2026-11-09 MS1, ✅ 원인 확인 · 🔶 수정 승인 대기)
 
 - **증상**: `mopd1/ms1b` (3 step) 가 "Async GRPO training complete!" 를 찍은 뒤 `Connecting to existing Ray cluster` 두 쌍, 이어서 `core_worker_process.cc:89 … Check failed: !core_worker_process` (`results/alpha/mopd1/ms1b.log` 15733-15760, 17:41:54) → `launch.sh` rc=1. C 스택 `_Py_Finalize → gc_collect_main → slot_tp_finalize` (파이썬 `__del__`). 1회 관측.

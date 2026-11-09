@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-09 | MOPD grad_norm 5~7 (GRPO 0.03~0.22 의 30~200배), 매 step clip 1.0 에 걸림 | 결함 아님 — OPD 이점이 모든 토큰에 있고 학생 logprob 과 상관해 공통 방향 신호가 토큰 평균으로 줄지 않는다. Muon·Adam 은 클립 계수에 불변. MOPD 에서는 grad_norm 대신 teacher−학생 차이 감소·entropy·is_oob 를 본다 (KNOWN_ISSUES 11-09) |
 | 11-09 | MOPD 런이 "Async GRPO training complete!" 뒤 rc=1 — Ray 재접속 2회 뒤 `core_worker_process.cc:89` CHECK | 종료 절이 teacher 워커 그룹을 안 내려 종료 GC 의 `TeacherWorkerGroup.__del__` 가 내려간 Ray 를 부름 (upstream `89f5cdbdd` 와 같은 계열) → 수정 전까지 MOPD 정상 종료는 완료 문구 + 최종 체크포인트로 판정 (KNOWN_ISSUES 11-09) |
 | 11-09 | 기동 1분 안에 rc=2 — `uv run --locked` 가 GitHub 릴리스 휠(flash-attn aarch64) 메타데이터 확인 중 504 | 외부 네트워크 → `EXTRA_ENV="UV_OFFLINE=1"` 로 캐시만 쓰고 재기동 (venv 가 이미 있을 때) |
 | 11-08 | s2r 228·수학 685 AIME·HMMT 가 fp32 + prefix caching 켬(Pai 게이트 V2 미통과, 벤치 금지 조건)에서 측정됨 | `run_suite.sh` 기본 `PREFIX_CACHE=1` → Pai 스위트는 `PREFIX_CACHE=0` 으로 부르고 서버 로그 `prefix_cache=0 ssm_state=float32` 확인 |
