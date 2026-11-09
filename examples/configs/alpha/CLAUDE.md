@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-09 | MOPD 런이 "Async GRPO training complete!" 뒤 rc=1 — Ray 재접속 2회 뒤 `core_worker_process.cc:89` CHECK | 종료 절이 teacher 워커 그룹을 안 내려 종료 GC 의 `TeacherWorkerGroup.__del__` 가 내려간 Ray 를 부름 (upstream `89f5cdbdd` 와 같은 계열) → 수정 전까지 MOPD 정상 종료는 완료 문구 + 최종 체크포인트로 판정 (KNOWN_ISSUES 11-09) |
 | 11-09 | 기동 1분 안에 rc=2 — `uv run --locked` 가 GitHub 릴리스 휠(flash-attn aarch64) 메타데이터 확인 중 504 | 외부 네트워크 → `EXTRA_ENV="UV_OFFLINE=1"` 로 캐시만 쓰고 재기동 (venv 가 이미 있을 때) |
 | 11-08 | s2r 228·수학 685 AIME·HMMT 가 fp32 + prefix caching 켬(Pai 게이트 V2 미통과, 벤치 금지 조건)에서 측정됨 | `run_suite.sh` 기본 `PREFIX_CACHE=1` → Pai 스위트는 `PREFIX_CACHE=0` 으로 부르고 서버 로그 `prefix_cache=0 ssm_state=float32` 확인 |
 | 10-13 | 256 프롬프트 런이 step 729 에서 죽음 — raylet `No space left on device` (`/tmp/ray/…/ray_spilled_objects`) 뒤 W&B 그림 로깅 예외 (`main2r6`) | 배치 4배로 궤적 객체가 main1 객체 저장소(`/dev/shm`, Pai 와 공유)를 넘쳐 루트 디스크로 spill (누적 555 GB) → 루트에 쌓인 Claude scratchpad 잔재 257 GB 와 합쳐 고갈. 큰 배치 런 전에 `df -h /` ≥ 300 GB 확인, 근본 대책은 클러스터 재기동 때 spill 경로 NFS (`KNOWN_ISSUES.md` 10-13) |

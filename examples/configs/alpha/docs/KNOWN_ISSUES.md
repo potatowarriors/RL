@@ -6,6 +6,20 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## MOPD 스모크 `ms1b` 가 정상 완료 뒤 rc=1 — 종료 GC 의 `TeacherWorkerGroup.__del__` 가 내려간 Ray 에 다시 접속해 CoreWorker CHECK (2026-11-09 MS1, ✅ 원인 확인 · 🔶 수정 승인 대기)
+
+- **증상**: `mopd1/ms1b` (3 step) 가 "Async GRPO training complete!" 를 찍은 뒤 `Connecting to existing Ray cluster` 두 쌍, 이어서 `core_worker_process.cc:89 … Check failed: !core_worker_process` (`results/alpha/mopd1/ms1b.log` 15733-15760, 17:41:54) → `launch.sh` rc=1. C 스택 `_Py_Finalize → gc_collect_main → slot_tp_finalize` (파이썬 `__del__`). 1회 관측.
+- **기전 (독립 검증 확인)**: ① `async_grpo_train` 의 종료 절 (`grpo.py:5775-5823`) 은 collector · env · vLLM · 학습 워커만 내리고 teacher 워커 그룹 4개는 내리지 않는다 (upstream main 도 같다). 다른 그룹은 명시 shutdown 뒤 `_workers=[]` (`worker_groups.py:1118-1119`) 라 `__del__` 가 Ray 를 부르지 않는다.
+  ② Ray atexit 의 `ray.shutdown` 이 먼저 돌고, 그 뒤 종료 GC 가 teacher 의 `__del__` (`teacher_worker_group.py:315-318`, 가드 없음) → `shutdown()` → `worker.shutdown.remote()` 를 부른다. 액터 메서드 호출은 `@wrap_auto_init` 이라 `RAY_ADDRESS` 로 `ray.init()` 이 다시 돈다 (첫 접속).
+  ③ 첫 init 은 CoreWorker 를 만든 뒤 listener thread 시작에서 `PythonFinalizationError` 로 실패해 `is_initialized()` 가 False 로 남는다 (Python 3.13.14 CPU 재현). ④ 두 번째 teacher 의 `__del__` 가 다시 init → CoreWorker 를 또 만들려다 CHECK → `_Exit(1)`.
+  가드 없는 finalizer 가 2개 이상이면 접속은 정확히 2회, 1개면 크래시 없이 rc 0 이다. teacher 객체가 `main()` 반환 때 해제되지 않고 종료 GC 까지 남는 참조 경로는 찾지 못했다 (객체 사이 순환 없음).
+- **배제**: vLLM 동기화기 shutdown 은 `pass` (collective) · `RayVirtualCluster`·GPU monitor 는 `ray.is_initialized()` 가드 · Logger `stop`·`flush` 에 Ray 호출 없음 · 스모크 override (저장 끔·덤프 끔) 는 종료 경로에 finalizer 를 더하지 않음.
+  teacher 없는 async 런 16건은 "complete" 뒤 재접속 0회 (rc 0 다섯 건: main2r8 · lr3e6 · s1r5 · codemath2 s1 · code2 s1, 같은 venv-driver · Ray 2.56.1).
+- **영향**: 체크포인트 손실 없음 — 마지막 step 은 `is_last_step` 으로 저장되고 (`grpo.py:5489-5492`) 종료 절 첫 줄 `checkpointer.shutdown()` 이 마무리를 기다린다 (`checkpoint.py:383`, `async_save: false`). 잃을 수 있는 것은 finalizer 안 print · TB writer 의 flush 안 된 꼬리. 실제 부작용은 rc=1 — rc 로 판정하는 게이트·후속 자동화가 정상 종료를 실패로 오판한다.
+- **선행 사례**: upstream `89f5cdbdd` (#3148) "skip RayVirtualCluster.shutdown when Ray already torn down" — 같은 CHECK, 같은 기전 (주석: `__del__` during `_Py_Finalize` after Ray's atexit teardown), 클러스터에만 적용. upstream 이슈 검색 ("core_worker_process", "teacher shutdown") 없음. 프론티어 모델: 해당 없음 (프레임워크 종료 경로). Nemotron 3 Ultra: 같은 upstream 코드로 MOPD 를 돌리지만 이 종료 문제를 다룬 공개 기록 못 찾음.
+- **독립 검증**: Opus xhigh 블라인드 2단계 — 1단계 (증상만) 에서 같은 원인을 독립 도출, 2단계 판정 **확인**. 반론 요지: 진단서의 "접속 = Ray API 호출 수" 예측은 틀림 (위 ③) · `_workers=[]` 줄 번호 정정 · code2 s1 의 경고 1줄은 NemoGym 이 아니라 vLLM 그룹 "Get timed out" · 수정 (a) 명시 shutdown 만으로는 부족 (teacher 액터가 죽어 있으면 `ActorDiedError` 가 `worker_groups.py:1087` 의 except 를 빠져나가 `_workers` 가 남는다; sync 경로 미포함) → (b) `ray.is_initialized()` 가드가 필수 · mock 단위 테스트와 "재접속 0 · rc 0" 스모크는 고장 난 채 PASS 할 수 있다 (패치 이름공간 오류 · teacher 1개 · 생존 경로 미확인) → 음성 대조 필수.
+- **대응**: 수정 선택지 보고, 사용자 승인 대기 (STATUS). 그 전까지 MOPD 런의 정상 종료는 rc 가 아니라 "Async GRPO training complete!" 와 최종 체크포인트로 판정한다.
+
 ## 기동이 48초 만에 rc=2 — `uv run --locked` 가 GitHub 릴리스 휠 메타데이터를 확인하다 504 (2026-11-09 MS1, ✅ `EXTRA_ENV="UV_OFFLINE=1"` 로 우회)
 
 - **증상**: `runs/launch.sh mopd1 ms1` 이 17:10:31 기동, 17:11:19 rc=2. 드라이버 로그 4줄: `Failed to generate package metadata for flash-attn==2.8.1+cu13torch2.10cxx11abitrue @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/...linux_aarch64.whl` · `HTTP status server error (504 Gateway Timeout)`. GPU 는 잡지 않았다.
