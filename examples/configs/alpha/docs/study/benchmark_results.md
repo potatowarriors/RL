@@ -10,6 +10,26 @@
 | `$NRL_ROOT/p0_measure/lcb_*/lcb_summary.json` | LiveCodeBench v5 (RL 쪽 측정, `runs/eval_lcb.sh`) |
 | Pai `docs/SFT_BENCHMARKS.md` | 스위트 설계·티어·무효 판정·측정 이력 |
 
+## 0. MOPD1 teacher 한눈 표 (2026-11-09)
+
+MOPD1 teacher 넷(`RL_PLAN.md` 결정 26 · 28·29 · 48 · 54)과 학생(SFT 2862)의 측정값 전부. `—` 는 재지 않은 칸이다.
+측정 조건이 칸마다 다르므로 오른쪽 조건 열을 함께 읽는다 (§5).
+
+| 벤치 | 학생 SFT 2862 | General 640 | STEM 735 | Code·Math s2r 228 | 도구 400 | 조건 |
+|---|---:|---:|---:|---:|---:|---|
+| MMLU-Pro | 55.0 | 57.4 | — | — | — | fp32 · PC 끔 (11-09) |
+| GPQA-D | 37.7 | 37.0 | — | — | — | fp32 · PC 끔 (11-09) |
+| IFEval prompt strict | 66.7 | 90.4 | — | — | — | fp32 · PC 끔 (11-09) |
+| IFBench loose / strict | 23.6 / 19.0 | 59.5 / 55.4 | — | — | — | fp32 · PC 끔 (11-09) |
+| LCB pass@1 / pass@4 | 10.0 / 18.9 | — | — | 24.6 / 36.3 | — | SFT 10-20 (절반 bf16) · 228 10-27 (fp32) |
+| AIME25 / HMMT25 | 무효 / 무효 | — | — | 15.2 / 6.8 | — | 228 fp32 · PC 켬 (V2 미통과 조건, 11-02) |
+| τ³ retail / airline | 16.2 / 33.0 | — | — | — | 18.9 / 27.0 | bf16 (10-10) |
+| LogicKor · SimpleQA-V | 40.3 · 3.7 | 무효 | — | — | — | SFT bf16 (10-01 계열) · 640 은 Gemini HTTP 402 |
+
+- STEM 735 는 벤치 없이 마감했다 (결정 28). 학습 보상은 64 배치 블록 평균 0.323 (step 41~100) → 0.480 (601~716), 마지막 256 배치 25 step 0.511 (`STATUS.md`).
+- SFT 2862 의 T1 은 11-09 fp32 재측정값이다. 10-21 이전 bf16 값은 54.3 · 36.2 · 67.4 (§3.1).
+- 학생과 비교했을 때 각 teacher 가 자기 영역에서 확실히 앞선다: General IFBench +35.9 · IFEval +23.7, Code·Math LCB +14.6 · AIME 무효 → 15.2, 도구 τ³ 합 22.9 vs 24.6 (잡음 안).
+
 ## 1. 요약
 
 - **SFT 최종(agentic 2862)에서 RL Code·Math 를 거치며 코드·수학이 크게 올랐다.** LCB pass@1 은 10.0 에서 s2r 228 의 24.6 으로, AIME25 는 SFT 무효에서 1~2단계 13.1~17.4 로 올랐다.
