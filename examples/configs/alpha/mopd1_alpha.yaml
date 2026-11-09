@@ -20,10 +20,10 @@ checkpointing:
   save_period: 10
 
 grpo:
-  num_prompts_per_step: 512             # Cascade 2 (30B-A3B, NeMo-RL) 512 × 1. Ultra · GLM-5 는 1,024
+  num_prompts_per_step: 1024            # 결정 56 — Ultra · GLM-5 1,024 · Xiaomi (30B-A3B) 2,048 · Cascade 2 512 (FRONTIER.md)
   num_generations_per_prompt: 1         # G=1 (Ultra 보고서 p22 "multiple rollouts did not yield additional benefits")
   max_num_epochs: 1
-  max_num_steps: 120                    # 61,440 / 512. 수렴하면 일찍 끝낸다 (Cascade 2 52 step · MiMo 약 50 step)
+  max_num_steps: 60                     # 61,440 / 1,024 = 1 에폭. 프론티어 수렴 구간 안 (Cascade 2 52 · MiMo 약 50 · Ultra 84 step)
   adv_estimator:
     name: opd
   advantage_clip_low: -5                # Xiaomi MOPD A_max=5 (30B-A3B). 같은 뿌리 teacher 라 걸리는 토큰은 드물다
