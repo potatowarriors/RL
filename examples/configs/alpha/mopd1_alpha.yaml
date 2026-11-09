@@ -43,6 +43,7 @@ grpo:
 loss_fn:
   force_on_policy_ratio: true           # step 당 업데이트 1회 (부모 · Ultra MOPD)
   seq_logprob_error_in_loss: false      # ② OPD 필수
+  token_level_loss: false               # 결정 57 — 시퀀스 평균 1/|y| (Xiaomi MOPD · Cascade 2 · MiMo-V2-Flash · GLM-5). 토큰 평균이면 기울기 몫이 Code·Math 65 · STEM 25 · General 9 · 도구 0.3% (s1 실측)
   reference_policy_kl_penalty: 0.0
   use_importance_sampling_correction: true
   truncated_importance_sampling_type: icepop   # 결정 55 — Cascade 2 [0.5, 2.0] · NeMo-RL OPD 추정기 권고 (grpo.py:2424)
