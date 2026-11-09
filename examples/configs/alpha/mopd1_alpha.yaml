@@ -57,7 +57,7 @@ policy:
       lr: 3.0e-6                        # 결정 55 — MOPD lr ÷ teacher lr 비율 0.67~0.8 (Ultra · Cascade 2) × alpha teacher 5e-6
       min_lr: 3.0e-6
     scheduler:
-      lr_warmup_iters: 10
+      lr_warmup_iters: 3                # 결정 56 — Muon 은 갱신 크기를 정규화한다 (s2r warmup 0 · lr 5e-6 첫 step 안정). 60 step 의 lr 예산 손실 8.9% → 3.2%
       lr_warmup_init: 1.0e-7
   generation:
     max_new_tokens: 32768               # teacher 학습의 최대 생성 길이 (Ultra 원칙)
