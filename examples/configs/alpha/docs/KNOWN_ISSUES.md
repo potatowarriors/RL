@@ -6,6 +6,19 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## Gym 런의 `train/gen_tokens_per_sample/max` 가 생성 상한 32,768 을 넘는다 (최대 57,645) — 한 샘플에 생성 턴이 여러 개라서 (2026-11-10 관찰, 결함 아님 · 일부 기전 미확인)
+
+- **증상**: `mopd1/s2` step 1~6 `gen_tokens_per_sample/max` 57,645 · 51,690 · 32,768 · 32,768 · 41,916 · 32,768. `max_new_tokens: 32768`.
+- **확인한 사실**: `train/max_gen_tokens_per_turn/max` 는 매 step 정확히 32,768 이다. 덤프 (s2 step 1~2, 2,048 행) 에서 생성 구간 하나가 32,768 을 넘는 행은 0개다.
+  32K 를 넘는 행은 4개이고 모두 생성 구간이 여러 개다. 샘플 전체의 상한은 `max_total_sequence_length` 65,536 이다.
+- **여러 턴이 생기는 경로** (Gym `responses_api_agents/simple_agent/app.py:167-172` — 루프는 "도구 호출 없음 + assistant 메시지 있음" 이거나 잘림 (`incomplete_details`) 일 때만 끝난다):
+  ① 실제 도구 사용 — `ns_tools` 60행 중 8행, 구간 사이에 `<tool_response>` 가 있다 (정상).
+  ② `<think>` 를 닫지 않은 턴 — 출력 전체가 reasoning 이고 메시지가 없어 루프가 모델을 다시 부른다. 환경 응답 없이 assistant 턴이 이어진다. reasoning_gym 100행 중 4행 · equivalence_llm_judge 128행 중 1행 (앞 턴에 `</think>` 없음, 덤프 디코드로 확인).
+  ③ 도구 없는 mcqa 1행 — `</think>` 뒤에 `<tool_call>` 을 내고 도구 응답 없이 assistant 턴이 5번 이어졌다. 도구 응답이 왜 빠졌는지는 미확인.
+  ②·③ 합계 6/2,048 행 (0.3%).
+- **판단**: 턴당 상한은 지켜진다. 같은 Gym agent 를 teacher RL 에서도 썼다. 시퀀스 평균 손실 (결정 57) 이라 긴 행이 가중을 더 받지도 않는다. 조치 없음. 비율이 커지면 (② 는 학생이 `<think>` 를 닫지 못하는 퇴행 신호) 다시 본다.
+- **판별 방법**: `max_gen_tokens_per_turn/max` 가 32,768 을 넘지 않으면 이 경우다. 덤프에서 `token_loss_mask` 구간과 구간 사이 토큰을 디코드해 `<tool_response>` 유무를 본다.
+
 ## MOPD 의 grad_norm 이 5~7 로 GRPO 런(0.03~0.22)의 30~200배다 — 결함이 아니라 OPD 목적 함수의 결과 (2026-11-09 관찰, ✅ 독립 검증 확인 · 조치 없음)
 
 - **증상**: `mopd1/s1` step 1·2 grad_norm 6.61 · 6.67, ms1b 6.78 · 4.91 · 5.52. GRPO teacher 런 중앙값 0.042 (s2r) ~ 0.18 (도구). `clip_grad: 1.0` 이라 MOPD 는 매 step 클립된다.
