@@ -21,7 +21,9 @@ prev_logprobs 는 학습 엔진의 학생 logprob, generation_logprobs 는 vLLM 
     드라이버 로그의 실제 적재 줄 `(MegatronPolicyWorker pid=N[, ip=X]) successfully loaded checkpoint from …mcore_ckpt/model_<경로>` 와 (노드, pid) 로 맞춘다
     (ip 가 없는 줄은 --driver-ip 노드). 변환 줄이나 "Checkpoint already exists" 줄은 쓰지 않는다 — 캐시가 있으면 첫 줄이 그것이라 거짓 FAIL 이 났고 (3차 HIGH),
     변환한 경로가 실제로 올린 가중치와 같다는 보장이 없다 (3차 MEDIUM). teacher 마다 적재한 경로 집합이 {routing 경로} 와 같아야 한다 — 학생 경로를 올린 teacher 는
-    FAIL. 줄이나 액터를 못 맞춰도 FAIL — 신원 증거 부족은 멈출 사유다 (검토 3차). 로그 접두 pid 와 상태 API pid 는 같은 값이다 (두 노드 실측 2026-11-09).
+    FAIL. 줄이나 액터를 못 맞춰도 FAIL — 신원 증거 부족은 멈출 사유다 (검토 3차). 액터는 routing 의 서로 다른 경로를 빠짐·중복 없이 덮어야 한다 (검토 4차 L2).
+    MS2 방식 (--noise-slot 없음) 은 두 인자가 필수이고 --no-identity 로만 끈다 (검토 4차 L1). 드라이버 로그는 Ray 줄 중복 제거가 적재 줄을 지우지 않게
+    `RAY_DEDUP_LOGS_ALLOW_REGEX=successfully.loaded.checkpoint` 로 기동한 런이어야 한다 — 경로에 숫자가 있으면 적재 줄끼리 같은 줄로 묶인다 (검토 4차 M1). 로그 접두 pid 와 상태 API pid 는 같은 값이다 (두 노드 실측 2026-11-09).
   종료 코드 2 (증거 부족) 는 실제 슬롯의 잡음 바닥 판정에만 쓴다 — 멈추지 않고 보고한다.
 
   python analyze_mopd_smoke.py <dump>/train_data_step*.jsonl --routing <json|yaml> [--noise-slot 경로 ...] --real-slot 경로 ... \
@@ -62,23 +64,36 @@ def teacher_identity(log_path, routing, actors_path, driver_ip):
     """teacher 액터 (노드, pid) ↔ 드라이버 로그의 실제 적재 경로. (판정, 상세) — 판정 None = 증거 부족."""
     ansi = re.compile(r"\x1b\[[0-9;]*m")
     loaded = collections.defaultdict(set)  # (node_ip, pid) -> {model_<경로>}
-    pat = re.compile(r"\(MegatronPolicyWorker pid=(\d+)(?:, ip=([0-9.]+))?\)\s+successfully loaded checkpoint from \S*?mcore_ckpt/(model_[^\s\[/]+)")
+    pat = re.compile(r"\(MegatronPolicyWorker(?:\[rank=\d+\])? pid=(\d+)(?:, ip=([0-9.]+))?\)\s+successfully loaded checkpoint from \S*?mcore_ckpt/(model_[^\s\[/]+)")
     for line in open(log_path, errors="replace"):
         m = pat.search(ansi.sub("", line))
         if m:
             loaded[(m.group(2) or driver_ip, int(m.group(1)))].add(re.sub(r"__hfovr_\w+$", "", m.group(3)))  # setup.py hf_config_overrides 접미사
     actors = json.load(open(actors_path))
     detail, missing, mism = {"teachers": {}}, [], []
+    # 덮음 (검토 4차 L2): 액터 이름·(노드, pid) 가 겹치지 않고, 액터 수 = routing 의 서로 다른 경로 수, 액터 alias 의 경로 집합 = routing 경로 전부.
+    names = [x.get("name") for x in actors]
+    keys = [(x.get("node_ip"), x.get("pid")) for x in actors]
+    covered = set()
     for act in actors:
         m = re.match(r"teacher_(.+)-\d+-\d+$", act.get("name") or "") or re.match(r"teacher_(.+)$", act.get("name") or "")
         alias = m.group(1) if m else None
         want = routing.get(alias)
         got = loaded.get((act["node_ip"], int(act["pid"])))
         detail["teachers"][act.get("name")] = {"node_ip": act["node_ip"], "pid": act["pid"], "routing": want, "loaded": sorted(got or [])}
+        if want is not None:
+            covered.add(want)
         if want is None or not got:
             missing.append(act.get("name"))
         elif got != {"model_" + want.replace("/", "_")}:
             mism.append((alias, want, sorted(got)))
+    want_paths = set(routing.values())
+    if len(set(names)) != len(names) or len(set(keys)) != len(keys):
+        missing.append(f"액터 이름·(노드, pid) 중복: {names}")
+    if len(actors) != len(want_paths):
+        missing.append(f"액터 {len(actors)} 개 ≠ routing 의 서로 다른 경로 {len(want_paths)} 개")
+    if covered != want_paths:
+        missing.append(f"액터가 덮지 않는 routing 경로: {sorted(want_paths - covered)}")
     detail["missing"], detail["mismatch"] = missing, mism
     if mism:
         return False, detail
@@ -112,6 +127,7 @@ def main() -> int:
     ap.add_argument("--driver-log")
     ap.add_argument("--teacher-actors", help="check_placement.py --actors-out 가 남긴 JSON")
     ap.add_argument("--driver-ip", default="10.0.37.4", help="로그에서 ip= 가 없는 줄의 노드 (드라이버 노드)")
+    ap.add_argument("--no-identity", action="store_true", help="MS2 방식 (--noise-slot 없음) 에서 신원 검사를 끄는 유일한 방법 (검토 4차 L1)")
     a = ap.parse_args()
     routing = load_routing(a.routing)
     floors = {k: float(v) for k, v in (x.rsplit("=", 1) for x in a.slot_floor)}
@@ -262,7 +278,9 @@ def main() -> int:
             if abs(it["mean_gap"]) > mlim or it["mean_abs_gap"] > lim or it["clip"] or it["nonzero"] == 0:
                 fail(f"긴 샘플 (총 {it['total_len']}, 슬롯 {slot}) 이 잡음 기준을 벗어난다 — 평균 {it['mean_gap']:.4f} (상한 {mlim:.4f}) · "
                      f"평균 |차이| {it['mean_abs_gap']:.4f} (상한 {lim:.4f}) · clip {it['clip']} · 비0 {it['nonzero']}/{it['gen_tokens']}")
-    if a.driver_log or a.teacher_actors:
+    if not a.noise_slot and not a.no_identity and not (a.driver_log and a.teacher_actors):
+        fail("MS2 방식 (--noise-slot 없음) 은 --driver-log 와 --teacher-actors 가 필요하다 — 끄려면 --no-identity")
+    elif a.driver_log or a.teacher_actors:
         if not (a.driver_log and a.teacher_actors):
             fail("teacher 신원은 --driver-log 와 --teacher-actors 가 둘 다 필요하다")
             ok_id = True
