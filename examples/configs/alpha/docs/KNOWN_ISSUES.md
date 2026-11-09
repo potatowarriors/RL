@@ -6,6 +6,14 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## 기동이 48초 만에 rc=2 — `uv run --locked` 가 GitHub 릴리스 휠 메타데이터를 확인하다 504 (2026-11-09 MS1, ✅ `EXTRA_ENV="UV_OFFLINE=1"` 로 우회)
+
+- **증상**: `runs/launch.sh mopd1 ms1` 이 17:10:31 기동, 17:11:19 rc=2. 드라이버 로그 4줄: `Failed to generate package metadata for flash-attn==2.8.1+cu13torch2.10cxx11abitrue @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.1/...linux_aarch64.whl` · `HTTP status server error (504 Gateway Timeout)`. GPU 는 잡지 않았다.
+- **원인 (자명한 외부 오류라 진단 절차 제외)**: 실행기는 매 기동마다 `uv run --locked` 를 부른다 (`runs/launch.sh:53`). 잠금 파일(`uv.lock`, 10-06 이후 변경 없음)에 aarch64 직접 URL 휠이 있어 uv 가 그 메타데이터를 다시 확인하는데,
+  그 시각 `github.com/.../releases/download/...` 가 0.03초 만에 504 를 돌려줬다 (github.com · raw.githubusercontent.com 은 200).
+- **대응**: 같은 명령을 `UV_OFFLINE=1` 로 돌리면 캐시만으로 통과한다 (GPU 없이 `uv run --locked python -c ...` 로 확인). 실행기의 `EXTRA_ENV="UV_OFFLINE=1"` 은 uv 환경변수로 그대로 들어간다 — 학습 동작은 바뀌지 않는다. `ms1b` 로 재기동 (17:14:11).
+- **교훈**: 기동이 1분 안에 rc≠0 이면 드라이버 로그 첫 줄부터 본다. 네트워크 원인이면 `EXTRA_ENV="UV_OFFLINE=1"` 로 다시 띄운다 (Gym·워커 venv 가 이미 있을 때만 유효).
+
 ## s2r 228 · 수학 685 의 AIME·HMMT 를 Pai 가 금지한 조건(GDN 상태 fp32 + prefix caching 켬, 게이트 V2 미통과)에서 쟀다 (2026-11-08 발견, ✅ General 벤치부터 prefix caching 끔)
 
 - **증상**: 수학 685 측정(2026-11-06) 서버 로그 `/home/work/vidsearch/tools/fleet_logs/serve_8005.log` 머리줄이 `prefix_cache=1 ssm_state=float32` 다.
