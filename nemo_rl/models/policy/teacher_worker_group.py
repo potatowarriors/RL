@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import numpy as np
+import ray
 from transformers import PreTrainedTokenizerBase
 
 from nemo_rl.algorithms.opd import TeacherResourceConfig
@@ -306,6 +307,11 @@ class TeacherWorkerGroup:
 
     def shutdown(self) -> bool:
         """Shut down all workers and clean up resources."""
+        # Skip if Ray is already gone (typically from __del__ during _Py_Finalize
+        # after Ray's atexit teardown). Any Ray call would re-run ray.init and
+        # hit a fatal core_worker_process CHECK, as in RayVirtualCluster.shutdown.
+        if not ray.is_initialized():
+            return True
         try:
             return self.worker_group.shutdown(cleanup_method="shutdown")
         except Exception as e:

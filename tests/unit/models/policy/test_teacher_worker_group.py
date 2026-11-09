@@ -155,3 +155,35 @@ def test_teacher_worker_group_drops_the_student_pretrained_checkpoint(monkeypatc
     assert "pretrained_checkpoint" not in teacher.cfg
     assert worker_cfg["model_name"] == "/ckpt/teacher"
     assert policy_config["pretrained_checkpoint"]["path"] == "/ckpt/sft"
+
+
+def test_teacher_worker_group_shutdown_skips_ray_after_teardown(monkeypatch):
+    """Teachers left to __del__ are finalized after Ray's atexit teardown.
+
+    A Ray call at that point re-runs ray.init and aborts the driver in a
+    core_worker_process CHECK (same failure as upstream 89f5cdbdd).
+    """
+    from types import SimpleNamespace
+
+    import ray
+
+    policy_config = {
+        "model_name": "/ckpt/student",
+        "megatron_cfg": {"enabled": True},
+        "dtensor_cfg": {"enabled": False},
+        "sequence_packing": {"enabled": False},
+        "dynamic_batching": {"enabled": False},
+    }
+    teacher, _ = _build_teacher_with_fake_workers(monkeypatch, policy_config)
+    calls = []
+    teacher.worker_group = SimpleNamespace(
+        shutdown=lambda **kwargs: calls.append(kwargs) or True
+    )
+
+    monkeypatch.setattr(ray, "is_initialized", lambda: False)
+    assert teacher.shutdown() is True
+    assert calls == []
+
+    monkeypatch.setattr(ray, "is_initialized", lambda: True)
+    assert teacher.shutdown() is True
+    assert calls == [{"cleanup_method": "shutdown"}]
