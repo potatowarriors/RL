@@ -13,6 +13,9 @@ ERROR 가 하나라도 있으면 종료 코드 1. WARN 은 결정 대기·확인
   데이터 행의 agent 가 Gym 설정에 없음 · ns_tools 행의 verifier_type 미등록 · judge 행 정답이 자기 output_regex 에 잘림 · 재판정 꺼짐 (KNOWN_ISSUES 10-10)
   prefix caching 명시 (M1) · async 배치 파라미터 명시 (M2) · async ⇒ IS 보정 (M7) · KL>0 + R3 (M6) · top_p 1.0 (낮음)
   GBS 나눗셈 (낮음) · Ultra 의 무효 키 (낮음) · reward_penalties token_ids 와 토크나이저 대조 · generation_config eos [3,0] (M9)
+  OPD (on_policy_distillation.enabled, RL_PLAN.md 결정 55 · 코드 감사 2026-11-09): in_loss 끔 · opd 추정기 · G=1 이면 drop_zero_std 끔 ·
+  teacher TP1 · 가상 num_nodes 회계(학습 노드 = 물리 2) · main1 GPU 예산(생성 + teacher ≤ 8) · teacher 1장이면 시퀀스 ≤ 64K ·
+  strict_agent_name_match · teacher 경로가 AlphaForCausalLM · 데이터 agent 전수가 teacher 배정 표에 있음 · 블렌드 routing.yaml 과 일치
 """
 
 import collections
@@ -193,6 +196,8 @@ def check(cfg: dict) -> None:
             if any(f"/{name}/" in p for name in SANDBOX_CONFIGS):
                 warn(f"코드 sandbox 가 필요한 환경: {p} — sandbox 가 떠 있어야 한다 (RL_DATA.md §5.9)")
         check_gym_judges(cfg, ng, paths)
+    check_opd(cfg)
+    if use_gym:
         pm = ((ng.get("policy_model") or {}).get("responses_api_models") or {}).get("vllm_model") or {}
         ctk = pm.get("chat_template_kwargs")
         if ctk and ctk.get("truncate_history_thinking") is False:
@@ -233,6 +238,94 @@ def check(cfg: dict) -> None:
         warn(f"policy.model_name={model} 이 로컬 디렉토리가 아니라 generation_config 를 확인하지 못했다")
 
 
+ALPHA_PHYSICAL_NODES = 2  # main1 · sub1
+
+
+def opd_teachers(cfg: dict) -> list[dict]:
+    """중복 제거한 teacher 목록 (opd.py create_teacher_configs_from_opd_config 와 같은 규칙: 경로 문자열이 같으면 하나)."""
+    opd = cfg.get("on_policy_distillation") or {}
+    nct = opd.get("non_colocated_teachers") or {}
+    if not opd.get("enabled") or not nct.get("enabled"):
+        return []
+    d = nct.get("default_teacher_cfg") or {}
+    over = nct.get("teacher_overrides") or {}
+    out, seen = [], set()
+    for alias, path in (opd.get("teacher_model_by_agent_name") or {}).items():
+        if opd.get("deduplicate_shared_teacher_checkpoints", True) and path in seen:
+            continue
+        seen.add(path)
+        t = {**d, **(over.get(alias) or {})}
+        out.append({"alias": alias, "path": path, "nodes": t.get("num_nodes", 1), "gpus": t.get("num_nodes", 1) * t.get("gpus_per_node", 8),
+                    "tp": t.get("tensor_model_parallel_size", 1)})
+    return out
+
+
+def check_opd(cfg: dict) -> None:
+    """OPD 레시피 (결정 55). 코드 감사 2026-11-09 의 막는 원인과 조용한 실패 경로."""
+    opd = cfg.get("on_policy_distillation") or {}
+    if not opd.get("enabled"):
+        return
+    grpo, loss, pol, cl = cfg["grpo"], cfg["loss_fn"], cfg["policy"], cfg["cluster"]
+    if (grpo.get("adv_estimator") or {}).get("name") != "opd":
+        err("on_policy_distillation.enabled 인데 grpo.adv_estimator.name 이 opd 가 아니다")
+    if loss.get("seq_logprob_error_in_loss"):
+        err("OPD 에는 loss_fn.seq_logprob_error_in_loss: false 가 필요하다 — 학생 logprob 패스를 건너뛰어 기동에서 ValueError (opd.py:133-146)")
+    if grpo.get("num_generations_per_prompt") == 1 and (grpo.get("async_grpo") or {}).get("drop_zero_std_groups"):
+        err("G=1 에서 drop_zero_std_groups 가 켜져 있다 — 모든 그룹의 std 가 0 이라 전부 버려진다")
+    if not opd.get("strict_agent_name_match"):
+        err("strict_agent_name_match 가 꺼져 있다 — 매핑에 없는 agent 가 print 한 줄만 남기고 기본 teacher 로 간다 (opd.py:154-184)")
+    teachers = opd_teachers(cfg)
+    if not teachers:
+        err("non_colocated_teachers 가 꺼져 있거나 teacher 가 없다")
+        return
+    for t in teachers:
+        if t["tp"] != 1:
+            err(f"teacher {t['alias']} TP={t['tp']} — alpha GDN 은 TP1 만 검증됐다")
+        cfgj = os.path.join(t["path"], "config.json")
+        if not os.path.isfile(cfgj):
+            err(f"teacher {t['alias']} 경로에 config.json 이 없다: {t['path']}")
+        elif "AlphaForCausalLM" not in (json.load(open(cfgj)).get("architectures") or []):
+            err(f"teacher {t['alias']} 가 AlphaForCausalLM 이 아니다: {t['path']}")
+    teacher_nodes = sum(t["nodes"] for t in teachers)
+    if cl["num_nodes"] - teacher_nodes != ALPHA_PHYSICAL_NODES:
+        err(f"cluster.num_nodes {cl['num_nodes']} − teacher 노드 {teacher_nodes} = {cl['num_nodes'] - teacher_nodes} — 학습·생성 노드는 "
+            f"물리 {ALPHA_PHYSICAL_NODES} 이어야 한다 (teacher 1개 = 노드 1개로 센다, grpo.py:869-876)")
+    res = (pol["generation"].get("colocated") or {}).get("resources") or {}
+    gen_gpus = (res.get("gpus_per_node") or cl["gpus_per_node"]) * (res.get("num_nodes") or 1)
+    teacher_gpus = sum(t["gpus"] for t in teachers)
+    if gen_gpus + teacher_gpus > cl["gpus_per_node"]:
+        err(f"롤아웃 노드에 생성 {gen_gpus} + teacher {teacher_gpus} 장 — {cl['gpus_per_node']} 장을 넘는다")
+    if any(t["gpus"] == 1 for t in teachers) and pol["max_total_sequence_length"] > 65536:
+        err(f"teacher 가 GPU 1장인데 max_total_sequence_length {pol['max_total_sequence_length']} > 65,536 — teacher 도 정책의 "
+            "logprob_mb_tokens 를 쓴다 (추정 128K OOM, 코드 감사 2026-11-09)")
+    ng = (cfg.get("env") or {}).get("nemo_gym") or {}
+    if ng.get("skip_verification") and (grpo.get("val_period") or 0) > 0:
+        warn("skip_verification 이면 검증 보상이 0 이다 — val_period 를 끈다")
+    mapping = opd.get("teacher_model_by_agent_name") or {}
+    data = cfg.get("data") or {}
+    for split in ("train", "validation"):
+        path = (data.get(split) or {}).get("data_path")
+        if not path or not os.path.isfile(path):
+            continue
+        agents = collections.Counter()
+        with open(path) as f:
+            for line in f:
+                m = AGENT_NAME.search(line)
+                if m:
+                    agents[m.group(1)] += 1
+        missing = sorted(a for a in agents if a not in mapping)
+        if missing:
+            err(f"{split} 데이터의 agent {missing} 가 teacher 배정 표에 없다 — strict_agent_name_match 면 기동 실패")
+        routing = path.replace("_val.jsonl", ".jsonl").replace(".jsonl", ".routing.yaml")
+        if split == "train" and os.path.isfile(routing):
+            import yaml
+
+            want = yaml.safe_load(open(routing)) or {}
+            diff = sorted(a for a in set(want) | set(agents) if a in want and mapping.get(a) != want[a])
+            if diff:
+                err(f"teacher 배정이 블렌드 routing.yaml 과 다르다: {diff}")
+
+
 def _merge(base: dict, over: dict) -> dict:
     """레시피 env.nemo_gym 이 Gym 설정 파일 값을 덮도록 재귀 병합한다."""
     out = dict(base)
@@ -268,7 +361,9 @@ def check_gym_judges(cfg: dict, ng: dict, paths: list[str]) -> None:
                 continue
             for field in JUDGE_FIELDS:
                 name = (scfg.get(field) or {}).get("name")
-                if name in POLICY_MODELS:
+                if name in POLICY_MODELS and ng.get("skip_verification"):
+                    pass  # MOPD: 검증기를 부르지 않는다 — judge 서버 블록 없이 참조만 정책으로 돌린다 (결정 55)
+                elif name in POLICY_MODELS:
                     err(f"Gym {inst}.{field} 가 {name} 다 — 정책이 자기 응답을 채점한다. 레시피 env.nemo_gym 에서 judge 모델로 덮어쓴다")
                 elif name is not None and name not in merged:
                     err(f"Gym {inst}.{field}={name} 인 모델 서버가 정의되지 않았다")
@@ -281,7 +376,8 @@ def check_gym_judges(cfg: dict, ng: dict, paths: list[str]) -> None:
     free = 0
     if not gen["colocated"]["enabled"] and cl["num_nodes"] > 1:
         free = (cl["gpus_per_node"] - (res.get("gpus_per_node") or cl["gpus_per_node"])) * (res.get("num_nodes") or 1)
-    if judge_gpus > free:
+        free -= sum(t["gpus"] for t in opd_teachers(cfg))  # OPD teacher 는 롤아웃 노드의 남은 GPU 에 놓인다 (L1)
+    if judge_gpus > max(free, 0):  # free < 0 (생성 + teacher 초과) 는 check_opd 가 따로 보고한다
         err(f"Gym local_vllm_model 이 GPU {judge_gpus} 장을 쓰는데 남는 GPU 는 {free} 장이다 — judge placement group 이 기동에서 끝없이 기다린다")
     elif free > judge_gpus:
         warn(f"롤아웃 노드 GPU {free - judge_gpus} 장이 논다 (남는 {free} · Gym local_vllm_model {judge_gpus})")

@@ -1,0 +1,241 @@
+# MOPD1 — 4 teacher on-policy distillation (RL_PLAN.md 결정 55, 사용자 승인 2026-11-09 "권고대로 진행하자")
+#
+# 학생 = SFT 2862. teacher = General 640 · STEM 735 · Code·Math s2r 228 · 도구 400 (모두 같은 SFT 에서 RL, 같은 구조).
+# 손실 = OPD 추정기: advantage = sg[log π_teacher − log π_student] (학생이 뽑은 토큰, 역 KL), 보상은 loss 에 쓰지 않는다.
+# 프론티어 비교·근거는 FRONTIER.md "단계 설계 · teacher · 증류" (2026-11-09). 막는 원인 3가지(코드 감사 2026-11-09)의 처리:
+#   ① teacher 의 R3 상속 → 본체 9f8f55abd (teacher 설정에서 router_replay 끔)
+#   ② seq_logprob_error_in_loss: true 는 OPD 와 양립 불가 (grpo.py:425, opd.py:133) → false. threshold 2 마스킹은 별도 학생 logprob 패스로 유지
+#   ③ teacher 는 GPU 를 따로 잡고 자원 계산은 노드 단위 (grpo.py:869) → 배치 L1 + 가상 num_nodes 6 (스모크로 실제 배치를 확인)
+#
+# 배치 L1: sub1 8 = 학습 (CP8·EP8) · main1 8 = 생성 vLLM 4 + teacher 4 × 1장. judge 없음 → skip_verification (학습 중 보상 0).
+# 블렌드: tools/build_mopd1_blend.py → mopd_blends/mopd1_v1.jsonl (teacher RL 블렌드 재사용, General 30 · STEM 30 · Code·Math 30 · 도구 10).
+defaults: student_rlvr1_alpha.yaml
+
+cluster:
+  gpus_per_node: 8
+  num_nodes: 6                          # 물리 2 + teacher 4 (teacher 1개 = 노드 1개로 센다, grpo.py:869-876). 학습 노드 = 6 − 4 = 2
+
+checkpointing:
+  checkpoint_dir: "results/alpha_mopd1"
+  save_period: 10
+
+grpo:
+  num_prompts_per_step: 512             # Cascade 2 (30B-A3B, NeMo-RL) 512 × 1. Ultra · GLM-5 는 1,024
+  num_generations_per_prompt: 1         # G=1 (Ultra 보고서 p22 "multiple rollouts did not yield additional benefits")
+  max_num_epochs: 1
+  max_num_steps: 120                    # 61,440 / 512. 수렴하면 일찍 끝낸다 (Cascade 2 52 step · MiMo 약 50 step)
+  adv_estimator:
+    name: opd
+  advantage_clip_low: -5                # Xiaomi MOPD A_max=5 (30B-A3B). 같은 뿌리 teacher 라 걸리는 토큰은 드물다
+  advantage_clip_high: 5
+  normalize_rewards: false              # OPD 는 보상을 쓰지 않는다
+  use_leave_one_out_baseline: false     # G=1
+  val_period: -1                        # skip_verification 이면 검증 보상이 0 이다
+  val_at_start: false
+  val_at_end: false
+  seq_logprob_error_threshold: 2        # 부모 D4 — 별도 학생 logprob 패스로 마스킹
+  async_grpo:
+    enabled: true
+    max_trajectory_age_steps: 1         # Ultra MOPD
+    in_flight_weight_updates: true
+    drop_zero_std_groups: false         # G=1 이면 모든 그룹의 std 가 0 — 켜면 전부 버린다
+
+loss_fn:
+  force_on_policy_ratio: true           # step 당 업데이트 1회 (부모 · Ultra MOPD)
+  seq_logprob_error_in_loss: false      # ② OPD 필수
+  reference_policy_kl_penalty: 0.0
+  use_importance_sampling_correction: true
+  truncated_importance_sampling_type: icepop   # 결정 55 — Cascade 2 [0.5, 2.0] · NeMo-RL OPD 추정기 권고 (grpo.py:2424)
+  truncated_importance_sampling_ratio: 2.0
+  truncated_importance_sampling_ratio_min: 0.5
+
+policy:
+  model_name: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_agentic_resume_20261001_011900/hfmodel_0002862
+  max_total_sequence_length: 65536      # teacher 1장 메모리 상한 (코드 감사 추정 64K 65 GB, 128K OOM). teacher 도 이 logprob_mb_tokens 를 쓴다
+  megatron_cfg:
+    optimizer:
+      lr: 3.0e-6                        # 결정 55 — MOPD lr ÷ teacher lr 비율 0.67~0.8 (Ultra · Cascade 2) × alpha teacher 5e-6
+      min_lr: 3.0e-6
+    scheduler:
+      lr_warmup_iters: 10
+      lr_warmup_init: 1.0e-7
+  generation:
+    max_new_tokens: 32768               # teacher 학습의 최대 생성 길이 (Ultra 원칙)
+    colocated:
+      enabled: false
+      resources:
+        gpus_per_node: 4                # main1 의 생성 vLLM 4장 (나머지 4장 = teacher)
+        num_nodes: 1
+
+data:
+  train:
+    data_path: /home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/mopd_blends/mopd1_v1.jsonl
+  validation:
+    data_path: /home/work/Datasets/LL_datasets/posttraining/RL/alpha_blends/mopd_blends/mopd1_v1_val.jsonl
+
+# teacher 경로 (결정 26 · 29 · 48 · 54)
+_teachers:
+  general: /home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_general/hf/hf_step_00640
+  stem: /home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_stem/hf/hf_step_00735
+  codemath: /home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_codemath_s2r/hf/hf_step_00228
+  tool: /home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_tool/hf/hf_step_00400
+
+on_policy_distillation:
+  enabled: true
+  strict_agent_name_match: true         # 매핑 없는 agent 가 조용히 기본 teacher 로 가지 않게 (opd.py:154-184)
+  deduplicate_shared_teacher_checkpoints: true
+  teacher_model_by_agent_name:          # build_mopd1_blend.py 의 <out>.routing.yaml 과 같아야 한다 (검사기 확인)
+    instruction_following_simple_agent: ${_teachers.general}
+    structured_outputs_simple_agent: ${_teachers.general}
+    structured_outputs_v3_simple_agent: ${_teachers.general}
+    citation_format_simple_agent: ${_teachers.general}
+    freeform_formatting_simple_agent: ${_teachers.general}
+    genrm_simple_agent: ${_teachers.general}
+    genrm_simple_agent_reasoning_off: ${_teachers.general}
+    multichallenge_simple_agent: ${_teachers.general}
+    inverse_if_simple_agent: ${_teachers.general}
+    abstention_simple_agent: ${_teachers.general}
+    jailbreak_detection_simple_agent: ${_teachers.general}
+    jailbreak_refusal_with_explanation: ${_teachers.general}
+    jailbreak_hard_refusal_with_helplines: ${_teachers.general}
+    jailbreak_engagement_with_disclaimer: ${_teachers.general}
+    jailbreak_hard_refusal_no_redirection: ${_teachers.general}
+    over_refusal_detection_simple_agent: ${_teachers.general}
+    mcqa_simple_agent: ${_teachers.stem}
+    equivalence_llm_judge_simple_agent: ${_teachers.stem}
+    reasoning_gym_simple_agent: ${_teachers.stem}
+    ns_tools_simple_agent: ${_teachers.stem}
+    rdkit_chemistry_agent: ${_teachers.stem}
+    code_gen_simple_agent: ${_teachers.codemath}
+    math_with_judge_simple_agent: ${_teachers.codemath}
+    single_step_tool_use_with_argument_comparison_agent: ${_teachers.tool}
+    swe_pivot_single_step_tool_use_with_argument_comparison_agent: ${_teachers.tool}
+    toolcall_schema_single_step_tool_use_with_argument_comparison_agent: ${_teachers.tool}
+  non_colocated_teachers:
+    enabled: true
+    default_teacher_cfg:                # teacher 1개 = GPU 1장 (TP1 — GDN, EP1, CP1)
+      tensor_model_parallel_size: 1
+      pipeline_model_parallel_size: 1
+      context_parallel_size: 1
+      expert_model_parallel_size: 1
+      num_nodes: 1
+      gpus_per_node: 1
+      precision: bf16
+      micro_batch_size: 1
+
+env:
+  _override_: true
+  should_use_nemo_gym: true
+  should_log_nemo_gym_responses: true
+  nemo_gym:
+    nemo_gym_log_dir: "logs/nemo_gym"
+    skip_venv_if_present: true
+    port_range_low: 5000
+    port_range_high: 5999
+    skip_verification: true             # judge·검증기를 부르지 않는다 (보상 0, loss 와 무관). judge GPU 를 teacher 에 준다
+    skip_verification_reward: 0.0
+    effort_levels:                      # 부모와 같다
+      low_string: "{reasoning effort: efficient}"
+      low_weight: 0.1
+      low_penalty: 1
+      low_ub: 15000
+    invalid_tool_call_patterns: ["<tool_call>", "</tool_call>", "<function_call>", "</function_call>"]
+    thinking_tags: ["<think>", "</think>"]
+    config_paths:                       # teacher 넷의 레시피 서버 합집합. NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      # General (teacher_general_alpha.yaml)
+      - responses_api_models/alpha_genrm_model/configs/alpha_genrm_compare.yaml
+      - resources_servers/instruction_following/configs/instruction_following.yaml
+      - resources_servers/structured_outputs/configs/structured_outputs_json_yaml_xml_v1.yaml
+      - resources_servers/structured_outputs/configs/structured_outputs_v3.yaml
+      - resources_servers/format_verification/configs/citation_format.yaml
+      - resources_servers/format_verification/configs/freeform_formatting.yaml
+      - resources_servers/multichallenge/configs/multichallenge_nrl.yaml
+      - resources_servers/inverse_if/configs/inverse_if.yaml
+      - resources_servers/abstention/configs/abstention.yaml
+      - resources_servers/jailbreak_detection/configs/jailbreak_detection_nemotron_combined_reward_tp8.yaml
+      - configs/over_refusal_detection_alpha.yaml
+      # STEM (teacher_stem_alpha.yaml)
+      - resources_servers/mcqa/configs/mcqa.yaml
+      - resources_servers/reasoning_gym/configs/reasoning_gym.yaml
+      - resources_servers/rdkit_chemistry/configs/rdkit_chemistry.yaml
+      - resources_servers/equivalence_llm_judge/configs/equivalence_llm_judge.yaml
+      - resources_servers/ns_tools/configs/ns_tools.yaml
+      # Code·Math (teacher_codemath_alpha.yaml) — math_with_judge 는 STEM 과 같은 서버
+      - resources_servers/code_gen/configs/code_gen.yaml
+      - resources_servers/math_with_judge/configs/math_with_judge.yaml
+      # 도구 (teacher_tool_alpha.yaml)
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/toolcall_schema_single_step_tool_use_with_argument_comparison.yaml
+    policy_model:
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 8
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs: null
+    policy_model_reasoning_off:
+      _copy: policy_model
+      responses_api_models:
+        alpha_vllm_model:
+          num_workers: 2
+          num_groups_nemo_rl: ${add:${grpo.async_grpo.max_trajectory_age_steps}, 1}
+          chat_template_kwargs:
+            enable_thinking: false
+    # judge 참조는 전부 정책 서버로 돌린다 — 서버 블록을 두면 Gym 이 judge GPU 를 잡는다. skip_verification 이라 실제로 부르지 않는다
+    # (선례 examples/configs/recipes/llm/mopd-qwen3-1.7b-3n8g-megatron-pack.yaml:107-108).
+    multichallenge: {resources_servers: {multichallenge: {judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    abstention: {resources_servers: {abstention: {judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    inverse_if: {resources_servers: {inverse_if: {judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    jailbreak_detection: {resources_servers: {jailbreak_detection: {judge_model_server: {type: responses_api_models, name: policy_model}, use_nemotron_format: false}}}
+    over_refusal_detection: {resources_servers: {over_refusal_detection: {judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    equivalence_llm_judge: {resources_servers: {equivalence_llm_judge: {judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    math_with_judge: {resources_servers: {math_with_judge: {should_use_judge: false, judge_model_server: {type: responses_api_models, name: policy_model}}}}
+    ns_tools:
+      resources_servers:
+        ns_tools:
+          sandbox_host: 10.0.37.4       # main1 터널 → gpu06 alpha-eval NeMo-Skills sandbox (STEM 레시피와 같다). 생성 중 python 도구 실행에 필요
+          sandbox_port: "6000"
+          verifiers:
+            equivalence_llm_judge:
+              type: resources_servers
+              name: equivalence_llm_judge
+          nemo_skills_tool_overrides:
+            DirectPythonTool:
+              exec_timeout_s: 120
+    code_gen:
+      resources_servers:
+        code_gen:
+          num_processes: 64
+          unit_test_timeout_secs: 10
+          debug: false
+    # General 의 단일 턴 agent (teacher_general_alpha.yaml 과 같다)
+    instruction_following_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    structured_outputs_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    structured_outputs_v3_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    citation_format_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    freeform_formatting_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    genrm_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    genrm_simple_agent_reasoning_off: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    multichallenge_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    inverse_if_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    abstention_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_detection_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_refusal_with_explanation: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_hard_refusal_with_helplines: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_engagement_with_disclaimer: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    jailbreak_hard_refusal_no_redirection: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    over_refusal_detection_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+
+logger:
+  log_dir: "logs/alpha_mopd1"
+  wandb:
+    project: alpha-rl
+    metric_allowlist:
+      - train/(loss|grad_norm|lr|approx_entropy)
+      - train/(gen_kl_error|token_mult_prob_error|num_masked_seqs_by_logprob_error|avg_trajectory_age)
+      - train/gen_tokens_per_sample/(mean|max)
+      - train/(truncation_rate|natural_termination_rate|malformed_think_tag_rate|empty_final_answer_rate)
+      - train/.*(opd|teacher|distill).*         # OPD 지표 — 정확한 이름은 스모크에서 확인해 좁힌다
+      - timing/train/(total_step_time|exposed_generation|policy_training|teacher_logprob_time|prev_logprob)
+      - performance/(tokens_per_sec|generation_tokens_per_sec)
