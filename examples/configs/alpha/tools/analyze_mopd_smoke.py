@@ -17,11 +17,15 @@ prev_logprobs 는 학습 엔진의 학생 logprob, generation_logprobs 는 vLLM 
   긴 행 (총 길이 ≥ --long-min): 잡음 슬롯의 긴 행은 행마다 |평균| ≤ max(--noise-mean-max, 4·sd/√n) · 평균 |차이| 상한 · clip 0 · 비0 > 0 (검토 1차 H1 · 2차 M4).
     실제 슬롯의 긴 행은 기록만 한다. --require-long 1 이면 잡음 슬롯 긴 행이 하나 이상 있어야 한다 (teacher 1장 메모리 탐침).
   sample_loss_mask 0 행 비율 ≤ --masked-max (전체 합).
-  --driver-log: teacher 신원 (검토 2차 M3) — "Initializing teacher_<alias> workers" 순서와, 드라이버 노드 Megatron 워커 pid 별 첫 `mcore_ckpt/model_<경로>` 줄을
-    pid 오름차순으로 맞춰 alias → 로드한 경로가 routing 과 같은지 본다 (teacher 는 순서대로 하나씩 띄운다). --student-path 의 줄은 뺀다. 파싱이 안 되면 증거 부족.
+  --driver-log + --teacher-actors: teacher 신원 (검토 2·3차 M3) — check_placement.py --actors-out 가 step 1 에 남긴 teacher 액터 (teacher_<alias>-…, pid, 노드 IP) 를
+    드라이버 로그의 실제 적재 줄 `(MegatronPolicyWorker pid=N[, ip=X]) successfully loaded checkpoint from …mcore_ckpt/model_<경로>` 와 (노드, pid) 로 맞춘다
+    (ip 가 없는 줄은 --driver-ip 노드). 변환 줄이나 "Checkpoint already exists" 줄은 쓰지 않는다 — 캐시가 있으면 첫 줄이 그것이라 거짓 FAIL 이 났고 (3차 HIGH),
+    변환한 경로가 실제로 올린 가중치와 같다는 보장이 없다 (3차 MEDIUM). teacher 마다 적재한 경로 집합이 {routing 경로} 와 같아야 한다 — 학생 경로를 올린 teacher 는
+    FAIL. 줄이나 액터를 못 맞춰도 FAIL — 신원 증거 부족은 멈출 사유다 (검토 3차). 로그 접두 pid 와 상태 API pid 는 같은 값이다 (두 노드 실측 2026-11-09).
+  종료 코드 2 (증거 부족) 는 실제 슬롯의 잡음 바닥 판정에만 쓴다 — 멈추지 않고 보고한다.
 
   python analyze_mopd_smoke.py <dump>/train_data_step*.jsonl --routing <json|yaml> [--noise-slot 경로 ...] --real-slot 경로 ... \
-      [--slot-floor 경로=값 ...] [--noise-floor 값] [--require-long 0|1] [--driver-log <tag>.log --student-path <학생 HF 경로>]
+      [--slot-floor 경로=값 ...] [--noise-floor 값] [--require-long 0|1] [--driver-log <tag>.log --teacher-actors <actors.json>]
 종료 코드: 0 PASS · 1 FAIL · 2 증거 부족.
 """
 
@@ -54,37 +58,33 @@ def un(v):
     return v[0] if isinstance(v, list) and len(v) == 1 and isinstance(v[0], list) else v
 
 
-def teacher_identity(log_path, routing, student_path):
-    """alias 초기화 순서 ↔ 드라이버 노드 Megatron 워커 pid 별 첫 mcore 경로. (판정, 상세) — 판정 None = 파싱 불가."""
+def teacher_identity(log_path, routing, actors_path, driver_ip):
+    """teacher 액터 (노드, pid) ↔ 드라이버 로그의 실제 적재 경로. (판정, 상세) — 판정 None = 증거 부족."""
     ansi = re.compile(r"\x1b\[[0-9;]*m")
-    aliases, pid_path = [], {}
-
-    def enc(p):
-        return "model_" + p.replace("/", "_")
-
-    student_enc = enc(student_path) if student_path else None
+    loaded = collections.defaultdict(set)  # (node_ip, pid) -> {model_<경로>}
+    pat = re.compile(r"\(MegatronPolicyWorker pid=(\d+)(?:, ip=([0-9.]+))?\)\s+successfully loaded checkpoint from \S*?mcore_ckpt/(model_[^\s\[/]+)")
     for line in open(log_path, errors="replace"):
-        line = ansi.sub("", line)
-        for m in re.finditer(r"Initializing teacher_([A-Za-z0-9_]+) workers", line):
-            if m.group(1) not in aliases:
-                aliases.append(m.group(1))
-        m = re.search(r"\(MegatronPolicyWorker pid=(\d+)(, ip=[0-9.]+)?\).*?mcore_ckpt/(model_[^\s\]]+)", line)
-        if m and not m.group(2):
-            pid, model = int(m.group(1)), m.group(3)
-            if student_enc and model.startswith(student_enc):
-                continue
-            pid_path.setdefault(pid, model)
-    detail = {"aliases": aliases, "pid_model": {str(k): v for k, v in sorted(pid_path.items())}}
-    if not aliases or len(pid_path) != len(aliases):
-        return None, detail
-    by_pid = [pid_path[p] for p in sorted(pid_path)]
-    mism = []
-    for alias, model in zip(aliases, by_pid):
+        m = pat.search(ansi.sub("", line))
+        if m:
+            loaded[(m.group(2) or driver_ip, int(m.group(1)))].add(re.sub(r"__hfovr_\w+$", "", m.group(3)))  # setup.py hf_config_overrides 접미사
+    actors = json.load(open(actors_path))
+    detail, missing, mism = {"teachers": {}}, [], []
+    for act in actors:
+        m = re.match(r"teacher_(.+)-\d+-\d+$", act.get("name") or "") or re.match(r"teacher_(.+)$", act.get("name") or "")
+        alias = m.group(1) if m else None
         want = routing.get(alias)
-        if want is None or model != enc(want):
-            mism.append((alias, want, model))
-    detail["mismatch"] = mism
-    return (not mism), detail
+        got = loaded.get((act["node_ip"], int(act["pid"])))
+        detail["teachers"][act.get("name")] = {"node_ip": act["node_ip"], "pid": act["pid"], "routing": want, "loaded": sorted(got or [])}
+        if want is None or not got:
+            missing.append(act.get("name"))
+        elif got != {"model_" + want.replace("/", "_")}:
+            mism.append((alias, want, sorted(got)))
+    detail["missing"], detail["mismatch"] = missing, mism
+    if mism:
+        return False, detail
+    if missing or not actors:
+        return None, detail
+    return True, detail
 
 
 def main() -> int:
@@ -110,7 +110,8 @@ def main() -> int:
     ap.add_argument("--long-min", type=int, default=48000)
     ap.add_argument("--min-tokens", type=int, default=2000)
     ap.add_argument("--driver-log")
-    ap.add_argument("--student-path")
+    ap.add_argument("--teacher-actors", help="check_placement.py --actors-out 가 남긴 JSON")
+    ap.add_argument("--driver-ip", default="10.0.37.4", help="로그에서 ip= 가 없는 줄의 노드 (드라이버 노드)")
     a = ap.parse_args()
     routing = load_routing(a.routing)
     floors = {k: float(v) for k, v in (x.rsplit("=", 1) for x in a.slot_floor)}
@@ -261,11 +262,16 @@ def main() -> int:
             if abs(it["mean_gap"]) > mlim or it["mean_abs_gap"] > lim or it["clip"] or it["nonzero"] == 0:
                 fail(f"긴 샘플 (총 {it['total_len']}, 슬롯 {slot}) 이 잡음 기준을 벗어난다 — 평균 {it['mean_gap']:.4f} (상한 {mlim:.4f}) · "
                      f"평균 |차이| {it['mean_abs_gap']:.4f} (상한 {lim:.4f}) · clip {it['clip']} · 비0 {it['nonzero']}/{it['gen_tokens']}")
-    if a.driver_log:
-        ok_id, detail = teacher_identity(a.driver_log, routing, a.student_path)
-        print("teacher identity:", json.dumps(detail, ensure_ascii=False))
+    if a.driver_log or a.teacher_actors:
+        if not (a.driver_log and a.teacher_actors):
+            fail("teacher 신원은 --driver-log 와 --teacher-actors 가 둘 다 필요하다")
+            ok_id = True
+            detail = {}
+        else:
+            ok_id, detail = teacher_identity(a.driver_log, routing, a.teacher_actors, a.driver_ip)
+            print("teacher identity:", json.dumps(detail, ensure_ascii=False))
         if ok_id is None:
-            insuff("드라이버 로그에서 teacher alias ↔ 로드 경로를 맞추지 못했다")
+            fail(f"teacher 신원 증거 부족 (멈춘다) — 적재 줄이나 액터를 맞추지 못했다: {detail.get('missing')}")
         elif not ok_id:
             fail(f"teacher 가 routing 과 다른 경로를 로드했다: {detail['mismatch']}")
     verdict = "FAIL" if fails else "INSUFFICIENT" if insufficient else "PASS"

@@ -6,23 +6,28 @@ nvidia-smi pid 는 컨테이너 밖 pid 라 Ray 액터 pid 와 맞지 않는다 
   teacher_*                OPD teacher           — 그룹마다 GPU 1, 생성과 같은 노드
 판정: 학습 노드 ≠ 생성 노드, teacher 전부가 생성 노드, 노드별 GPU 합 ≤ 8. 학습이 main1 이든 sub1 이든 (Ray 가 정한다) 둘 다 허용한다.
 
+--actors-out 를 주면 teacher 액터 (이름 teacher_<alias>-…, pid, 노드 IP) 를 JSON 으로 남긴다 — analyze_mopd_smoke.py --teacher-actors 가
+드라이버 로그의 `successfully loaded checkpoint from …` 줄과 (노드, pid) 로 맞춰 teacher 신원을 본다 (MS2 ②, 검토 3차).
+
   $NRL_ROOT/clean_run.sh /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 $NRL_ROOT/venv-driver/bin/python -I \
-      examples/configs/alpha/runs/check_placement.py [--gen-gpus 4] [--teachers 4] </dev/null
+      examples/configs/alpha/runs/check_placement.py [--gen-gpus 4] [--teachers 4] [--actors-out <file.json>] </dev/null
 종료 코드 0 = PASS.
 """
 
 import argparse
 import collections
+import json
 import sys
 
 import ray
-from ray.util.state import list_placement_groups
+from ray.util.state import list_actors, list_placement_groups
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--gen-gpus", type=int, default=4)
     ap.add_argument("--teachers", type=int, default=4)
+    ap.add_argument("--actors-out")
     a = ap.parse_args()
     ray.init(address="auto", logging_level="ERROR")
     ip = {n["NodeID"]: n["NodeManagerAddress"] for n in ray.nodes() if n["Alive"]}
@@ -70,6 +75,14 @@ def main() -> int:
         per_node.update(r)
     if any(g > 8 for g in per_node.values()):
         fail(f"노드별 GPU 합 {dict(per_node)} > 8")
+    if a.actors_out:
+        actors = [{"name": x.name, "pid": x.pid, "node_ip": ip.get(x.node_id, x.node_id), "class": x.class_name}
+                  for x in list_actors(filters=[("state", "=", "ALIVE")], limit=10000, detail=True) if (x.name or "").startswith("teacher_")]
+        with open(a.actors_out, "w") as f:
+            json.dump(actors, f, indent=1)
+        print(f"teacher actors {len(actors)} → {a.actors_out}")
+        if len(actors) != a.teachers:
+            fail(f"ALIVE teacher 액터 {len(actors)} 개 ≠ {a.teachers}")
     print("placement:", {r: dict(v) for r, v in roles.items()}, "→", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
