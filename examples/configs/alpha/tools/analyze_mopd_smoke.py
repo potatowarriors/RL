@@ -66,18 +66,24 @@ def main() -> int:
         with open(f) as fh:
             for line in fh:
                 d = json.loads(line)
-                # log_batched_dict_as_jsonl 은 행 하나 = 샘플 하나
+                # log_batched_dict_as_jsonl 은 행 하나 = 샘플 하나 (실제 덤프 확인 2026-11-09 MS1b: 64 행 = 64 샘플)
                 ag = agent_name(d)
                 slot = routing.get(ag)
                 if slot is None:
                     unknown[ag] += 1
                     continue
-                mask, adv = d["token_loss_mask"], d["advantages"]
-                prev, gen = d["prev_logprobs"], d["generation_logprobs"]
+                # 실제 덤프는 필드마다 배치 차원 1 로 한 번 더 감싼다 (log_batched_dict_as_jsonl: list[1]<list[S]>)
+                un = lambda v: v[0] if isinstance(v, list) and len(v) == 1 and isinstance(v[0], list) else v
+                mask, adv = un(d["token_loss_mask"]), un(d["advantages"])
+                prev, gen = un(d["prev_logprobs"]), un(d["generation_logprobs"])
+                if not (len(mask) == len(adv) == len(prev) == len(gen)):
+                    raise SystemExit(f"{f}: field lengths differ {len(mask)} {len(adv)} {len(prev)} {len(gen)}")
                 n_tok = sum(1 for m in mask if m)
-                total_len = d.get("input_lengths") or len(d["token_ids"])
+                total_len = d.get("input_lengths")
                 if isinstance(total_len, list):
                     total_len = total_len[0]
+                if total_len is None:
+                    total_len = len(un(d["token_ids"]))
                 st[slot]["samples"] += 1
                 nz = 0
                 for m, x, p, g in zip(mask, adv, prev, gen):
