@@ -133,7 +133,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 - **uv 는 0.11.28 만.** lock 재생성도 이 버전으로 (`.claude/rules/alpha-submodules.md`).
 - **NFS venv 는 느리다** — GRPO setup 371 s vs 로컬 156 s (사용자 결정 2026-10-06: 원본 NFS·venv 로컬).
 - **`main1`·`sub1` 은 역할 이름이지 물리 호스트가 아니다.** 호스트는 GPU UUID 로 식별 (Pai `CLAUDE.md` 환경 불변량).
-  git push 는 main1 에서 동작한다 (sub1 은 자격 없음). 이 리포는 저장소 설정에 credential helper 가 없어
+  git push 는 main1 에서 동작한다 (sub1 은 자격 없음). **main1 에서 `ssh sub1` 로 접속된다** (2026-11-10 확인, 같은 NFS 경로) — 예전 스크립트 주석의 "sub1 ssh 막힘" 은 틀렸다. 이 리포는 저장소 설정에 credential helper 가 없어
   `git -c credential.helper=store push origin alpha/post-train` 로 push 한다 (Pai 리포는 `.git/config` 에 `store` 설정, 2026-10-07 확인).
 - 노드 간 InfiniBand 가 없다 (TCP ~9.1 Gbit/s). 2노드는 학습/롤아웃 분리 + async GRPO (`RL_PLAN.md` §3).
   **어느 노드가 학습·롤아웃을 맡는지는 Ray 가 기동마다 정한다** (v1·E0 학습 main1, E1a·E1b 학습 sub1). 로그의 워커 `ip=` 로 확인한다.

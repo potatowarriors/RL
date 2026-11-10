@@ -1,4 +1,4 @@
-"""런 중 노드별 GPU 배치·메모리 표본 (MS1 ② ⑤, 2026-11-09) — Ray 태스크로 각 노드에서 nvidia-smi 를 읽는다 (sub1 은 ssh 가 막혀 있다).
+"""런 중 노드별 GPU 배치·메모리 표본 (MS1 ② ⑤, 2026-11-09) — Ray 태스크로 각 노드에서 nvidia-smi 를 읽는다 (sub1 도 ssh 로 접속된다 — 2026-11-10 확인).
 
 한 표본 = 노드마다 {GPU 번호: 사용 MiB, 그 GPU 의 프로세스 pid 와 Ray 액터 이름} + 호스트 RAM 사용 GiB. JSONL 한 줄씩 --out 에 붙인다.
 액터 이름은 Ray 상태 API(list_actors: pid · node · class_name · name)로 pid 와 맞춘다 — teacher 워커는 이름이 `teacher_<alias>` 로 시작한다

@@ -1,4 +1,4 @@
-"""Ray 클러스터 각 노드의 물리 GPU 점유(MiB)를 출력 — 기동 전 점유 검사(1 GiB) 용. sub1 은 ssh 가 막혀 Ray 태스크로 본다.
+"""Ray 클러스터 각 노드의 물리 GPU 점유(MiB)를 출력 — 기동 전 점유 검사(1 GiB) 용. 노드마다 Ray 태스크로 본다 (sub1 도 ssh 로 접속된다 — 2026-11-10 확인, 이전 "ssh 막힘" 주석은 틀렸다).
 
 NRL_RUN_ACTORS 는 살아 있는 NeMo-RL 런 액터 수다. 0 이면 남은 GPU 점유는 지난 런의 Gym judge(local_vllm_model)이고 정리해도 된다
 (2026-10-10 — judge 는 Gym 서버가 띄운 Ray 액터라 드라이버가 끝나도 GPU 를 잡은 채 남는다).

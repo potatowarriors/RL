@@ -524,7 +524,7 @@ GPU 를 100% 쓰면서 진척이 없으므로 끝나지 않는 GPU 연산 쪽이
 
 - **증상**: P0-3 사전 측정용으로 `vllm serve <hfmodel> --data-parallel-size 8` 을 main1·sub1 에 띄웠다. 두 노드 모두 `vLLM is using nccl==2.28.9` 직후 워커 8개가 `double free` 로 죽었다. 깨끗한 환경(sub1, Ray actor)에서도 같았으니 환경 누출(#18)이 원인이 아니다.
 - **원인**: vLLM DP 모드 문제다. Pai 는 이미 우회하고 문서화했다 (Pai `SFT_BENCHMARKS.md` §2.6 "단일GPU 서버 N개 + 라운드로빈 프록시 (vLLM DP munmap 우회)").
-- **대응**: alpha 단독 서빙은 Pai `eval_sft/serve_fleet.sh`(GPU 당 `serve_alpha.sh` 1개 + `lb_proxy.py`)로 띄우고 `stop_fleet.sh` 로 내린다. ssh 가 막힌 sub1 은 `$NRL_ROOT/p0_measure/ray_serve_alpha.py`(Ray detached actor 가 `serve_alpha.sh` N개를 띄움)로 띄운다.
+- **대응**: alpha 단독 서빙은 Pai `eval_sft/serve_fleet.sh`(GPU 당 `serve_alpha.sh` 1개 + `lb_proxy.py`)로 띄우고 `stop_fleet.sh` 로 내린다. sub1 은 `$NRL_ROOT/p0_measure/ray_serve_alpha.py`(Ray detached actor 가 `serve_alpha.sh` N개를 띄움)로 띄웠다 — 당시 "ssh 가 막혔다" 고 적었으나 2026-11-10 `ssh sub1` 접속을 확인했다 (같은 NFS 경로), 이제 ssh 로 직접 띄워도 된다.
 - **교훈**: 서빙·벤치 경로는 Pai 문서가 정본이다. 새 서빙 스크립트를 만들기 전에 Pai `SFT_BENCHMARKS.md` §2.5~2.6 과 `gym/README.md` 를 먼저 읽는다.
 
 ## NeMo-Skills sandbox 이미지 빌드가 `vedas==0.0.1` 을 찾지 못해 실패한다 (2026-10-08 ✅ 고정 줄 제거)
