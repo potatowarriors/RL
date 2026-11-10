@@ -6,6 +6,13 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## LCB 측정이 Gym 서버 기동에서 실패 — 같은 venv 를 쓰는 agent 둘이 pip 시드 갱신을 동시에 해 충돌, 실행기는 실패를 DONE 으로 기록 (2026-11-11, ✅ 재시도로 통과 · 실행기 보완 대기)
+
+- **증상**: `runs/eval_lcb.sh` (MOPD 학생 `lcb_mopd1_s3_120`) 가 05:37:52 `servers failed`. `env_start.log`: `(math_with_judge_simple_agent) error: Failed to install seed packages into virtual environment … Cannot uninstall package; RECORD file not found at: .venv/lib/python3.13/site-packages/pip-26.2.2.dist-info/RECORD` → `Process math_with_judge_simple_agent finished unexpectedly`. 그런데 실행기 로그는 `summary:` 빈 줄 뒤 `DONE` 으로 끝났다.
+- **원인 (자명한 환경 오류라 진단 절차 제외)**: 측정용 Gym (`/home/work/vidsearch/tools/Gym`) 에서 `code_gen_simple_agent` · `math_with_judge_simple_agent` 는 같은 `responses_api_agents/simple_agent/.venv` 를 쓴다. 기동 때 둘이 동시에 "venv 생성 + 시드 설치" 를 돌렸고, 시드 pip 가 26.2.2 → 26.3 으로 바뀌는 중이라 한쪽이 지워진 26.2.2 를 지우려다 실패했다 (그 venv 의 `bin` · `pyvenv.cfg` 수정 시각 05:37, 지금 pip-26.3). 시드가 최신이 된 뒤 같은 명령 재시도 (05:39) 는 5/5 서버 기동.
+- **대응**: 재시도. 실패 산출물은 `p0_measure/lcb_mopd1_s3_120.failed_0537` 로 보존. 남은 보완 (승인 대상): `eval_lcb.sh` 가 `servers failed` · 빈 summary 를 ABORT 로 처리하게 · 측정용 Gym 기동에 `UV_OFFLINE=1` (시드가 바뀌지 않게).
+- **교훈**: 실행기의 `DONE` 만 보고 완료로 판정하지 않는다 — `summary` 와 결과 파일 (`lcb_summary.json`) 존재를 확인한다.
+
 ## MOPD `mopd1/s2` 의 natural_termination_rate 가 0.73 에서 움직이지 않는다 — Code·Math 학생 답 75% 가 32K 에서 잘리고, OPD 에는 끝맺기를 가르치는 신호가 없다 (2026-11-10, ✅ 독립 검증 확인 · 결함 아님 · 대응 결정 대기)
 
 - **증상**: step 1~39 natural_termination_rate 0.704~0.772 (= 1 − truncation_rate, `rollout_manager.py:643`). 잘린 행의 83~88% 가 Code·Math 슬롯 — Code·Math 잘림 76.5% → 74.4% (기울기 +0.00015 ± 0.00068/step), 생성 길이 28.0K → 27.1K (+7 ± 16 tok/step).
