@@ -20,10 +20,10 @@ checkpointing:
   save_period: 10
 
 grpo:
-  num_prompts_per_step: 1024            # 결정 56 — Ultra · GLM-5 1,024 · Xiaomi (30B-A3B) 2,048 · Cascade 2 512 (FRONTIER.md)
+  num_prompts_per_step: 512             # 결정 58 (사용자) — Cascade 2 512 × 1 · 결정 56 의 1,024 에서 되돌림. 학생 282 는 업데이트 수를 우선
   num_generations_per_prompt: 1         # G=1 (Ultra 보고서 p22 "multiple rollouts did not yield additional benefits")
   max_num_epochs: 1
-  max_num_steps: 60                     # 61,440 / 1,024 = 1 에폭. 프론티어 수렴 구간 안 (Cascade 2 52 · MiMo 약 50 · Ultra 84 step)
+  max_num_steps: 120                    # 61,440 / 512 = 1 에폭 (결정 58)
   adv_estimator:
     name: opd
   advantage_clip_low: -5                # Xiaomi MOPD A_max=5 (30B-A3B). 같은 뿌리 teacher 라 걸리는 토큰은 드물다
@@ -51,7 +51,7 @@ loss_fn:
   truncated_importance_sampling_ratio_min: 0.5
 
 policy:
-  model_name: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/outputs/alpha_baseline_48L_sft_128k_agentic_resume_20261001_011900/hfmodel_0002862
+  model_name: /home/work/vidsearch/repos/project_s/NeMo-RL/results/alpha/teacher_codemath2/hf/hf_step_00282   # 결정 58 — Code·Math 1단계 282 (끝맺기를 학습함, 게이트 M1 · M2 · M4 · R1 PASS 10-19)
   max_total_sequence_length: 65536      # teacher 1장 메모리 상한 (코드 감사 추정 64K 65 GB, 128K OOM). teacher 도 이 logprob_mb_tokens 를 쓴다
   megatron_cfg:
     optimizer:
