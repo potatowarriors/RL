@@ -6,6 +6,14 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## sub1 에서 돌린 에이전틱 벤치 (SWE-V · TB-2.1) 가 전부 BadRequestError — 컨테이너 :8199 를 main1 의 묵은 역터널이 잡고 있어 요청이 main1 T1 fleet 로 갔다 (2026-11-11, ✅ 원인 확인 · 무효 결과 격리 · 에이전틱은 main1 로)
+
+- **증상**: sub1 `run_suite.sh … swe,tb2` (07:42~08:46) — 게이트 A1~A5 PASS 뒤 SWE 500/500 · TB-2.1 712/712 가 `BadRequestError`, 판정 "무효 (추출 실패 100%)". 프록시 추론 관측 0.
+- **원인 (자명한 환경 오류라 진단 절차 제외)**: 역터널 `start_swe_tunnel.sh` → `swe_tunnel_keep.sh` 는 실행한 노드의 `localhost:8100` 을 컨테이너 :8199 로 연다. main1 에 약 35일 된 keeper (pid 4131489) 와 ssh (pid 2233680, `-R 8199:localhost:8100`) 가 남아 :8199 를 잡고 있어 sub1 의 터널은 `remote port forwarding failed for listen port 8199` 로 5초마다 재시도만 했다. 하니스 요청은 main1 의 T1 fleet (도구 파서 없음 · 40,960) 로 가 400.
+  게이트 A2 (컨테이너 :8199 → fleet 200) 는 응답 여부만 보고 **어느 노드의 fleet 인지**는 보지 않아 통과했다. `start_swe_tunnel.sh` 의 `pkill -f swe_tunnel_keep` 은 실행 노드의 keeper 만 죽이고 다른 노드나 그 ssh 자식은 남긴다.
+- **대응**: 무효 결과 8 파일을 `results/mopd1_s3_iter120_fp32pc0/invalid_20261111_tunnel/` 로 옮김 (TRACKING 에는 안 들어감; W&B `alpha-post-eval/mopd1_s3_iter120_fp32pc0` iter 0 에 무효 0.0 이 한 번 기록됨). 에이전틱은 터널이 이미 가리키는 main1 에서 T1 뒤에 돌리고, sub1 은 터널이 필요 없는 T2 를 맡는다. sub1 의 재시도 루프 (keeper pid 3366359) 정리는 권한 분류기가 막아 남아 있다 (무해, 실패만 반복).
+- **교훈**: 에이전틱을 다른 노드에서 돌리기 전에 컨테이너 :8199 를 잡은 터널이 어느 노드 것인지 본다 (`ps … -R 8199` 를 두 노드에서). A2 는 fleet 식별 (예: `/v1/models` 의 `max_model_len` 이 262,144 인지) 까지 봐야 한다 — Pai 게이트 보완 대상.
+
 ## LCB 측정이 Gym 서버 기동에서 실패 — 같은 venv 를 쓰는 agent 둘이 pip 시드 갱신을 동시에 해 충돌, 실행기는 실패를 DONE 으로 기록 (2026-11-11, ✅ 재시도로 통과 · 실행기 보완 대기)
 
 - **증상**: `runs/eval_lcb.sh` (MOPD 학생 `lcb_mopd1_s3_120`) 가 05:37:52 `servers failed`. `env_start.log`: `(math_with_judge_simple_agent) error: Failed to install seed packages into virtual environment … Cannot uninstall package; RECORD file not found at: .venv/lib/python3.13/site-packages/pip-26.2.2.dist-info/RECORD` → `Process math_with_judge_simple_agent finished unexpectedly`. 그런데 실행기 로그는 `summary:` 빈 줄 뒤 `DONE` 으로 끝났다.
