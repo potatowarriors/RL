@@ -6,6 +6,23 @@ alpha RL 단계(NeMo-RL)의 사고·수정 기록 전문이다 (최신순). [`..
 pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 가 정본이다.
 2026-10-21 부터 새 항목은 증상·기전·대응·교훈에 더해 **선행 사례**(upstream · 프론티어 · Nemotron 3 Ultra)와 **독립 검증**(판정·반론 요지) 줄을 둔다 (`problem-diagnosis` skill).
 
+## MOPD `mopd1/s2` 의 natural_termination_rate 가 0.73 에서 움직이지 않는다 — Code·Math 학생 답 75% 가 32K 에서 잘리고, OPD 에는 끝맺기를 가르치는 신호가 없다 (2026-11-10, ✅ 독립 검증 확인 · 결함 아님 · 대응 결정 대기)
+
+- **증상**: step 1~39 natural_termination_rate 0.704~0.772 (= 1 − truncation_rate, `rollout_manager.py:643`). 잘린 행의 83~88% 가 Code·Math 슬롯 — Code·Math 잘림 76.5% → 74.4% (기울기 +0.00015 ± 0.00068/step), 생성 길이 28.0K → 27.1K (+7 ± 16 tok/step).
+  같은 기간 teacher−학생 차이는 네 teacher 모두 유의하게 줄었다 (step 당 Code·Math +0.0027 · STEM +0.0020 · General +0.0013 · 도구 +0.0011, ±0.0002). gen KL 0.0018 → 0.0016 · is_oob 5e-5 · 마스킹 0 — 불안정 없음.
+- **기전 (독립 검증 확인)**: OPD 이점은 토큰별 즉시값 log π_T − log π_S 이고 미래 합 · 결과 보상 · 길이 항이 없다 (`advantage_estimator.py:611`, 보상은 skip_verification 으로 0). 그래서 끝맺기 신호가 어디에도 없다.
+  ① 잘린 행 (75%) 은 `</think>` 를 한 번도 뽑지 않는다 (포함 0.2~0.4%) — 표본이 없다.
+  ② 끝맺은 행에서 학생의 `</think>` 이점은 강한 음수다 (중앙값 −2.55 (step 1~5) → −1.40 (step 35~39), 행 평균의 7~9배; 수학은 생각이 짧을수록 더 반대 — 1K 미만 −3.1, 8K 이상 −0.4) — teacher 는 "여기서 끝내지 말라 (더 검증하라)" 고 민다. STEM · 도구 teacher 는 같은 위치에서 약 0 (위치 정렬 문제 아님).
+  ③ 간접 신호는 학습된다 — "Wait/Alternatively" 차이 −0.70 → −0.14, 빈도 1.90 → 1.32 /1K 토큰 — 그러나 길이로 이어지지 않는다.
+  반복 붕괴 아님 (32-gram 반복 0.00). 문항 난이도가 잘림을 정한다: teacher 계열 길이 5K 미만 문항 학생 잘림 2% · 15~20K 79% · 20~25K 89% (상관 0.58), 풀의 75% 가 teacher 도 15K 이상 쓰는 문항.
+  같은 98문항에서 teacher (s2r 228) 자신은 평균 18.2K · 잘림 2%, 학생은 28.4K · 77.6%.
+- **배제**: teacher 가 길다 (teacher 자신 잘림 2~4%) · 풀 불일치 (teacher 가 학습한 code_all · math_all) · 생성 상한 차이 (teacher 도 32K) · 시퀀스 평균 손실 (끝맺은 행이 짧아 오히려 `</think>` 가중이 5.85배 — 음의 압력을 키우는 쪽, 잘림 변화로는 안 드러남).
+- **예측**: step 60 에 Code·Math 잘림 0.74 ± 0.014 · 길이 약 27.5K. 32K 벤치에서 teacher 가 15K 이상 쓰는 문항은 학생 79~92% 잘림 → Code·Math 전이는 쉬운 문항에 한정 (추정).
+- **선행 사례**: 같은 SFT 에서 시작한 Code·Math RL (`teacher_codemath2/s1`, 결과 보상) 도 잘림이 step 30 까지 0.72~0.74 → step 60 0.49 → step 110 0.16 (`RL_PLAN.md:64`) — 동인은 "잘림 = 0 점" 결과 보상.
+  Nemotron-Cascade 2 (30B-A3B, NeMo-RL) 는 MOPD 뒤에 RLHF 25 · LC 30 · Code 22 step 을 둔다. MiMo-V2-Flash 는 MOPD 손실에 +α·Â_ORM (α 공개 안 됨). Ultra MOPD 는 ORM 가중 0, teacher 와 SFT 가 다르면 경량 SFT warmup. MiMo-V2.6 MOPD2 는 Teacher-Prefix · SFT-Prefix OPD (`FRONTIER.md`).
+- **독립 검증**: Opus xhigh 블라인드 2단계 — 1단계 (증상만) 에서 "결함 없음, 끝맺기 신호가 없는 구조적 정체" 를 독립 도출, 2단계 **진단서 전체 확인 · 기전 주장 반박** (진단서는 "끝맺은 25% 행에서 끝내는 위치가 학습되나 몫이 작다" 고 했으나 실측 부호가 반대 — 끝맺지 말라는 신호; 시퀀스 평균 가중 논거도 방향 반대; code · math 라운드 시작점을 s2 175 로 잘못 씀 — 실제 s2r 228 재개).
+- **교훈**: MOPD 의 teacher−학생 차이 감소는 길이·종료 행동을 보장하지 않는다. 학생이 teacher 보다 길게 쓰는 영역은 natural_termination_rate 와 슬롯별 잘림을 따로 본다.
+
 ## Gym 런의 `train/gen_tokens_per_sample/max` 가 생성 상한 32,768 을 넘는다 (최대 57,645) — 한 샘플에 생성 턴이 여러 개라서 (2026-11-10 관찰, 결함 아님 · 일부 기전 미확인)
 
 - **증상**: `mopd1/s2` step 1~6 `gen_tokens_per_sample/max` 57,645 · 51,690 · 32,768 · 32,768 · 41,916 · 32,768. `max_new_tokens: 32768`.

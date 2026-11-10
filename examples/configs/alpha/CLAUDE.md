@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-10 | MOPD 에서 teacher−학생 차이는 줄어도 natural_termination_rate 가 그대로 (0.73), Code·Math 학생 답 75% 가 32K 에서 잘림 | OPD 이점은 토큰별 즉시값이라 끝맺기 신호가 없다 — 잘린 행엔 `</think>` 표본 없음, 끝맺은 행에선 teacher 가 음의 이점 (더 검증하라). 같은 SFT 의 Code·Math RL 은 결과 보상으로 ~110 step 에 0.16 (KNOWN_ISSUES 11-10) |
 | 11-10 | Gym 런 `gen_tokens_per_sample/max` 가 생성 상한 32,768 을 넘음 (최대 57,645) | 한 샘플에 생성 턴이 여러 개 — 도구 사용, 또는 `<think>` 를 닫지 않은 턴 뒤 Gym simple agent 가 모델을 다시 부름. 턴당 상한은 `max_gen_tokens_per_turn/max` (= 32,768) 로 확인한다 (KNOWN_ISSUES 11-10) |
 | 11-09 | MOPD grad_norm 5~7 (GRPO 0.03~0.22 의 30~200배), 매 step clip 1.0 에 걸림 | 결함 아님 — OPD 이점이 모든 토큰에 있고 학생 logprob 과 상관해 공통 방향 신호가 토큰 평균으로 줄지 않는다. Muon·Adam 은 클립 계수에 불변. MOPD 에서는 grad_norm 대신 teacher−학생 차이 감소·entropy·is_oob 를 본다 (KNOWN_ISSUES 11-09) |
 | 11-09 | MOPD 런이 "Async GRPO training complete!" 뒤 rc=1 — Ray 재접속 2회 뒤 `core_worker_process.cc:89` CHECK | 종료 절이 teacher 워커 그룹을 안 내려 종료 GC 의 `TeacherWorkerGroup.__del__` 가 내려간 Ray 를 부름 (upstream `89f5cdbdd` 와 같은 계열) → 수정 전까지 MOPD 정상 종료는 완료 문구 + 최종 체크포인트로 판정 (KNOWN_ISSUES 11-09) |
