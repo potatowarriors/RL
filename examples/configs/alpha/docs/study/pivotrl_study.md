@@ -99,6 +99,8 @@ Ultra 보고서가 추가한 것: **재프로파일링**. 학습이 진행되면
 
 ### 4.3 HF 데이터셋 `nvidia/Nemotron-RL-Agentic-*-Pivot-v1` (cc-by-4.0)
 
+> **정정 (2026-11-11 로컬 실측, `../RL_DATA.md` §6)**: 로컬 `SWE-Pivot-v1/train.jsonl` 은 E2E 과제가 아니라 **진짜 피벗 50,661행** (`expected_action` + pass_rate) 이다. 로컬 행 수는 Function-Calling 9,620 · Conversational-Tool-Use 96,968 이고 `Terminal-Pivot-v1` 은 로컬에 없다. 아래 표와 §0 의 4번은 2026-09-22 HF 조회 기록이다.
+
 | 데이터셋 | 실체 | 행 수 | 프로파일링 | 환경 |
 |---|---|---|---|---|
 | `SWE-Pivot-v1` (2026-06-27) | **E2E SWE-RL 과제 세트**. SWE-Gym·R2E-Gym 이슈를 OpenHands 환경 입력으로 재포맷. 필드 `responses_create_params, agent_ref` 뿐, `expected_action` 없음 | 6,436 | 해당 없음 | OpenHands swe_agents |

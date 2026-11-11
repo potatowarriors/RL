@@ -27,7 +27,7 @@ RL 데이터의 현행 정본이다. 2026-10-07 이관 출처: Pai `SFT_RL_DATAS
 | 분류 | 데이터셋 |
 |---|---|
 | IF 계열 (8) | RL-Instruction-Following-{Structured-Outputs-v2, Citation-Formatting, Free-Form-Formatting, Calendar-v2, MultiTurnChat, Adversarial} + RL-Identity-Following + RL-InverseIFEval |
-| Agentic (4) | RL-Agentic-{Function-Calling-Pivot, Conversational-Tool-Use-Pivot, SWE-Pivot(4.8G), Indirect-Prompt-Injection}. **주의(2026-09-22)**: `SWE-Pivot-v1` 은 이름과 달리 단일 스텝 피벗이 아니라 E2E SWE-RL 과제셋(6,436 이슈)이다. 진짜 피벗 행은 `Terminal-Pivot-v1`(31k, 미프로파일)·Conversational-Tool-Use(통과율 동봉). 실사·PivotRL 적용 설계는 [`study/pivotrl_study.md`](study/pivotrl_study.md) §4 |
+| Agentic (4) | RL-Agentic-{Function-Calling-Pivot, Conversational-Tool-Use-Pivot, SWE-Pivot(4.8G), Indirect-Prompt-Injection}. **정정(2026-11-11 실측, §6)**: 로컬 `SWE-Pivot-v1` 은 진짜 피벗 50,661행이다 — 아래 09-22 주의는 틀렸다. **주의(2026-09-22)**: `SWE-Pivot-v1` 은 이름과 달리 단일 스텝 피벗이 아니라 E2E SWE-RL 과제셋(6,436 이슈)이다. 진짜 피벗 행은 `Terminal-Pivot-v1`(31k, 미프로파일)·Conversational-Tool-Use(통과율 동봉). 실사·PivotRL 적용 설계는 [`study/pivotrl_study.md`](study/pivotrl_study.md) §4 |
 | Reasoning (5) | RL-Math-v2 · RL-Science-v1 · RL-ARC-AGI-v1 · RL-ReasoningGym-v1 · RLHF-GenRM-v1(5.1G) |
 | Safety/기타 (3) | RL-Safety-v1 · RL-QA-Abstention-v1 · RL-litmus-bench-v0.1(평가·모니터링용) |
 | 벤치 유래 (4) | RL-SysBench · RL-CFBench · RL-Multichallenge · RL-Multichallenge 계열 |
@@ -291,3 +291,20 @@ Backend.AI 노드(main1·sub1)는 docker 를 못 띄운다. Pai 가 SWE-bench·T
 | 미정 | code_gen 은 지금도 sandbox 없이 Gym CPU 에서 모델 코드를 실행한다 (H4). sandbox 로 옮길지는 따로 본다 |
 
 ns_tools·Lean 이 들어오면 블렌드 비율을 다시 낸다 (Code·Math 에 python 도구 수학·Lean, STEM 에 과학 python 도구 문제). 사용자 승인 뒤 반영한다.
+
+## 6. agentic teacher 다섯 준비 상태 실사 (2026-11-11, `RL_PLAN.md` 결정 59)
+
+CPU · 읽기 전용 실사. 원천 루트 `/home/work/Datasets/LL_datasets/posttraining/RL/` (이하 `RL/`), Gym v0.6.0 `3045a7933`. 행 수는 파일을 직접 센 값이다.
+
+| teacher | 로컬 데이터 (실측 행) | 방식 | 채점 · judge | Gym 서버 | 판정 벤치 | 막힌 곳 |
+|---|---|---|---|---|---|---|
+| terminal-use | RL 형식 0행 — `Terminal-Pivot-v1` 로컬에 없음, 공개 블렌드에 `terminus_judge_*` · `terminal_multi_harness_*` 행 0. SFT 궤적 `SFT/alpha-SFT-Terminal-NTC-v1/ntc_v1.jsonl` 365,705 | 피벗 (행을 만들어야 함) | `terminus_judge` = 문자열 유사도 + LLM judge · `terminal_multi_harness` 는 judge 없음 (Terminus 형식 미지원) | 있음 (데이터는 example 뿐) | TB-2.1 | HF 내려받기 또는 SFT 궤적에서 피벗 추출 + 프로파일링 |
+| conversational tool-use | `RL/…Conversational-Tool-Use-Pivot-v1/train.jsonl` 96,968 (궤적 64,534, pass_rate (0,1) 94,503 · 0 2,465 · 1 0) · `…Function-Calling-Pivot-v1` 9,620 | 피벗 단일 스텝 | 인자 비교, judge 불필요 | `single_step_tool_use_with_argument_comparison` 있음 · 다중 턴 `conversational_tool_use_simulation` (사용자 · 도구 시뮬레이터 + judge) 도 있으나 과제 데이터는 example 뿐 | τ³ (Gemini 필요) | 도구 teacher 400 이 tau 피벗 14,262 · toolcall_schema 7,680 행을 이미 씀. 다중 턴 환경은 과제 데이터 없음 |
+| SWE | 피벗 `RL/…SWE-Pivot-v1/train.jsonl` 50,661 (궤적 3,219, 전 행 `expected_action` + pass_rate, harness codex 18,999 · opencode 16,585 · codeact 15,077) · E2E Ultra `swe.jsonl` 7,816 (SWE-rebench-V2 7,610 · SWE-Gym 206) · Super `swe2.jsonl` 1,444 · 원본 `RL/SWE-Gym` 2,438 · `RL/SWE-rebench-V2` 32,079 | 피벗 · E2E 둘 다 | 피벗 인자 비교 (judge 불필요) · E2E 컨테이너 테스트 | `swe_pivot` 설정 · `swe_agents` 있음 | SWE-V | E2E 는 컨테이너 실행 수단 (`study/mimo_code_harbor.md` §6.1). 피벗은 지금 가능 — 도구 teacher 가 쓴 것은 3,658 행 |
+| Search | RL 형식 0행. SFT 궤적 `SFT/Nemotron-SFT-Agentic-v2/splits/search_train.jsonl` 5,668 (+ held-out 300) · Pai `sdg/search/out/export/search_ko_v1.jsonl` 3,992 · `research_ko_v1.jsonl` 1,071 | 피벗 (행을 만들어야 함) 또는 E2E 검색 | `search_pivot` 인자 비교 · E2E `tavily_search` · `browsecomp_advanced_harness` 는 Tavily 키 + LLM judge | 있음 (데이터는 example 뿐) | 표준 벤치 없음 — 자체 게이트 `eval_sft/search_agent_eval.py` (held-out 300) 뿐 | 데이터 0행 + 판정 벤치 없음 |
+| Safety | `RL/Nemotron-RL-Safety-v1` 89,068 은 `agent_ref` 없는 선호 데이터 · `…Indirect-Prompt-Injection-v1` 1,272 · jailbreak 4종 Ultra 블렌드당 2,861 · Super jailbreak_detection 4,649 · over_refusal 561 | 단일 턴 (jailbreak) · 다중 턴 도구 (주입) | jailbreak · over_refusal 은 LLM judge · 주입은 궤적 분석 (judge 불필요) | 셋 다 있음 | Pai 스위트에 없음 | General teacher 640 이 safety 풀 5,733 중 3,498 행을 이미 씀 — 새 데이터는 주입 1,272 행뿐. 판정 벤치 없음 |
+
+- 재지 않은 것: 도구 teacher 블렌드와 HF 원본의 행 단위 겹침 · τ³ 과제 단위 겹침 (키워드로만: airline 약 300 · retail 약 5,800 행) · HF 원본의 현재 상태.
+- 공개 블렌드에는 `search_pivot_` · `terminus_judge_` · `terminal_multi_harness_*` · `droid_pivot_` 행이 없다 — `SPEC_rl_dataset_inventory.md` 의 해당 줄은 Ultra `mopd.yaml` 라우팅 패턴이다.
+- `SWE-Pivot-v1` 원본의 agent 이름 `single_step_tool_use_with_argument_comparison_swe` 는 Gym 설정에 없다. 같은 행이 Super `swe1.jsonl` 에 유효한 이름으로 들어 있다.
+
