@@ -51,7 +51,7 @@ Xiaomi 는 학습 때 확인된 해킹 궤적이 2% 미만이었다고 밝혔다
 |---|---|
 | Gym 서브모듈 | v0.6.0 `3045a793` (결정 10 고정). `harbor_agent` · `swe_agents` · `anyterminal_agent` · `mini_swe_agent` 를 모두 담고 있다 |
 | Harbor 패키지 | 설치되어 있지 않다. `responses_api_agents/harbor_agent/requirements.txt` 가 git 커밋 `9dddd797` 을 고정한다 |
-| 컨테이너 실행 수단 | main1 에 없다. Backend.AI 컨테이너 안이고 `/dev/fuse` 없음 · CapEff 0 · 비특권 user namespace 허용. 쓸 수 있는 곳은 gpu06 docker 호스트뿐 (64 코어 · RAM 441 GB · `/var/lib/docker` 4.1 TB · 공용, `RL_DATA.md` §5.9) |
+| 컨테이너 실행 수단 | main1 에 없다. Backend.AI 컨테이너 안이고 `/dev/fuse` 없음 · CapEff 0 · user namespace 는 **막혀 있다** (2026-11-11 실측, §6.1 — 10-21 의 "허용" 기록은 sysctl 값만 본 것이라 틀렸다). 쓸 수 있는 곳은 gpu06 docker 호스트뿐 (64 코어 · RAM 441 GB · `/var/lib/docker` 4.1 TB · 공용, `RL_DATA.md` §5.9) |
 | main1 자원 | 220 코어 · RAM 2,015 GB (조회 시 가용 1,647 GB) · NFS 여유 42 TB |
 | 빈 rollout 처리 | 생성 토큰이 없는 Gym 결과가 오면 `nemo_rl/environments/nemo_gym.py:817-841` 이 `ValueError` 를 던져 스텝이 죽는다. Harbor 경로는 실패하면 바로 그런 결과(빈 `output`)를 돌려준다 |
 | 실패 rollout 마스킹 | `mask_sample` 을 `swe_agents`(`app.py:3859`) · `anyterminal_agent`(`app.py:575`)는 설정하고, `harbor_agent` 는 설정하지 않는다 |
@@ -119,6 +119,22 @@ README 가 "token ID 를 돌려주지 않을 수 있어 학습은 지원하지 �
 | 3 | 실행 경로 | **B — `swe_agents` + MiMo 처리기** | 학습 실적 · 함수 호출 형식 · token ID · 마스킹을 모두 갖춘 경로 (§4) |
 | 4 | 컨테이너 실행 위치 | **(a) main1 CPU 에서 사용자 공간 Apptainer 가 FUSE 없이 도는지 GPU 없이 시험 → (b) 안 되면 gpu06 docker (동시 약 32, 캐시 4.1 TB 라 부분집합 운용) → (c) 외부 유료 sandbox(Daytona 등)는 마지막** | main1 은 220 코어 · RAM 2 TB 다. (a) 의 설치 위치(`$NRL_ROOT` 아래)가 `SETUP.md` 의 "시스템 변경 없이" 정책에 맞는지는 착수 때 다시 승인받는다 |
 | 5 | 첫 단계 | **이득 상한 측정 먼저** — alpha 체크포인트로 약 100 태스크 × 4 회 통과율을 Harbor CLI + docker 로 gpu06 에서 평가만 한다 (모델 서빙 GPU 는 승인 대상). 통과율이 1% 근처면 난이도 필터나 다른 SWE 데이터를 먼저 본다 | 정답 패치가 없어 불량 태스크를 미리 거를 수 없다 · Ultra code_gen 보상 > 0 은 0.7% 였다 |
+
+### 6.1 결정 4 (a) 시험 결과 — main1 · sub1 에서 Apptainer 실행 불가 (2026-11-11, GPU 미사용)
+
+사용자 승인 2026-11-11. 설치 위치 `$NRL_ROOT/apptainer_test/` (Apptainer 1.5.5 deb 를 `dpkg-deb -x` 로 풀고 빠진 라이브러리 3개와 starter rpath 를 보충, 시스템 무변경).
+
+| 시험 | 결과 |
+|---|---|
+| `unshare` USER · NS · PID · NET · UTS · IPC (main1 · sub1, uid 1100) | 전부 EPERM. sysctl `unprivileged_userns_clone` 은 1 이지만 세션 seccomp 필터(`Seccomp: 2`)가 막는다 |
+| 같은 시험을 root 로 (`sudo -n` 이 비밀번호 없이 된다) | 전부 EPERM. root 의 CapEff `a88465fb` 에 CAP_SYS_ADMIN 없음 |
+| `chroot` · `mount` (uid 1100) | EPERM |
+| `apptainer pull docker://alpine:3.20` → `.sif` | 성공 (내장 proot 로 squashfs 생성) |
+| `apptainer exec` — `.sif` · `--userns` · sandbox 디렉토리 | 셋 다 `Failed to create user namespace` |
+| 내장 `proot -r <sandbox>` 로 직접 실행 | 성공 (`ptrace(TRACEME)` 허용, `cat /etc/alpine-release` → 3.20.10, 쓰기 가능) |
+
+판정: **(a) 실패.** Apptainer 는 setuid 설치나 user namespace 중 하나가 있어야 실행하는데 이 세션에는 둘 다 없다. 원인은 Backend.AI 세션의 seccomp 정책이라 우리 쪽 설정으로는 못 푼다.
+남는 길: (b) gpu06 docker · 세션 seccomp 정책 완화를 인프라에 요청 · proot 실행 (Gym `swe_agents` 가 `apptainer exec` 를 부르므로 변환 층이 필요하고, 네트워크 차단을 못 하며 ptrace 비용은 미측정) · (c) 외부 sandbox.
 
 ## 7. 착수 때 다시 확인할 것
 
