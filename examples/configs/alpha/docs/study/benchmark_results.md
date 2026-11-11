@@ -43,7 +43,8 @@ MOPD1 teacher 넷(`RL_PLAN.md` 결정 26 · 28·29 · 48 · 54)과 학생(SFT 28
 
 - LCB 짝 차 (322문제, 문제별 4회 평균, 2쌍 Bonferroni): 학생 − 282 = **+7.07 ± 1.09 [+4.62, +9.51] 구분됨** (오른 72 · 내린 15) · 학생 − 228 = −1.55 ± 0.90 [−3.56, +0.46] 구분 안 됨 (오른 31 · 내린 40).
   teacher 의 시작점 대비 이득 (8.62) 의 약 82% 를 회복 — 다만 282 는 서버 절반 bf16 조건이라 이 비율에는 dtype 차이가 섞인다.
-- Pai T1 + IFBench (MMLU-Pro · GPQA-D · IFEval · IFBench · AIME25 · HMMT25) 는 11-11 05:54 부터 측정 중. T3 는 Gemini HTTP 402 로 보류.
+- **T2 RULER (sub1, 11-11 09:06, fp32 · PC 끔, 전 과제 유효)**: single-1 98.3 · single-2 75.0 · multikey 23.3 · multivalue 25.8 (64K · 128K · 258K 평균). 비교값 SFT agentic 2400 (10-01, bf16 · PC 켬): 98.3 · 81.7 · 26.7 · 25.4 — 조건이 달라 직접 비교 아님.
+- Pai T1 + IFBench (MMLU-Pro · GPQA-D · IFEval · IFBench · AIME25 · HMMT25) 는 main1 에서 11-11 05:54 부터 측정 중. 에이전틱 SWE-V · TB-2.1 은 T1 뒤 main1 (sub1 시도는 역터널 문제로 무효, KNOWN_ISSUES 11-11). T3 · τ³ 는 Gemini HTTP 402 로 보류.
 
 ## 1. 요약
 
