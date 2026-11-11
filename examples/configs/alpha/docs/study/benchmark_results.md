@@ -47,6 +47,9 @@ MOPD1 teacher 넷(`RL_PLAN.md` 결정 26 · 28·29 · 48 · 54)과 학생(SFT 28
 | AIME25 / HMMT25 | 15.0 / 6.6 | 13.1 / 6.1 | Code·Math 228: 15.2 / 6.8 | 학생 fp32 · PC 끔 · 282 10-18 bf16 · 228 PC 켬 (조건 다름) |
 | AIME · HMMT 사고 닫힘 | 80.9% · 77.6% | 96.4% (AIME) | 228: 89.4% (AIME) | |
 | RULER single-1 · single-2 · multikey · multivalue | 98.3 · 75.0 · 23.3 · 25.8 | — | — | 11-11 sub1 |
+| SWE-V (resolved) | **12.0** (60/500) | — | — | 학생 11-11 fp32 · PC 끔. 참고 SFT agentic 2400: 6.8 (bf16 · PC 켬) |
+| SWE-V 빈 패치 · 채점 패치 중 해결 | 43.6% · 22.1% | — | — | SFT agentic 2400: 50.2% 빈 패치 |
+| TB-2.1 전부 통과 · 부분 · ≥1 | **2.9 · 27.5 · 56.0** | — | — | 참고 SFT agentic 2400: 0.7 · 18.4 · 43.7 (bf16 · PC 켬) |
 
 - LCB 짝 차 (322문제, 문제별 4회 평균, 2쌍 Bonferroni): 학생 − 282 = **+7.07 ± 1.09 [+4.62, +9.51] 구분됨** (오른 72 · 내린 15) · 학생 − 228 = −1.55 ± 0.90 [−3.56, +0.46] 구분 안 됨 (오른 31 · 내린 40).
   teacher 의 시작점 대비 이득 (8.62) 의 약 82% 를 회복 — 다만 282 는 서버 절반 bf16 조건이라 이 비율에는 dtype 차이가 섞인다. 같은 조건 재측정은 사용자 결정으로 미룸 (2026-11-11).
@@ -54,7 +57,7 @@ MOPD1 teacher 넷(`RL_PLAN.md` 결정 26 · 28·29 · 48 · 54)과 학생(SFT 28
   학생 − 영역 teacher: MMLU-Pro − STEM 735 **+2.63 ± 0.40 구분됨** · GPQA-D − 735 **+5.68 ± 2.00 구분됨** (학생이 STEM teacher 를 넘음) · IFEval − General 640 −4.53 ± 0.73 구분됨 · IFBench loose − 640 −6.42 ± 1.47 구분됨.
   회복률 (teacher − 282 대비): IFEval 70% · IFBench loose 77% · strict 77% · LCB 82% (282 bf16 섞임). AIME 사고 닫힘이 282 96.4% → 80.9% 로 낮다 (조건 다름, 감시 대상).
 - **T2 RULER (sub1, 11-11 09:06, fp32 · PC 끔, 전 과제 유효)**: single-1 98.3 · single-2 75.0 · multikey 23.3 · multivalue 25.8 (64K · 128K · 258K 평균). 비교값 SFT agentic 2400 (10-01, bf16 · PC 켬): 98.3 · 81.7 · 26.7 · 25.4 — 조건이 달라 직접 비교 아님.
-- Pai T1 + IFBench (MMLU-Pro · GPQA-D · IFEval · IFBench · AIME25 · HMMT25) 는 main1 에서 11-11 05:54 부터 측정 중. 에이전틱 SWE-V · TB-2.1 은 T1 뒤 main1 (sub1 시도는 역터널 문제로 무효, KNOWN_ISSUES 11-11). T3 · τ³ 는 Gemini HTTP 402 로 보류.
+- **에이전틱 (main1, 11-11 11:15 ~ 11-12 01:18, fp32 · PC 끔, 전 과제 유효)**: SWE-V 12.0% — 종료 상태 제출 286 · 단계 한도 127 · 형식 오류 반복 73 · 문맥 초과 14, 환경 실패 0, 추론 복원 누락 0. TB-2.1 703 트라이얼 (예외 233: 에이전트 타임아웃 226 · 검증기 타임아웃 7), 타임아웃 31.7%, 명령 추출 88.0%. 시작점 282 · 도구 teacher 400 은 에이전틱 미측정이라 회복률 없음; SFT agentic 값은 조건이 달라 참고만. sub1 시도는 역터널 문제로 무효 (KNOWN_ISSUES 11-11). T3 · τ³ 는 Gemini HTTP 402 로 보류. W&B `alpha-post-eval` run `eval-v3-mopd1_s3_iter120_fp32pc0-r2` (14 과제).
 
 ## 1. 요약
 
