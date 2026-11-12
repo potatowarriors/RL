@@ -61,7 +61,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 ## 함정 표 — Known Issues 한 줄 요약
 
-서사는 [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (`#N` = 원장 번호). 새 사고는 거기에 쓰고 여기엔 한 줄.
+서사는 [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (2026-10-07 이전 항목과 원장 `#N` 은 [`docs/archive/KNOWN_ISSUES_2026-08_10-07.md`](docs/archive/KNOWN_ISSUES_2026-08_10-07.md)). 새 사고는 거기에 쓰고 여기엔 한 줄.
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|

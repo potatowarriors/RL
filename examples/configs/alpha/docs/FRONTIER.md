@@ -11,7 +11,7 @@
 
 | 주제 | 정본 | 조사일 |
 |---|---|---|
-| GDN·선형 attention 재귀 상태 dtype 배포 관행 (Qwen3-Next·3.5~3.8, Nemotron 3, Kimi Linear·GLM-5.3-Flash) | [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) "GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다" 절 | 2026-10-21 |
+| GDN·선형 attention 재귀 상태 dtype 배포 관행 (Qwen3-Next·3.5~3.8, Nemotron 3, Kimi Linear·GLM-5.3-Flash) | [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) "GDN 재귀 상태가 vLLM 에서 bf16 으로 저장된다" 절 | 2026-10-21 |
 | Nemotron 3 Ultra RL 레시피 → alpha 대응 | [`RLVR_READINESS.md`](RLVR_READINESS.md) §2·§4, `../student_rlvr1_alpha.yaml`, NeMo-RL `examples/nemo_gym/nemotron-3-ultra/` | 2026-10-07 |
 | Ultra RL 블렌드 구성 (스테이지별 행 수·원천) | [`RL_DATA.md`](RL_DATA.md) | 문서 참조 |
 | MiMo-V2.6-RL Code (Harbor) 태스크·설정 | [`study/mimo_code_harbor.md`](study/mimo_code_harbor.md) | 2026-10-21 |

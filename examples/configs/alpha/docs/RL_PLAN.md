@@ -33,13 +33,13 @@ Ultra 원형(SFT → Student-RLVR → 전문 교사 RL → MOPD)의 레시피는
 | 4 | **2노드 분리 토폴로지 + async GRPO** (§3) | long-context 메모리 요구와 IB 부재 제약의 최적해 (사용자 정정으로 colocate 권고 폐기) | 2026-08-14 |
 | 5 | RLVR 환경 = **NeMo Gym** (Ultra 패턴) | 데이터가 이미 Gym 행 형식(행별 `agent_ref` 라우팅). 1노드 스모크는 judge-free 서버 구성(nanov3 템플릿) | 2026-08-13 |
 | 6 | FlashQLA = **opt-in** (`ALPHA_GDN_BACKEND=flashqla`) | 검증된 커널 이득(49k 에서 fwd+bwd 3.5×), 실패 시 시끄럽게 중단 | 2026-08-18 |
-| 7 | RL 기본값 = **GDN 재귀 상태 fp32 + R3** | KL 게이트 0.0042 → 0.0014 (`KNOWN_ISSUES.md` GDN 재귀 상태 항목) | 2026-10-06 |
+| 7 | RL 기본값 = **GDN 재귀 상태 fp32 + R3** | KL 게이트 0.0042 → 0.0014 (`archive/KNOWN_ISSUES_2026-08_10-07.md` GDN 재귀 상태 항목) | 2026-10-06 |
 | 8 | RL 옵티마이저도 **Muon** (`dist_muon`, SFT 동역학 정렬) | 사용자 결정. 필드명·기본값이 SFT 와 달라 nesterov·extra_scale_factor 를 명시 (`grpo_alpha_smoke_muon.yaml` 헤더) | 2026-10-06 |
 | 9 | NeMo-RL **v0.7.0 미채택**, r0.8.0 정식 릴리스 시 재검토 | v0.7.0 은 06-27 분기라 현 브랜치보다 오래됨 | 2026-10-06 |
 | 10 | Gym **v0.6.0 고정** | Pai SFT 평가와 같은 태그 (Pai `study/nemo_gym_assessment.md`) | 2026-09-15 |
 | 11 | 학습 엔진 = **NeMo-RL mcore + Pai 기능 포팅** (B안). Pai Megatron-LM-251125 를 NeMo-RL 에 넣는 A안은 불가, RL 프레임워크 교체 C안은 비권고 | A안: NeMo-RL·Bridge 가 import 하는 mcore 모듈 157개 중 23개가 251125 에 없다(GDN `ssm.gated_delta_net`, R3 `moe.router_replay`, refit `resharding.refit` 등). 모델 클래스(MambaModel 48층 vs GPTModel 24층)와 스택(torch 2.8/TE 2.9 vs 2.11/2.14)도 다르다. C안은 검증 자산(브리지·플러그인·게이트)을 버린다 | 권고 2026-10-06, 사용자가 검증 게이트 3종 진행 승인 2026-10-07 |
-| 12 | 멀티턴 경계 토큰 = **`<\|im_end\|>`(3)** (`vllm_cfg.turn_end_token_id`) | alpha EOS(0)는 문서 경계라 Gym 멀티턴이 2번째 호출부터 깨진다 (`KNOWN_ISSUES.md` 2026-10-07 턴 경계) | 2026-10-07 |
-| 13 | Gym 도구 정의의 **`strict` 유지** (구현 대기) | SFT Agentic-v2 와 RL 블렌드 도구 행 13,190/13,190 이 strict 를 담는다 (`KNOWN_ISSUES.md` 2026-10-07 렌더 차이) | 사용자 결정 2026-10-07 |
+| 12 | 멀티턴 경계 토큰 = **`<\|im_end\|>`(3)** (`vllm_cfg.turn_end_token_id`) | alpha EOS(0)는 문서 경계라 Gym 멀티턴이 2번째 호출부터 깨진다 (`archive/KNOWN_ISSUES_2026-08_10-07.md` 2026-10-07 턴 경계) | 2026-10-07 |
+| 13 | Gym 도구 정의의 **`strict` 유지** (구현 대기) | SFT Agentic-v2 와 RL 블렌드 도구 행 13,190/13,190 이 strict 를 담는다 (`archive/KNOWN_ISSUES_2026-08_10-07.md` 2026-10-07 렌더 차이) | 사용자 결정 2026-10-07 |
 | 15 | **첫 RLVR 런 설정**: judge·sandbox·nvarc 를 뺀 10개 환경 71,730행(`rlvr1_alpha_judgefree.jsonl`) · 최대 128K · KL 0 + `seq_logprob_error_threshold 2` · expert bias 갱신 0 · Muon lr 1e-6 warmup 10 GRPO step. prefix caching 끔·ES 켬은 권고값 그대로. 정확성 확인 뒤 학습·롤아웃 병목을 재고 속도 최적화를 정한다. **게이트 G0~G7 뒤 추가(2026-10-07)**: reward_penalties 4종 켬 · `keep_top_k 2` + 100스텝마다 HF 반출(모두 보존) · 학습 데이터 덤프는 첫 10스텝만, 분석 기록 뒤 삭제 | `RLVR_READINESS.md` D1·D3·D4·D5·D7, `STATUS.md` 첫 런 결정. identity(GenRM 채점)·GenRM·judge 환경은 judge 배치를 정한 뒤 추가한다 | 사용자 결정 2026-10-07 |
 | 16 | **첫 RLVR 런 재시작**: 생성 상한 64K (학습 길이 128K 유지) · 시퀀스 마스킹(threshold 2)은 학습 forward 안에서 평가 (upstream #4171) · upstream 정확성 수정 4건 이식 뒤 처음부터 재시작 · 구간 1 종료 뒤 3~4시간 실험(속도 레버 chunked prefill·`max_trajectory_age_steps` 2)을 거쳐 본 런 | 근거: 첫 런 병목 판정(`RLVR_READINESS.md` §5.1)·가속 검토(§5.2)·`KNOWN_ISSUES.md` 2026-10-08 | 사용자 결정 2026-10-08 |
 | 17 | **v2 본 런 세부**: code_gen 유지 (64K 상한에서 생성 토큰 65%·학습 토큰 47%·보상>0 0% 임을 알고 유지) · E1 레버 A/B 는 계획대로 완주 · 본 런 첫 10스텝(덤프 구간)은 loss 안 마스킹을 꺼 덤프에 학습측 logprob 을 남긴다(위치별·agent 별 KL) · wandb 로깅 (`alpha-posttraining`, group `rlvr1_v2`) | 근거: E1a 1스텝 agent 별 통계(`RLVR_READINESS.md` §5.3), loss 안 마스킹 덤프의 prev_logprobs 는 0 (G8·E1a) | 사용자 결정 2026-10-08 |
@@ -102,7 +102,7 @@ B안에서 SFT 가 만든 특성이 어디까지 이어지는지 정리한다. �
 | 미확인 | Gym 멀티턴 도구 렌더 (`strict` 구현 후 R3 P6) · packing+CP 경로 수치 (장문맥) · RL 후 일반 능력 (벤치 비하락 — Pai `SFT_BENCHMARKS.md`) | `STATUS.md` 다음 할 일 |
 
 Pai 기능 중 포팅 후보였던 Muon optimizer-state offload(Pai 기능 #4, upstream PR #6244 는 Megatron-LM `dev` 에만 있음)는 R4 실측상 1노드 128K/CP8 에 필요 없다.
-단 `expandable_segments` 조건이다 (`KNOWN_ISSUES.md` 2026-10-07 메모리 항목). 컨텍스트가 그 이상으로 늘면 다시 본다.
+단 `expandable_segments` 조건이다 (`archive/KNOWN_ISSUES_2026-08_10-07.md` 2026-10-07 메모리 항목). 컨텍스트가 그 이상으로 늘면 다시 본다.
 
 ## 3. 토폴로지
 

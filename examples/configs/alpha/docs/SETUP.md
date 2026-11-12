@@ -1,7 +1,7 @@
 # NeMo-RL 환경 세팅 및 운영 가이드 (alpha post-training)
 
 작성: 2026-08-13, 최종 갱신 2026-10-06. 2026-10-07 워크스페이스 `project_s/NEMO_RL_SETUP.md` 에서 이관했다.
-트러블슈팅 원장(#1~#21)은 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md), 검증 게이트는 [`GATES.md`](GATES.md), 현재 상태는 [`STATUS.md`](STATUS.md).
+트러블슈팅 원장(#1~#27)은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) (최근 사고는 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)), 검증 게이트는 [`GATES.md`](GATES.md), 현재 상태는 [`STATUS.md`](STATUS.md).
 
 alpha_v2 post-training(RLVR/GRPO → teacher RL → MOPD)을 위한 NeMo-RL 실행 환경이다.
 Nemotron-3-Ultra 레시피(NeMo-RL `ultra-v3` 브랜치)를 참조 원형으로 하며,
@@ -25,7 +25,7 @@ sudo·apt·`/usr/local/cuda`·ld.so.conf 를 건드리지 않는다. 같은 컨�
 | 런타임 env | `LD_LIBRARY_PATH=<ldblock>:$CUDNN_HOME/lib:/usr/local/cuda/compat/lib.real`(#16)·`CUDNN_HOME`=Megatron 워커 venv 의 pip cuDNN·`CUDA_LIB_PATH`(#17)·`unset PYTHONPATH`·`PYTHONNOUSERSITE=1`(#18) |
 | 실행 | `clean_run.sh <cmd> </dev/null` (#18). `CUDA_VISIBLE_DEVICES` 금지(#19). whitelist 밖 환경변수는 `clean_run.sh /usr/bin/env VAR=값 <cmd>` 로 넘긴다(#23) |
 
-`#N` 은 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) 원장 번호다. 설치 검증 결과(venv 빌드·TE fused attn·GRPO 퀵스타트)는 [`GATES.md`](GATES.md) "환경" 절.
+`#N` 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 원장 번호다. 설치 검증 결과(venv 빌드·TE fused attn·GRPO 퀵스타트)는 [`GATES.md`](GATES.md) "환경" 절.
 
 ### 1.1 셋업 재구성 제안 — 공식 컨테이너의 속도를 컨테이너 없이 재현 (2026-10-06 제안, 승인 대기)
 

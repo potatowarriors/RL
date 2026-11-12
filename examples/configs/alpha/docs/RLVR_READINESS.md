@@ -60,7 +60,7 @@ RLVR1 블렌드(`rlvr1_alpha.jsonl`) 99,113행 CPU 집계, R4 산출물 점검. 
 | 데이터 | R1 수학 · R4 랜덤 토큰 1개 | 22개 환경 혼합 |
 
 R4 결과 JSON 의 `loss: NaN` 은 수치 문제가 아니다. 하네스가 `loss` 키를 읽는데 워커는 `global_loss` 를 반환한다
-(`megatron_policy_worker.py:1005`). 그래서 R4 는 128K 에서 loss 가 유한한지 확인하지 못했다 (`KNOWN_ISSUES.md` 2026-10-07 항목, G0 에서 수정).
+(`megatron_policy_worker.py:1005`). 그래서 R4 는 128K 에서 loss 가 유한한지 확인하지 못했다 (`archive/KNOWN_ISSUES_2026-08_10-07.md` 2026-10-07 항목, G0 에서 수정).
 
 ## 4. 위험
 

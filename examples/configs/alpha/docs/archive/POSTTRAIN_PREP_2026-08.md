@@ -2,7 +2,7 @@
 
 > **아카이브 (동결)** — 2026-10-07 워크스페이스 `project_s/ALPHA_POSTTRAIN_PROGRESS.md` 에서 이관. 본문은 작성 시점(2026-08-21) 그대로다.
 > 현행 정본: 게이트 [`../GATES.md`](../GATES.md) · 결정 [`../RL_PLAN.md`](../RL_PLAN.md) · 데이터 [`../RL_DATA.md`](../RL_DATA.md) · 상태 [`../STATUS.md`](../STATUS.md).
-> 본문의 `NEMO_RL_SETUP.md` 는 [`../SETUP.md`](../SETUP.md)(설치)·[`../KNOWN_ISSUES.md`](../KNOWN_ISSUES.md)(원장)로, `NeMo-RL/examples/configs/alpha/README.md` 는 [`../../README.md`](../../README.md) 로 나뉘었다.
+> 본문의 `NEMO_RL_SETUP.md` 는 [`../SETUP.md`](../SETUP.md)(설치)·[`KNOWN_ISSUES_2026-08_10-07.md`](KNOWN_ISSUES_2026-08_10-07.md)(원장)로, `NeMo-RL/examples/configs/alpha/README.md` 는 [`../../README.md`](../../README.md) 로 나뉘었다.
 
 pre-train(DiLoCo stage2) 종료 예정 ~08-27 이전에 NeMo-RL 기반 post-training(SFT→RLVR→teacher RL→MOPD)
 인프라를 준비하는 작업의 전 과정 기록. 상세 운영 문서는 `NEMO_RL_SETUP.md`,
