@@ -25,8 +25,10 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `teacher_codemath_s3r2_alpha.yaml` | Code·Math 3단계 2바퀴 — 1바퀴 ckpt 재개, 롤아웃당 업데이트 4회(GBS 512, `force_on_policy_ratio` 끔, clip 0.2/0.28 활성), lr 3e-6, 갱신 블렌드 (결정 41) |
 | `teacher_codemath_s3r2_resume_smoke.yaml` | 2바퀴 재개 스모크 (단계별 검증 ②) — 1바퀴 ckpt 하드링크 사본에서 2바퀴 레시피를 16 프롬프트 · GBS 64 로 1 step 학습·저장 (약 20분; 옵티마이저 로드·가드·logprob 패스·전역 배치 4개·지표 확인) |
 | `student_rlvr2.yaml` | RLVR 2단계 | 미작성 |
-| `teacher_code_math_alpha.yaml` · `teacher_general_alpha.yaml` | 1차 Code·Math · General teacher | 미작성 (lr 5e-6, 결정 23) |
-| `mopd.yaml` | 멀티 teacher on-policy distillation | 미작성 |
+| `teacher_codemath_s2r_b_alpha.yaml` | Code·Math 2단계 롤백 재개 (안 B) — **step 228 = Code·Math teacher** | 결정 42·48 |
+| `teacher_codemath_code_alpha.yaml` · `teacher_codemath_code2_alpha.yaml` · `teacher_codemath_math_alpha.yaml` | s2r 228 에서 코드만 · 코드 라운드 2 · 수학만 이어 학습한 라운드 (MOPD1 teacher 로는 쓰지 않음) | 결정 44~47 |
+| `teacher_general_alpha.yaml` | 1차 General (chat · IF) teacher — **step 640 = General teacher** | 결정 18·19·50~54 |
+| `mopd1_alpha.yaml` | **MOPD1** — 학생 Code·Math 1단계 282 · teacher General 640 · STEM 735 · Code·Math 228 · 도구 400, 512 × 120 step · 시퀀스 평균 손실 · warmup 3 · lr 3e-6. 본 런 `mopd1/s3` (2026-11-10~11, 성공) | 결정 55~58 · `docs/GATES.md` MS1 · MS2 · 결과 `docs/study/benchmark_results.md` §0.5 |
 
 ## 디렉토리
 
@@ -50,6 +52,12 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/filter_rl_blend.py` · `tools/measure_blend_prompt_lengths.py` | RL 블렌드 환경 필터(`--preset judge_free`, D1) · 첫 턴 프롬프트 길이 데이터 게이트 (`max_model_len` 초과 행은 런을 멈춘다) |
 | `tools/export_rl_hf.sh` | **RL 체크포인트 → Pai 호환 HF 반출은 이것으로만** (G6). 변환 → 메타데이터 시작점 복사 → `compare_hf_weights.py` 대조. 변환기 출력 그대로는 Pai 가 토크나이저를 못 읽는다 |
 | `tools/compare_hf_weights.py` · `tools/compare_hf_forward.py` | 반출 HF ↔ 시작점 대조: 텐서·동결·dtype (CPU) · Pai 환경 config·토크나이저·forward + 잡음 바닥 통제 (G6) |
+| `tools/build_mopd1_blend.py` · `tools/build_mopd1_smoke_blend.py` | MOPD1 블렌드 (teacher RL 블렌드 재사용 30 / 30 / 15+15 / 10%, 중복 · teacher 검증셋 · 벤치 오염 제거, 프롬프트 32,768 상한) → `mopd1_v1.jsonl` + `.routing.yaml` · 스모크 블렌드 192 행 |
+| `tools/analyze_mopd_smoke.py` | MOPD 게이트 MS1 · MS2 판정기 (CPU) — teacher 슬롯별 차이 · 잡음 바닥 · teacher 손상 · teacher 신원 (적재 줄 ↔ Ray 액터) |
+| `tools/analyze_mopd_slots.py` | MOPD 덤프의 teacher 슬롯별 step 추이 (CPU) — 시퀀스 · 토큰 평균 차이 · 길이 · 잘림 · 손실 집계 기대값 |
+| `tools/paired_bench_compare.py` | 같은 문항 짝지은 벤치 비교 (CPU) — Pai lm_eval 표본 · LCB 롤아웃, Bonferroni 구간 |
+| `runs/check_placement.py` · `runs/sample_gpu_layout.py` | 런 중 배치 그룹 → 노드 · GPU 배치 판정 + teacher 액터 (pid · 노드) 저장 (MS2 ①②) · 노드별 GPU 메모리 표본 |
+| `runs/eval_lcb.sh` · `tools/summarize_lcb.py` | LiveCodeBench v5 322 × 4 @32K (16 GPU, Gym code_gen 채점). 완료 판정은 `DONE` 이 아니라 `lcb_summary.json` 존재로 (KNOWN_ISSUES 11-11) |
 | `tools/export_watch.sh` | 본 런 체크포인트를 N 스텝마다 `export_rl_hf.sh` 로 반출하는 감시 루프 (keep_top_k 가 지우기 전에) |
 | `tools/analyze_gym_full_results.py` | Gym 전체 결과(오프라인 W&B 표)에서 judge 판정 파싱 실패율 · 재판정(`check_full_generation_on_fail`) 시도·성공 · rdkit 추출 실패를 센다 (CPU, J1). `should_log_nemo_gym_responses: true` 레시피는 덤프를 안 남기므로 게이트에서 `WANDB_MODE=offline` + 표 켬으로 남긴다 |
 | `tools/analyze_reward_penalties.py` | Ultra reward_penalties 4종을 롤아웃에 오프라인으로 적용해 발동률·오탐(보상 > 0 이 0 으로 깎이는 수)을 잰다 (CPU) |
