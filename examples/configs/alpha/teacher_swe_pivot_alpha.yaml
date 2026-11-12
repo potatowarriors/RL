@@ -1,0 +1,31 @@
+# teacher_swe_pivot_alpha.yaml — agentic teacher 단계의 SWE 피벗 teacher 파일럿 (RL_PLAN.md 결정 59 · 61, docs/RL_DATA.md §6).
+#
+# 도구 사용 teacher 레시피(teacher_tool_alpha.yaml: 2노드 분리 · async age 2 · Muon lr 3e-6 warmup 10 · 64 × 16 = GBS 1,024 ·
+# 128K/CP8 · 생성 8,192 · R3 · GDN 상태 fp32 · strict 도구 유지 · KL 0)을 그대로 상속한다.
+# 바꾸는 것은 데이터 · 스텝 · 에폭 · Gym 환경 목록뿐이다 (메모리·CP 설정이 같아 R4 재측정 대상이 아니다).
+#
+# 시작점: MOPD1 학생 results/alpha/mopd1/hf/hf_step_00120 (결정 59). RL 반출 체크포인트라 GATES.md 재실행 조건 M1 · M2 · M4 → R1.
+# 블렌드: alpha_blends/teacher_blends/teacher_swe_pivot_v1.jsonl — 고유 피벗 3,850 (tools/build_swe_pivot_blend.py, 원본 50,661 행은
+#         같은 피벗의 평균 12.7 회 반복) · 검증셋 teacher_swe_pivot_v1_val.jsonl 128 (인스턴스 79 개를 통째로 뗐다).
+# 규모: 2 에폭 = 120 스텝 (3,850 // 64 = 60 스텝/에폭). 판정은 학습 뒤 SWE-bench Verified 짝 비교 (시작점 12.0).
+# 보상: swe_pivot 설정은 word_count_similarity_threshold 0.0 — 문자열 인자는 항상 통과하고 도구 이름 · 인자 키 · 비문자열 값만 본다.
+#
+# 실행 전 검사 (CPU):  python examples/configs/alpha/tools/check_alpha_recipe.py examples/configs/alpha/teacher_swe_pivot_alpha.yaml \
+#                         data.train.data_path=<teacher_swe_pivot_v1.jsonl>
+# 실행: RECIPE=examples/configs/alpha/teacher_swe_pivot_alpha.yaml DATA=<teacher_swe_pivot_v1.jsonl> VAL=<teacher_swe_pivot_v1_val.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_swe_pivot <tag> policy.model_name=<mopd1/hf/hf_step_00120>
+defaults: teacher_tool_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_swe_pivot"
+
+grpo:
+  max_num_steps: 120                    # 2 에폭 × 60 스텝 (결정 61 파일럿)
+  max_num_epochs: 2                     # async 루프가 max_num_steps 를 max_num_epochs × (행 수 // 프롬프트 수) 로 자른다
+
+env:
+  nemo_gym:
+    config_paths:
+      # strict 유지 서버 (결정 13). NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins (launch.sh 가 넘긴다)
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      - resources_servers/single_step_tool_use_with_argument_comparison/configs/swe_pivot_single_step_tool_use_with_argument_comparison.yaml
