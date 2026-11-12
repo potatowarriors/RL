@@ -8,13 +8,10 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
-## sub1 에서 돌린 에이전틱 벤치 (SWE-V · TB-2.1) 가 전부 BadRequestError — 컨테이너 :8199 를 main1 의 묵은 역터널이 잡고 있어 요청이 main1 T1 fleet 로 갔다 (2026-11-11, ✅ 원인 확인 · 무효 결과 격리 · 에이전틱은 main1 로)
+## sub1 에서 돌린 에이전틱 벤치 (SWE-V · TB-2.1) 가 전부 BadRequestError — 컨테이너 :8199 를 main1 의 묵은 역터널이 잡고 있었다 (2026-11-11, ✅ main1 로 옮겨 재측정)
 
-- **증상**: sub1 `run_suite.sh … swe,tb2` (07:42~08:46) — 게이트 A1~A5 PASS 뒤 SWE 500/500 · TB-2.1 712/712 가 `BadRequestError`, 판정 "무효 (추출 실패 100%)". 프록시 추론 관측 0.
-- **원인 (자명한 환경 오류라 진단 절차 제외)**: 역터널 `start_swe_tunnel.sh` → `swe_tunnel_keep.sh` 는 실행한 노드의 `localhost:8100` 을 컨테이너 :8199 로 연다. main1 에 약 35일 된 keeper (pid 4131489) 와 ssh (pid 2233680, `-R 8199:localhost:8100`) 가 남아 :8199 를 잡고 있어 sub1 의 터널은 `remote port forwarding failed for listen port 8199` 로 5초마다 재시도만 했다. 하니스 요청은 main1 의 T1 fleet (도구 파서 없음 · 40,960) 로 가 400.
-  게이트 A2 (컨테이너 :8199 → fleet 200) 는 응답 여부만 보고 **어느 노드의 fleet 인지**는 보지 않아 통과했다. `start_swe_tunnel.sh` 의 `pkill -f swe_tunnel_keep` 은 실행 노드의 keeper 만 죽이고 다른 노드나 그 ssh 자식은 남긴다.
-- **대응**: 무효 결과 8 파일을 처음엔 결과 디렉토리 안 하위 폴더로 옮겼으나 Pai `summarize.py:31` 이 `rglob("results_*.json")` 이라 다음 집계 (sub1 T2, 09:06) 가 다시 읽어 W&B 에 0.0 을 두 번째로 올렸다 → 결과 트리 밖 `/home/work/vidsearch/tools/bench_logs/invalid/mopd1_s3_iter120_fp32pc0_tunnel_20261111/` 로 옮김. TRACKING 에는 안 들어감; W&B `alpha-post-eval/mopd1_s3_iter120_fp32pc0` iter 0 의 SWE · TB 키에 무효 0.0 이 남음 (삭제는 사용자 결정 대기). 무효 결과는 결과 트리 **밖**으로 옮긴다. 에이전틱은 터널이 이미 가리키는 main1 에서 T1 뒤에 돌리고, sub1 은 터널이 필요 없는 T2 를 맡는다. sub1 의 재시도 루프 (keeper pid 3366359) 는 권한 분류기가 막아 사용자가 직접 종료했다 (11-11 09:59, 남은 프로세스 0 확인) — 남겨 두면 main1 의 묵은 터널이 끊길 때 :8199 를 차지해 main1 에이전틱 요청을 sub1 로 보낼 수 있었다.
-- **교훈**: 에이전틱을 다른 노드에서 돌리기 전에 컨테이너 :8199 를 잡은 터널이 어느 노드 것인지 본다 (`ps … -R 8199` 를 두 노드에서). A2 는 fleet 식별 (예: `/v1/models` 의 `max_model_len` 이 262,144 인지) 까지 봐야 한다 — Pai 게이트 보완 대상.
+벤치 하니스 사고라 서사는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` 2026-11-11 항목이 정본이다 (두 노드 운영 절차는 Pai `SFT_BENCHMARKS.md` §2.5 "두 노드로 나눠 돌리기").
+요지: 게이트 A2 는 응답만 보고 어느 fleet 인지 보지 않는다 · 무효 결과는 `results/<TAG>/` 밖으로 (`summarize.py` 가 `rglob`) · W&B 의 지운 run id 는 재사용 불가 (`-r2` 로 재기록).
 
 ## LCB 측정이 Gym 서버 기동에서 실패 — 같은 venv 를 쓰는 agent 둘이 pip 시드 갱신을 동시에 해 충돌, 실행기는 실패를 DONE 으로 기록 (2026-11-11, ✅ 재시도로 통과 · 실행기 보완 대기)
 

@@ -44,6 +44,7 @@
 | [study/s5_pipeline_timeline.md](study/s5_pipeline_timeline.md) | s5 파이프라인 타임라인 (2026-10-22 그림) — 나이 1 규칙으로 다음 물결이 refit 뒤에만 기동돼 물결 쌍이 함께 끝나고 엔진이 2-step 마다 15~35분 비는 관측; 다시 그리기 `tools/plot_pipeline_timeline.py` |
 | [study/benchmark_results.md](study/benchmark_results.md) | alpha_v2 벤치 결과 전체 (2026-11-06 스냅샷) — Code·Math teacher 계보의 LCB·AIME25·HMMT, Pai 스위트 T1·T2·T3·에이전틱 전 체크포인트, 도구 teacher τ³, 측정 조건과 GDN 상태 dtype 경계 (10-21) |
 | [archive/KNOWN_ISSUES_2026-08_10-07.md](archive/KNOWN_ISSUES_2026-08_10-07.md) | [보관] 2026-10-07 이전 사고 — R4 loss NaN(하네스 키), 장문맥 OOM(단편화), Gym 멀티턴 턴 경계, Gym 렌더 차이(`strict` 등), 엔진 동등성 판정법, GDN 상태 bf16(KL 게이트), zero-centered RMSNorm, 환경·운영 원장 #1~#27 (2026-11-12 이관) |
+| [archive/STATUS_2026-10-08_11-12.md](archive/STATUS_2026-10-08_11-12.md) | [보관] 상태판의 1차 teacher RL · MOPD1 · General teacher 행과 결정됨 행 원문 (2026-11-12 MOPD1 마감 때 이관) |
 | [archive/POSTTRAIN_PREP_2026-08.md](archive/POSTTRAIN_PREP_2026-08.md) | [동결] RL 인프라 준비 종합 보고 — 타임라인·결정·게이트·산출물 맵 (2026-08-12~21) |
 
 ## upstream 참조 (NeMo-RL 본체·서브모듈 — 링크만)

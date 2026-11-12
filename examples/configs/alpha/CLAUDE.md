@@ -65,7 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
-| 11-11 | sub1 에서 돌린 에이전틱 벤치가 전부 BadRequestError, 게이트 A1~A5 는 PASS | 컨테이너 :8199 를 main1 의 묵은 역터널이 잡아 요청이 main1 fleet 로 감 (A2 는 fleet 식별을 안 봄) → 에이전틱은 터널이 가리키는 노드에서 돌리고, 다른 노드로 옮기기 전 두 노드의 `-R 8199` 프로세스를 확인 (KNOWN_ISSUES 11-11) |
+| 11-11 | sub1 에서 돌린 에이전틱 벤치가 전부 BadRequestError, 게이트 A1~A5 는 PASS | 컨테이너 :8199 를 main1 의 묵은 역터널이 잡아 요청이 main1 fleet 로 감 (A2 는 fleet 식별을 안 봄) → 에이전틱은 터널이 가리키는 노드에서 돌리고, 다른 노드로 옮기기 전 두 노드의 `-R 8199` 프로세스를 확인 (Pai KNOWN_ISSUES 11-11 · `SFT_BENCHMARKS.md` §2.5) |
 | 11-11 | LCB 측정이 `servers failed` 인데 실행기 로그는 `DONE` — Gym agent 둘이 같은 `simple_agent/.venv` 의 pip 시드 갱신을 동시에 해 충돌 | 재시도로 통과. 완료 판정은 `DONE` 이 아니라 `lcb_summary.json` 존재로 한다 (KNOWN_ISSUES 11-11) |
 | 11-10 | MOPD 에서 teacher−학생 차이는 줄어도 natural_termination_rate 가 그대로 (0.73), Code·Math 학생 답 75% 가 32K 에서 잘림 | OPD 이점은 토큰별 즉시값이라 끝맺기 신호가 없다 — 잘린 행엔 `</think>` 표본 없음, 끝맺은 행에선 teacher 가 음의 이점 (더 검증하라). 같은 SFT 의 Code·Math RL 은 결과 보상으로 ~110 step 에 0.16 (KNOWN_ISSUES 11-10) |
 | 11-10 | Gym 런 `gen_tokens_per_sample/max` 가 생성 상한 32,768 을 넘음 (최대 57,645) | 한 샘플에 생성 턴이 여러 개 — 도구 사용, 또는 `<think>` 를 닫지 않은 턴 뒤 Gym simple agent 가 모델을 다시 부름. 턴당 상한은 `max_gen_tokens_per_turn/max` (= 32,768) 로 확인한다 (KNOWN_ISSUES 11-10) |
