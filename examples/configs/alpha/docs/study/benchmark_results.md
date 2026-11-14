@@ -59,6 +59,22 @@ MOPD1 teacher 넷(`RL_PLAN.md` 결정 26 · 28·29 · 48 · 54)과 학생(SFT 28
 - **T2 RULER (sub1, 11-11 09:06, fp32 · PC 끔, 전 과제 유효)**: single-1 98.3 · single-2 75.0 · multikey 23.3 · multivalue 25.8 (64K · 128K · 258K 평균). 비교값 SFT agentic 2400 (10-01, bf16 · PC 켬): 98.3 · 81.7 · 26.7 · 25.4 — 조건이 달라 직접 비교 아님.
 - **에이전틱 (main1, 11-11 11:15 ~ 11-12 01:18, fp32 · PC 끔, 전 과제 유효)**: SWE-V 12.0% — 종료 상태 제출 286 · 단계 한도 127 · 형식 오류 반복 73 · 문맥 초과 14, 환경 실패 0, 추론 복원 누락 0. TB-2.1 703 트라이얼 (예외 233: 에이전트 타임아웃 226 · 검증기 타임아웃 7), 타임아웃 31.7%, 명령 추출 88.0%. 시작점 282 · 도구 teacher 400 은 에이전틱 미측정이라 회복률 없음; SFT agentic 값은 조건이 달라 참고만. sub1 시도는 역터널 문제로 무효 (KNOWN_ISSUES 11-11). T3 · τ³ 는 Gemini HTTP 402 로 보류. W&B `alpha-post-eval` run `eval-v3-mopd1_s3_iter120_fp32pc0-r2` (14 과제).
 
+## 0.6 SWE 피벗 teacher 파일럿 (`teacher_swe_pivot/p1` step 120) — SWE-V (2026-11-13)
+
+결정 61. 반출 `results/alpha/teacher_swe_pivot/hf/hf_step_00120`, Pai 태그 `swe_pivot_p1_iter120_fp32pc0` (main1, fp32 · PC 끔, 게이트 A1~A5 PASS, 500 × 1, mini-swe-agent, 환경 실패 0, 추론 복원 누락 0). 비교 기준은 §0.5 의 시작점 (MOPD1 학생, 같은 조건).
+
+| 항목 | SWE 피벗 120 | 시작점 MOPD1 학생 |
+|---|---:|---:|
+| SWE-V resolved | **8.4** (42/500) | 12.0 (60/500) |
+| 빈 패치 · 채점 패치 중 해결 | 58.4% · 21.4% | 43.6% · 22.1% |
+| 종료 상태 Submitted · LimitsExceeded · RepeatedFormatError · 문맥 초과 | 214 · 94 · **181** · 11 | 286 · 127 · 73 · 14 |
+| LLM 요청 수 · 닫히지 않은 사고 (길이 종료) | 48,304 · 2,929 | 60,482 · 1,978 |
+
+- **짝 차 (같은 500 문항): −3.6 ± 1.43 pp [−6.41, −0.79] 구분됨** — 둘 다 해결 25 · 피벗만 17 · 시작점만 35. 한 번씩 잰 값이라 같은 모델의 반복 측정 잡음은 따로 재지 않았다.
+- 채점된 패치의 해결률은 같다 (21.4 대 22.1%). 차이는 패치를 내지 못한 문항 수에서 난다 — 형식 오류 반복 종료가 73 → 181 로 늘었다 (Submitted → RepeatedFormatError 78 문항 · LimitsExceeded → RepeatedFormatError 58 문항).
+- 원인은 미진단. 가설: 피벗 블렌드의 harness (codex · opencode · codeact 도구 집합) 가 평가 harness (mini-swe-agent) 와 달라 형식이 옮았다. 측정 게이트 A4 는 thinking OFF 에서 8회 모두 도구를 호출하지 않았다고 경고했다 (시작점의 같은 탐침 기록 없음).
+- 학습 중 피벗 보상은 1 에폭 0.509 → 2 에폭 0.555 로 올랐다 — 피벗 보상 상승이 SWE-V 로 옮겨지지 않았다. PivotRL 논문의 SWE 역전 (SFT 37.40 → 32.67) 과 같은 방향.
+
 ## 1. 요약
 
 - **SFT 최종(agentic 2862)에서 RL Code·Math 를 거치며 코드·수학이 크게 올랐다.** LCB pass@1 은 10.0 에서 s2r 228 의 24.6 으로, AIME25 는 SFT 무효에서 1~2단계 13.1~17.4 로 올랐다.
