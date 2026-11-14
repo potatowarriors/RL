@@ -8,7 +8,7 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
-## terminal 피벗 `teacher_terminal_pivot/p1` 의 step 이 간헐적으로 30~60분 걸린다 — `</think>` 를 닫지 않은 응답을 Gym simple_agent 가 상한 없이 다시 부름 (2026-11-14, ✅ 독립 검증 확인 · 수정 승인 대기)
+## terminal 피벗 `teacher_terminal_pivot/p1` 의 step 이 간헐적으로 30~60분 걸린다 — `</think>` 를 닫지 않은 응답을 Gym simple_agent 가 상한 없이 다시 부름 (2026-11-14, ✅ 독립 검증 확인 · `52309340b` 로 수정, `p2` 처음부터 재시작)
 
 - **증상**: step 3 1,884 s · step 10 3,799 s (나머지 322~441 s). 느린 배치는 1,023/1,024 가 약 2분에 끝나고 마지막 1개가 43 · 66분 뒤에 끝났다. 드라이버는 "Buffer empty or not enough groups to form a full step, waiting..." 반복. `train/timing/rollout/await_results` 2,438 s (step 3) · 1,842 s (step 5, 버퍼 여유로 학습은 안 섬). 학습 시간 · 생성 KL 0.0009 · 보상은 정상. 런 2026-11-14 17:30 기동, commit `909e3ea05`, 학습 main1 · 롤아웃 sub1.
 - **원인 (레시피 누락)**: `teacher_terminal_pivot_alpha.yaml` 이 도구 teacher 레시피를 상속하면서 simple_agent 의 `max_steps: 1` 가드 (10-20 항목, `96c83b052`) 를 넣지 않았다. 도구 teacher 와 SWE 피벗은 `tool_simulation_agent` 라 드러나지 않았고, terminal 은 `simple_agent` 를 쓴다.
