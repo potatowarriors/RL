@@ -34,3 +34,7 @@ env:
       resources_servers:
         terminus_judge:
           string_similarity_threshold: 0.7   # 결정 62 — Gym 설정 파일의 0.9 를 덮어쓴다
+    # 가드: 에이전트 재호출 금지 (KNOWN_ISSUES 2026-11-14). `</think>` 를 닫지 않은 응답은 메시지가 없어 simple_agent 가 상한 없이
+    # 다시 부른다 (p1 에서 한 샘플 273 회 · step 63분). 1 이면 한 번만 부르고, 끊긴 샘플은 MODEL_OUTPUT_INVALID 보상 0 으로 들어간다.
+    # rollout_overprovision 은 넣지 않는다 — 이 런은 목표를 최대 나이에서 띄워 남는 그룹이 이월 직후 버려진다 (독립 검증 2026-11-14).
+    terminus_judge_string_only_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
