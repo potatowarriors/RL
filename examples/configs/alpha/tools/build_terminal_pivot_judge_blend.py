@@ -8,7 +8,9 @@
   1. 정답에 제어 키 (`C-<글자>`) 가 든 행 제외 (`ctrl`, 결정 66)
   2. 분산 > 0 (통과 1 ~ 반복−1 회) ∧ 평균 통과율 < `--lam` (결정 67: 0.5)
   3. 통과가 1회뿐이고 그것이 정답과 유사도 < 0.3 인 judge 통과인 행 제외 (`lenient1`, 결정 68 — judge 의 관대한 판정 하나로 뽑힌 행)
-  4. 명령 행: 정답이 최근 6턴 중 하나의 반복 (`g_rep6`, 유사도 ≥ 0.7) 이거나 직전 턴과 근접 (`g_near`, 0.5~0.7) 이면 제외 (결정 68)
+  4. 명령 행: 정답이 최근 6턴 중 하나의 반복 (`g_rep6`, 유사도 ≥ 0.7) 이거나 직전 턴과 근접 (`g_near`, 0.5~0.7) 이면 제외 (결정 68).
+     `--drop-rerun cue|all`: 정답이 앞 명령의 글자 그대로 재실행 (`g_rerun`) · sleep/echo 뿐 (`g_sleep`) · 빈 대기 (`g_wait`) 인 행도
+     제외한다 — cue 는 단서 상태 행만, all 은 전부 (2026-11-16 재검토: 이 행들 안에서 반복류 들림 2.36)
   5. 명령 행: 정답 keystrokes 가 글자 그대로 같은 행은 `--keep` 개만 남긴다 (결정 67: 1). 빈 대기 정답은 한 행이 된다
   6. 완료 선언 행 (`g_tc`): 4 · 5 의 대상이 아니다. 2 · 3 을 통과한 것을 학습 블렌드의 `--tc-share` 까지 (결정 67: 원본 비중 0.088)
 검증셋은 과제 단위로 뗀다. 행의 agent_ref 를 `alpha_terminus_judge_simple_agent` 로 바꾸고 `pass_rate` (judge 기준) 를 적는다.
@@ -17,7 +19,7 @@ sleep/echo 뿐) 의 양의 advantage 몫과 들림 (양의 몫 ÷ 음의 몫).
 
   python examples/configs/alpha/tools/build_terminal_pivot_judge_blend.py --out <dir>/teacher_terminal_pivot_judge_v2.jsonl \
       [--lam 0.5] [--keep 1] [--tc-share 0.088] [--n-val-tasks 30] [--seed 20261116]
-종료 코드: 쏠림 기준 (넓은 반복류의 양의 advantage 몫 ≤ 5% ∧ 들림 ≤ 1.0; 2026-11-16 블렌드 검토에서 정함 — 이전 기준 "빈 대기 + 직전 반복 ≤ 2%"
+종료 코드: 쏠림 기준 (넓은 반복류의 양의 advantage 몫 ≤ 5% ∧ 들림 ≤ 1.0 ∧ 단서 상태 (`cue`) 행 안에서도 들림 ≤ 1.0; 2026-11-16 블렌드 검토에서 정함 — 이전 기준 "빈 대기 + 직전 반복 ≤ 2%"
 는 반복을 가르치는 행만 모은 반례가 0.00% 로 통과했다) 을 못 넘으면 1.
 """
 
@@ -74,6 +76,8 @@ def main() -> int:
     ap.add_argument("--lam", type=float, default=0.5)
     ap.add_argument("--keep", type=int, default=1)
     ap.add_argument("--tc-share", type=float, default=0.088)
+    ap.add_argument("--drop-rerun", choices=("none", "cue", "all"), default="none",
+                    help="정답이 재실행 · sleep/echo · 빈 대기인 명령 행을 뺀다: none · cue (단서 상태 행만) · all")
     ap.add_argument("--n-val-tasks", type=int, default=30)
     ap.add_argument("--seed", type=int, default=20261116)
     a = ap.parse_args()
@@ -96,6 +100,10 @@ def main() -> int:
     funnel["not_single_lenient_pass"] = len(pool)
     pool = {u: d for u, d in pool.items() if d["g_tc"] or not (d["g_rep6"] or d["g_near"])}
     funnel["not_repeat_within_6_turns_or_near"] = len(pool)
+    if a.drop_rerun != "none":
+        pool = {u: d for u, d in pool.items()
+                if d["g_tc"] or not ((d["g_rerun"] or d["g_sleep"] or d["g_wait"]) and (a.drop_rerun == "all" or d["cue"]))}
+        funnel[f"not_rerun_sleep_wait[{a.drop_rerun}]"] = len(pool)
 
     rng = random.Random(a.seed)
     tasks = sorted({d["task"] for d in pool.values()})
@@ -144,15 +152,20 @@ def main() -> int:
         sel = [pool[u] for u in keys]
         sk = skew(sel)
         wr = sk["pos_share"]["repeat_like"]
-        ok = wr <= MAX_REPEAT_LIKE_SHARE and (sk["lift"]["repeat_like"] or 0.0) <= MAX_REPEAT_LIKE_LIFT
+        cue = [d for d in sel if d["cue"]]
+        sk_cue = skew(cue) if cue else {"pos_share": {}, "lift": {}}
+        cue_lift = sk_cue["lift"].get("repeat_like") or 0.0
+        ok = wr <= MAX_REPEAT_LIKE_SHARE and (sk["lift"]["repeat_like"] or 0.0) <= MAX_REPEAT_LIKE_LIFT and cue_lift <= MAX_REPEAT_LIKE_LIFT
         st = {"file": path, "rows": len(keys), "tasks": len({d["task"] for d in sel}), "by_kind": collections.Counter(kind(d) for d in sel),
               "task_complete_share": round(sum(d["g_tc"] for d in sel) / len(sel), 4),
               "mean_profile_pass_rate": round(sum(passes(d) for d in sel) / sum(len(d["o"]) for d in sel), 4),
               "selection": st_sel, "funnel": funnel if path == a.out else None, "skew": sk,
               "repeat_like_pos_share": round(wr, 4),
-              "gold_flags": {k: sum(bool(d[k]) for d in sel) for k in ("g_wait", "g_rerun", "g_sleep", "g_rep6", "g_near", "lenient1")},
-              "skew_criterion": {"max_repeat_like_share": MAX_REPEAT_LIKE_SHARE, "max_repeat_like_lift": MAX_REPEAT_LIKE_LIFT, "pass": ok},
-              "lam": a.lam, "keep": a.keep, "tc_share_cap": a.tc_share, "source": SOURCE, "profile": PROFILE, "seed": a.seed}
+              "gold_flags": {k: sum(bool(d[k]) for d in sel) for k in ("g_wait", "g_rerun", "g_sleep", "g_rep6", "g_near", "cue", "lenient1")},
+              "cue_rows": len(cue), "cue_repeat_like_lift": cue_lift, "cue_repeat_like_pos_share": sk_cue["pos_share"].get("repeat_like"),
+              "skew_criterion": {"max_repeat_like_share": MAX_REPEAT_LIKE_SHARE, "max_repeat_like_lift": MAX_REPEAT_LIKE_LIFT,
+                                 "cue_state_lift_max": MAX_REPEAT_LIKE_LIFT, "pass": ok},
+              "lam": a.lam, "keep": a.keep, "drop_rerun": a.drop_rerun, "tc_share_cap": a.tc_share, "source": SOURCE, "profile": PROFILE, "seed": a.seed}
         with open(path + ".stats.json", "w") as fs:
             json.dump(st, fs, indent=1, ensure_ascii=False)
         print(json.dumps(st, ensure_ascii=False))

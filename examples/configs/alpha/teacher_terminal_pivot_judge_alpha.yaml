@@ -9,18 +9,19 @@
 # judge 판정 품질은 게이트 TJ1 (tools/measure_judge_terminus.py) 로 확인한다.
 # 데이터 행의 agent_ref 는 `alpha_terminus_judge_simple_agent` 여야 한다 (원본의 `terminus_judge_string_only_simple_agent` 는 judge 없는 설정).
 #
-# 블렌드: alpha_blends/teacher_blends/teacher_terminal_pivot_judge_v2.jsonl 4,623 행 (tools/build_terminal_pivot_judge_blend.py, 결정 67 · 68) —
-#         제어 키 정답 제외 → judge 기준 통과 1~7/8 ∧ 평균 < 0.5 → 관대한 단일 통과 행 제외 → 정답이 최근 6턴 반복 · 직전 근접인 행 제외 →
-#         명령 중복 제거 (1개) → 완료 선언 8.8%. 검증셋 …_judge_v2_val.jsonl 205 (과제 30 개 통째).
-#         쏠림: 넓은 반복류 출력의 양의 advantage 몫 4.0% · 들림 0.85 (기준 ≤ 5% · ≤ 1.0; 지난 p2 블렌드는 같은 계산으로 22.6%).
-# 규모: 2 에폭 = 144 스텝 (4,623 // 64 = 72 스텝/에폭). 1 에폭 뒤 멈추고 TB-2.1 89 과제 × 2 를 시작점과 짝지어 반복률을 본다 (결정 68).
+# 블렌드: alpha_blends/teacher_blends/teacher_terminal_pivot_judge_v3.jsonl 4,436 행 (tools/build_terminal_pivot_judge_blend.py --drop-rerun all,
+#         결정 67 · 68) — 제어 키 정답 제외 → judge 기준 통과 1~7/8 ∧ 평균 < 0.5 → 관대한 단일 통과 행 제외 → 정답이 최근 6턴 반복 ·
+#         직전 근접 · 앞 명령 재실행 · sleep/echo · 빈 대기인 명령 행 제외 → 명령 중복 제거 (1개) → 완료 선언 8.8%.
+#         검증셋 …_judge_v3_val.jsonl 194 (과제 30 개 통째).
+#         쏠림: 넓은 반복류 출력의 양의 advantage 몫 2.5% · 들림 0.60, 단서 상태 행 안 들림 0.80 (기준 ≤ 5% · ≤ 1.0 · ≤ 1.0).
+# 규모: 2 에폭 = 138 스텝 (4,436 // 64 = 69 스텝/에폭). 1 에폭 뒤 멈추고 TB-2.1 89 과제 × 2 를 시작점과 짝지어 반복률을 본다 (결정 68).
 defaults: teacher_tool_alpha.yaml
 
 checkpointing:
   checkpoint_dir: "results/alpha_teacher_terminal_pivot_judge"
 
 grpo:
-  max_num_steps: 144                    # 2 에폭 × 72 스텝
+  max_num_steps: 138                    # 2 에폭 × 69 스텝
   max_num_epochs: 2                     # async 루프가 max_num_steps 를 max_num_epochs × (행 수 // 프롬프트 수) 로 자른다
 
 policy:
