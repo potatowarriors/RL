@@ -11,7 +11,9 @@ v2 는 유사도로 갈리지 않는 세트를 넣고, 유사도 임계 judge �
     P_redirect 각 명령 끝에 ` 2>&1` (유사도 < 0.95)
     P_reorder  서로 독립인 읽기 명령 (cat · ls · head · tail · wc · stat · file) 3개 이상의 순서를 뒤집음 (유사도 < 0.7)
     P_split    `a && b` 한 명령을 두 명령으로 나눔 / 연속 두 명령을 `a && b` 로 합침
-    P_ctrl     제어 키의 개행 유무 (`C-c` ↔ `C-c\\n`), 플래그 순서 (`-la` ↔ `-al`, `-rn` ↔ `-nr`)
+    P_flag     플래그 표기 (`-la` ↔ `-al` · `-la` ↔ `-l -a` · `-rn` ↔ `-nr`)
+    P_sem      글자 정규화로는 안 맞는 의미 등가 — `grep p f` ↔ `cat f | grep p` · `cat a` + `cat b` ↔ `cat a b` ·
+               `head -n N f` ↔ `sed -n '1,Np' f` · heredoc 구분자 이름만 바꿈
   음성 (label 0)
     N_wait     후보 = 빈 keystrokes 대기
     N_other    후보 = 다른 과제 행의 정답 commands (유사도 < 0.5)
@@ -20,8 +22,11 @@ v2 는 유사도로 갈리지 않는 세트를 넣고, 유사도 임계 judge �
     N_drop     정답 명령 4개 이상 중 앞 절반만 수행 (유사도 0.5~0.95 — 범위 차이)
     N_target   읽기 명령의 대상 경로를 같은 행의 다른 경로가 아닌 다른 과제의 경로로 바꿈 (유사도 0.5~0.95 — 다른 파일)
     N_verb     읽기 명령 (cat · head · tail · ls) 을 `rm -f` 로 바꿈 (유사도 ≥ 0.5 — 다른 행동 유형)
+    N_ctrl     제어 키의 개행 유무 (`C-c` ↔ `C-c\\n`) — tmux send-keys 에서 `C-c\\n` 은 글자 "C-c" + Enter 라 프로세스를 끊지 못한다
+               (2026-11-16 재검토의 tmux 3.4 재현, Gym schemas.py 의 modifier 키 규칙). v2 는 이것을 양성으로 잘못 라벨했다
   보고만 (label None)
     U_*        MOPD1 학생의 실제 프로파일링 출력, 유사도 구간별 (0.1~0.3 · 0.3~0.5 · 0.5~0.7 · 0.7~0.95)
+    B_*        N_drop · N_verb · P_reorder 의 analysis · plan 을 중립 문장으로 바꾼 변형 — 정답의 analysis · plan 복사가 judge 에게 단서를 주는지 본다
     K_earlytc  정답 task_complete false + 후보 = 정답 commands 그대로 + task_complete true — Gym 의 완료 검사가 단방향이라 통과한다 (알려진 구멍)
 검증 경로: TerminusJudgeResourcesServer 를 프로세스 안에 만들고 verify() 를 부른다 — 스키마 · 완료 일치 · 유사도 · judge 프롬프트 · 판정 파싱이 운영 코드다.
 설정 = Gym `terminus_judge.yaml` + 레시피 덮어쓰기 (`env.nemo_gym.terminus_judge_resources_server`). 병합 결과가 기대값과 다르면 중단한다.
@@ -46,15 +51,19 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 SOURCE = "/home/work/Datasets/LL_datasets/posttraining/RL/Nemotron-RL-Agentic-Terminal-Pivot-v1/atcb_terminal_pivot_release_final_v2.jsonl"
-POS = ["P_fast", "P_redirect", "P_reorder", "P_split", "P_ctrl"]
-NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb"]
+POS = ["P_fast", "P_redirect", "P_reorder", "P_split", "P_flag", "P_sem"]
+NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb", "N_ctrl"]
+HARD = ["P_reorder", "P_split", "P_flag", "P_sem", "N_drop", "N_target", "N_verb", "N_ctrl"]
+SMALL = ("P_fast", "P_flag", "N_ctrl")
 # (세트, 기대 보상, 최소 일치율). 유사도로 갈리지 않는 세트 (P_reorder · N_drop · N_target · N_verb) 가 핵심이다.
-CRITERIA = [("P_fast", 1.0, 1.00), ("P_redirect", 1.0, 0.90), ("P_reorder", 1.0, 0.80), ("P_split", 1.0, 0.85), ("P_ctrl", 1.0, 0.85),
-            ("N_wait", 0.0, 0.97), ("N_other", 0.0, 0.97), ("N_repeat", 0.0, 0.97), ("N_goldwait", 0.0, 0.97),
-            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95)]
+CRITERIA = [("P_fast", 1.0, 1.00), ("P_redirect", 1.0, 0.90), ("P_reorder", 1.0, 0.80), ("P_split", 1.0, 0.85), ("P_flag", 1.0, 0.85),
+            ("P_sem", 1.0, 0.75),
+            ("N_wait", 0.0, 0.99), ("N_other", 0.0, 0.99), ("N_repeat", 0.0, 0.99), ("N_goldwait", 0.0, 0.99),
+            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95), ("N_ctrl", 0.0, 0.80)]
 MAX_PARSE_FAIL = 0.02
 MAX_ERROR_RATE = 0.01
-MAX_FLIP = 0.02
+MAX_FLIP = 0.02          # 전 쌍
+MAX_FLIP_HARD = 0.05     # 유사도로 갈리지 않는 세트 각각
 EXPECTED_CFG = {"enable_string_similarity": True, "string_similarity_threshold": 0.95, "enable_llm_judge": True, "check_twice_swap": False}
 READ_VERBS = ("cat ", "ls ", "head ", "tail ", "wc ", "stat ", "file ")
 
@@ -118,21 +127,41 @@ def build(args) -> None:
     for r in real:
         g, ks, cmds = r["_gold"], r["_ks"], r["_gold"]["commands"]
         # --- 양성 ---
-        if not full("P_ctrl", args.n_small):
+        if not full("N_ctrl", args.n_small) and any(k.strip() in ("C-c", "C-d", "C-z") for k in ks):
+            new = [dict(c, keystrokes=(c["keystrokes"].strip() if c["keystrokes"].endswith("\n") else c["keystrokes"] + "\n"))
+                   if c.get("keystrokes", "").strip() in ("C-c", "C-d", "C-z") else c for c in cmds]
+            if sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                add("N_ctrl", 0, r, with_commands(g, new)); continue
+        if not full("P_flag", args.n_small):
             new, changed = [], False
             for c in cmds:
                 k = c.get("keystrokes", "")
-                k2 = k
-                if k.strip() in ("C-c", "C-d", "C-z", "q"):
-                    k2 = k.strip() if k.endswith("\n") else k + "\n"
-                else:
-                    k2 = re.sub(r"(^|\s)-la(\s)", r"\1-al\2", k, count=1)
-                    if k2 == k:
-                        k2 = re.sub(r"(^|\s)-rn(\s)", r"\1-nr\2", k, count=1)
+                k2 = re.sub(r"(^|\s)-la(\s)", (r"\1-al\2" if n["P_flag"] % 2 else r"\1-l -a\2"), k, count=1)
+                if k2 == k:
+                    k2 = re.sub(r"(^|\s)-rn(\s)", r"\1-nr\2", k, count=1)
                 changed |= k2 != k
                 new.append(dict(c, keystrokes=k2))
             if changed and sim(ks, [c["keystrokes"] for c in new]) < 0.95:
-                add("P_ctrl", 1, r, with_commands(g, new)); continue
+                add("P_flag", 1, r, with_commands(g, new)); continue
+        if not full("P_sem", 4 * args.n_sem_kind):
+            new, kind = None, ""
+            if len(cmds) == 1:
+                k = ks[0]
+                m = re.fullmatch(r"grep ((?:-[nicvEFw]+ )*)('[^']+'|\"[^\"$`]+\"|[\w.:=/-]+) (/?[\w./-]+)\n", k)
+                h = re.fullmatch(r"head -n ?(\d+) (/?[\w./-]+)\n", k) or re.fullmatch(r"head -(\d+) (/?[\w./-]+)\n", k)
+                d = re.search(r"<<\s*'?(\w+)'?\n", k)
+                if m and "-r" not in m.group(1):
+                    new, kind = [dict(cmds[0], keystrokes=f"cat {m.group(3)} | grep {m.group(1)}{m.group(2)}\n")], "grep"
+                elif h:
+                    new, kind = [dict(cmds[0], keystrokes=f"sed -n '1,{h.group(1)}p' {h.group(2)}\n")], "head"
+                elif d and k.count(d.group(1)) == 2 and len(d.group(1)) >= 3:
+                    new, kind = [dict(cmds[0], keystrokes=k.replace(d.group(1), "END_OF_BLOCK"))], "heredoc"
+            elif 2 <= len(cmds) <= 4 and all(re.fullmatch(r"cat (/?[\w./-]+)\n", k) for k in ks) and len(set(ks)) == len(ks):
+                new, kind = [dict(cmds[0], keystrokes="cat " + " ".join(k.strip()[4:] for k in ks) + "\n")], "catjoin"
+            if new is not None and [c["keystrokes"] for c in new] != ks and sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                if n["sem_" + kind] < args.n_sem_kind:   # 한 모양이 세트를 독점하지 않게
+                    n["sem_" + kind] += 1
+                    add("P_sem", 1, r, with_commands(g, new), kind); n["P_sem"] += 0; continue
         if not full("P_reorder", args.n) and len(cmds) >= 3 and all(simple_read(k) for k in ks) and len(set(ks)) == len(ks):
             new = list(reversed(cmds))
             if sim(ks, [c["keystrokes"] for c in new]) < 0.7:
@@ -160,9 +189,9 @@ def build(args) -> None:
             if ck != ks and sim(ks, ck) < 0.95:
                 add("P_redirect", 1, r, with_commands(g, new)); continue
         # --- 음성: 유사도로 갈리지 않는 것 ---
-        if not full("N_drop", args.n) and len(cmds) >= 4 and len(set(ks)) == len(ks):
-            new = cmds[: len(cmds) // 2]
-            if 0.5 <= sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+        if not full("N_drop", args.n) and len(cmds) >= 3 and len(set(ks)) == len(ks):
+            new = cmds[: max(1, len(cmds) // 3)]   # 2/3 이상을 빼 rubric 의 ">50% 범위 차이" 경계를 피한다
+            if 0.3 <= sim(ks, [c["keystrokes"] for c in new]) < 0.95:
                 add("N_drop", 0, r, with_commands(g, new), f"{len(new)}/{len(cmds)} commands"); continue
         if not full("N_target", args.n) and len(cmds) <= 2 and all(simple_read(k) for k in ks):
             new, changed = [], 0
@@ -199,6 +228,12 @@ def build(args) -> None:
                     add("N_repeat", 0, r, with_commands(g, p["commands"])); continue
         if not full("K_earlytc", args.n_small):
             add("K_earlytc", None, r, with_commands(g, cmds, task_complete=True)); continue
+    for src, dst in (("N_drop", "B_drop"), ("N_verb", "B_verb"), ("P_reorder", "B_reorder")):
+        for p in [q for q in pairs if q["set"] == src][: args.n_small]:
+            c = json.loads(p["candidate_text"])
+            c["analysis"], c["plan"] = "Continuing with the task.", "Run the next commands."
+            pairs.append({**p, "set": dst, "label": None, "candidate_text": json.dumps(c, ensure_ascii=False, indent=2), "note": f"blank of {src}"})
+            n[dst] += 1
     for r in wait:
         if full("N_goldwait", args.n):
             break
@@ -225,7 +260,7 @@ def build(args) -> None:
     with open(args.out, "w") as f:
         for p in pairs:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
-    short = [s for s in POS + NEG if n[s] < (args.n_small if s in ("P_fast", "P_ctrl") else args.n) * 0.5]
+    short = [s for s in POS + NEG if n[s] < (2 * args.n_sem_kind if s == "P_sem" else args.n_small if s in SMALL else args.n) * 0.5]
     stats = {}
     for s in POS + NEG:
         v = sorted(p["sim"] for p in pairs if p["set"] == s and p["sim"] is not None)
@@ -264,12 +299,36 @@ def judge_verdict(by: dict, parse_fail_rate: float, error_rate: float, truncated
     return fails
 
 
-def selftest(args) -> int:
-    """유사도 임계로 판정하는 가짜 judge 가 이 게이트에서 FAIL 하는지 본다 (CPU). 항상 같음 · 항상 다름도 본다."""
+def _canon(ks: list[str]) -> list[str]:
+    """생성 변형을 되돌리는 글자 정규화: && · 개행으로 쪼개기, 끝의 ` 2>&1` 제거, 플래그 글자 정렬."""
+    out = []
+    for k in ks:
+        for part in re.split(r"\s*&&\s*|\n", k):
+            part = re.sub(r"\s*2>&1\s*$", "", part.strip())
+            if not part:
+                continue
+            toks = []
+            for t in part.split():
+                toks.append("-" + "".join(sorted(t[1:])) if re.fullmatch(r"-[A-Za-z]{2,}", t) else t)
+            out.append(" ".join(toks))
+    return out
+
+
+def selftest(args, quiet: bool = False) -> int:
+    """값싼 가짜 judge 가 이 게이트에서 FAIL 하는지 본다 (CPU): 유사도 임계 · 글자 정규화 일치 · 항상 같음 · 항상 다름."""
     pairs = [json.loads(line) for line in open(args.pairs)]
-    fakes = {f"sim>={t}": (lambda s, t=t: s >= t) for t in (0.3, 0.5, 0.6, 0.7, 0.8, 0.9)}
-    fakes["always_equal"] = lambda s: True
-    fakes["always_not_equal"] = lambda s: False
+
+    def jac(a, b):
+        A, B = set(" ".join(a).split()), set(" ".join(b).split())
+        return len(A & B) / max(1, len(A | B))
+
+    fakes = {f"sim>={t}": (lambda s, g, c, t=t: s >= t) for t in (0.3, 0.5, 0.6, 0.7, 0.8, 0.9)}
+    fakes["always_equal"] = lambda s, g, c: True
+    fakes["always_not_equal"] = lambda s, g, c: False
+    fakes["canon_set_eq"] = lambda s, g, c: set(_canon(g)) == set(_canon(c))
+    fakes["canon_jaccard>=0.9"] = lambda s, g, c: jac(_canon(g), _canon(c)) >= 0.9
+    fakes["canon_jaccard>=0.7"] = lambda s, g, c: jac(_canon(g), _canon(c)) >= 0.7
+    fakes["gold_cmds_subset"] = lambda s, g, c: all(any(x.strip() in y for y in c) for x in g if x.strip())
     bad = []
     for name, fn in fakes.items():
         by = collections.defaultdict(list)
@@ -278,11 +337,14 @@ def selftest(args) -> int:
                 continue
             if p["sim"] >= 0.95:
                 by[p["set"]].append({"reward": 1.0, "failure_reason": "none", "judge_calls": 0})
-            else:
-                eq = fn(p["sim"])
-                by[p["set"]].append({"reward": 1.0 if eq else 0.0, "failure_reason": "none" if eq else "judge_not_equivalent", "judge_calls": 1})
+                continue
+            g = keystrokes(json.loads(p["row"]["expected_answer"]))
+            c = keystrokes(json.loads(p["candidate_text"]))
+            eq = fn(p["sim"], g, c)
+            by[p["set"]].append({"reward": 1.0 if eq else 0.0, "failure_reason": "none" if eq else "judge_not_equivalent", "judge_calls": 1})
         fails = judge_verdict(by, 0.0, 0.0, 0)
-        print(f"{name:18s} -> {'PASS (게이트가 못 잡음)' if not fails else 'FAIL'}  {'; '.join(fails[:4])}")
+        if not quiet:
+            print(f"{name:20s} -> {'PASS (게이트가 못 잡음)' if not fails else 'FAIL'}  {'; '.join(fails[:4])}")
         if not fails:
             bad.append(name)
     print("selftest:", "OK — 가짜 judge 전부 FAIL" if not bad else f"NG — PASS 한 가짜 judge {bad}")
@@ -320,6 +382,8 @@ async def run_pairs(args) -> int:
     from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseOutputMessage, NeMoGymResponseOutputText
     from resources_servers.terminus_judge.app import TerminusJudgeVerifyRequest
 
+    if selftest(args, quiet=True):
+        raise SystemExit("selftest NG — 쌍 파일이 값싼 가짜 judge 를 걸러내지 못한다. run 을 하지 않는다")
     server, cfg = load_server(args)
     print("terminus_judge cfg:", cfg.model_dump(include={"judge_model_server", "judge_responses_create_params", "enable_string_similarity",
           "string_similarity_threshold", "enable_llm_judge", "check_twice_swap", "judge_prompt_template_fpath"}), flush=True)
@@ -391,11 +455,15 @@ def flips(args) -> int:
     b = {x["i"]: x for x in map(json.loads, open(args.b))}
     both = [i for i in a if i in b and a[i]["judge_calls"] and b[i]["judge_calls"]]
     fl = [i for i in both if a[i]["reward"] != b[i]["reward"]]
+    tot = collections.Counter(a[i]["set"] for i in both)
     by = collections.Counter(a[i]["set"] for i in fl)
     rate = len(fl) / max(1, len(both))
-    print(json.dumps({"judged_pairs": len(both), "flips": len(fl), "flip_rate": round(rate, 4), "by_set": by,
-                      "verdict": "PASS" if rate <= MAX_FLIP else "FAIL", "max_flip": MAX_FLIP}, ensure_ascii=False))
-    return 0 if rate <= MAX_FLIP else 1
+    per = {k: round(by[k] / tot[k], 4) for k in sorted(tot)}
+    fails = [f"전체 {rate:.4f} > {MAX_FLIP}"] if rate > MAX_FLIP else []
+    fails += [f"{k} {per[k]} > {MAX_FLIP_HARD}" for k in per if (k in HARD or k.startswith("U_")) and per[k] > MAX_FLIP_HARD]
+    print(json.dumps({"judged_pairs": len(both), "flips": len(fl), "flip_rate": round(rate, 4), "per_set": per,
+                      "verdict": "PASS" if not fails else "FAIL", "fails": fails}, ensure_ascii=False))
+    return 0 if not fails else 1
 
 
 def main() -> int:
@@ -406,6 +474,7 @@ def main() -> int:
     b.add_argument("--profile-rollouts")
     b.add_argument("--n", type=int, default=300)
     b.add_argument("--n-small", type=int, default=100)
+    b.add_argument("--n-sem-kind", type=int, default=50, help="P_sem 의 모양 (grep · head · heredoc · catjoin) 하나당 상한")
     b.add_argument("--n-unlabeled", type=int, default=100)
     b.add_argument("--seed", type=int, default=20261116)
     s = sub.add_parser("selftest")
