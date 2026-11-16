@@ -22,11 +22,15 @@ v2 는 유사도로 갈리지 않는 세트를 넣고, 유사도 임계 judge �
     N_drop     정답 명령 4개 이상 중 앞 절반만 수행 (유사도 0.5~0.95 — 범위 차이)
     N_target   읽기 명령의 대상 경로를 같은 행의 다른 경로가 아닌 다른 과제의 경로로 바꿈 (유사도 0.5~0.95 — 다른 파일)
     N_verb     읽기 명령 (cat · head · tail · ls) 을 `rm -f` 로 바꿈 (유사도 ≥ 0.5 — 다른 행동 유형)
+    N_wtrunc   heredoc 으로 쓰는 파일 본문의 뒤 1/3 줄을 뺌 (기능 누락) · N_sed `sed -i 's/A/B/'` 의 B 를 바꿈 (다른 편집) ·
+    N_noexec   파일을 쓰고 실행하는 정답에서 실행 명령을 뺌 (작성만 대 작성 + 실행)
+    (양성 P_wredir `cat > f << 'X'` ↔ `cat << 'X' > f` · P_pyfile `python3 << 'X'` ↔ 임시 파일에 쓰고 `python3 파일` — 쓰기 · 실행 명령의 등가)
     N_ctrl     제어 키의 개행 유무 (`C-c` ↔ `C-c\\n`) — tmux send-keys 에서 `C-c\\n` 은 글자 "C-c" + Enter 라 프로세스를 끊지 못한다
                (2026-11-16 재검토의 tmux 3.4 재현, Gym schemas.py 의 modifier 키 규칙). v2 는 이것을 양성으로 잘못 라벨했다
   보고만 (label None)
     U_*        MOPD1 학생의 실제 프로파일링 출력, 유사도 구간별 (0.1~0.3 · 0.3~0.5 · 0.5~0.7 · 0.7~0.95)
     B_*        N_drop · N_verb · P_reorder 의 analysis · plan 을 중립 문장으로 바꾼 변형 — 정답의 analysis · plan 복사가 judge 에게 단서를 주는지 본다
+    K_fastsed  `sed -i` 치환값만 바꿨는데 유사도 ≥ 0.95 라 judge 없이 통과하는 쌍 — 빠른 통과의 구멍을 드러낸다
     K_earlytc  정답 task_complete false + 후보 = 정답 commands 그대로 + task_complete true — Gym 의 완료 검사가 단방향이라 통과한다 (알려진 구멍)
 검증 경로: TerminusJudgeResourcesServer 를 프로세스 안에 만들고 verify() 를 부른다 — 스키마 · 완료 일치 · 유사도 · judge 프롬프트 · 판정 파싱이 운영 코드다.
 설정 = Gym `terminus_judge.yaml` + 레시피 덮어쓰기 (`env.nemo_gym.terminus_judge_resources_server`). 병합 결과가 기대값과 다르면 중단한다.
@@ -51,15 +55,17 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 SOURCE = "/home/work/Datasets/LL_datasets/posttraining/RL/Nemotron-RL-Agentic-Terminal-Pivot-v1/atcb_terminal_pivot_release_final_v2.jsonl"
-POS = ["P_fast", "P_redirect", "P_reorder", "P_split", "P_flag", "P_sem"]
-NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb", "N_ctrl"]
-HARD = ["P_reorder", "P_split", "P_flag", "P_sem", "N_drop", "N_target", "N_verb", "N_ctrl"]
-SMALL = ("P_fast", "P_flag", "N_ctrl")
+POS = ["P_fast", "P_redirect", "P_reorder", "P_split", "P_flag", "P_sem", "P_wredir", "P_pyfile"]
+NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb", "N_ctrl", "N_wtrunc", "N_sed", "N_noexec"]
+HARD = ["P_reorder", "P_split", "P_flag", "P_sem", "P_wredir", "P_pyfile", "N_drop", "N_target", "N_verb", "N_ctrl", "N_wtrunc", "N_sed", "N_noexec"]
+SMALL = ("P_fast", "P_flag", "N_ctrl", "P_wredir", "P_pyfile", "N_wtrunc", "N_sed", "N_noexec")
+WRITE = ("P_wredir", "P_pyfile", "N_wtrunc", "N_sed", "N_noexec")   # 쓰기 · 실행 명령 세트 — 원본에서 만들 수 있는 수가 적다
 # (세트, 기대 보상, 최소 일치율). 유사도로 갈리지 않는 세트 (P_reorder · N_drop · N_target · N_verb) 가 핵심이다.
 CRITERIA = [("P_fast", 1.0, 1.00), ("P_redirect", 1.0, 0.90), ("P_reorder", 1.0, 0.80), ("P_split", 1.0, 0.85), ("P_flag", 1.0, 0.85),
-            ("P_sem", 1.0, 0.75),
+            ("P_sem", 1.0, 0.75), ("P_wredir", 1.0, 0.80), ("P_pyfile", 1.0, 0.80),
             ("N_wait", 0.0, 0.99), ("N_other", 0.0, 0.99), ("N_repeat", 0.0, 0.99), ("N_goldwait", 0.0, 0.99),
-            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95), ("N_ctrl", 0.0, 0.80)]
+            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95), ("N_ctrl", 0.0, 0.80),
+            ("N_wtrunc", 0.0, 0.85), ("N_sed", 0.0, 0.85), ("N_noexec", 0.0, 0.85)]
 MAX_PARSE_FAIL = 0.02
 MAX_ERROR_RATE = 0.01
 MAX_FLIP = 0.02          # 전 쌍
@@ -127,6 +133,47 @@ def build(args) -> None:
     for r in real:
         g, ks, cmds = r["_gold"], r["_ks"], r["_gold"]["commands"]
         # --- 양성 ---
+        # --- 쓰기 · 실행 명령 ---
+        hd = [re.match(r"cat > (\S+) <<\s*('?)(\w+)\2\n", k) for k in ks]
+        hi = next((i for i, m in enumerate(hd) if m and ks[i].rstrip("\n").endswith("\n" + m.group(3))), None)   # 첫 heredoc 쓰기 명령
+        if not full("P_wredir", args.n_small) and hi is not None and n["N_wtrunc"] >= n["P_wredir"]:
+            m = hd[hi]
+            k2 = f"cat << {m.group(2)}{m.group(3)}{m.group(2)} > {m.group(1)}\n" + ks[hi][m.end():]
+            new = [dict(c, keystrokes=k2) if j == hi else c for j, c in enumerate(cmds)]
+            if sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                add("P_wredir", 1, r, with_commands(g, new)); continue
+        py = re.match(r"python3 (?:- )?<<\s*('?)(\w+)\1\n", ks[0]) if len(cmds) == 1 else None
+        if not full("P_pyfile", args.n_small) and py and ks[0].rstrip("\n").endswith("\n" + py.group(2)):
+            body = ks[0][py.end():]
+            new = [dict(cmds[0], keystrokes=f"cat > /tmp/run_step.py << {py.group(1)}{py.group(2)}{py.group(1)}\n" + body),
+                   dict(cmds[0], keystrokes="python3 /tmp/run_step.py\n")]
+            if sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                add("P_pyfile", 1, r, with_commands(g, new)); continue
+        if not full("N_wtrunc", args.n_small) and hi is not None:
+            m = hd[hi]
+            lines = ks[hi][m.end():].rstrip("\n").split("\n")[:-1]
+            if len(lines) >= 9:
+                k2 = ks[hi][: m.end()] + "\n".join(lines[: len(lines) * 2 // 3]) + "\n" + m.group(3) + "\n"
+                new = [dict(c, keystrokes=k2) if j == hi else c for j, c in enumerate(cmds)]
+                if 0.5 <= sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                    add("N_wtrunc", 0, r, with_commands(g, new), f"{len(lines) * 2 // 3}/{len(lines)} lines"); continue
+        sd = [(i, re.search(r"sed -i(?:\.\w+)? (['\"])s([/|#])([^/|#\n]+)\2([^/|#\n]{3,})\2(g?)\1", k)) for i, k in enumerate(ks)]
+        sd = [(i, m) for i, m in sd if m]
+        if sd and (not full("N_sed", args.n_small) or not full("K_fastsed", args.n_small)):
+            i, m = sd[0]
+            k2 = ks[i][: m.start(4)] + m.group(4)[::-1] + "_alt" + ks[i][m.end(4):]
+            new = [dict(c, keystrokes=k2) if j == i else c for j, c in enumerate(cmds)]
+            sv = sim(ks, [c["keystrokes"] for c in new])
+            if sv < 0.95 and not full("N_sed", args.n_small):
+                add("N_sed", 0, r, with_commands(g, new)); continue
+            if sv >= 0.95 and not full("K_fastsed", args.n_small):
+                add("K_fastsed", None, r, with_commands(g, new)); continue
+        if not full("N_noexec", args.n_small) and len(cmds) >= 2 and any(hd):
+            run = [bool(re.match(r"(python3?|bash|sh|node|make|pytest|go run|cargo run|\./)\S*", k.strip())) and not h for k, h in zip(ks, hd)]
+            if any(run) and not all(run):
+                new = [c for c, x in zip(cmds, run) if not x]
+                if 0.3 <= sim(ks, [c["keystrokes"] for c in new]) < 0.95:
+                    add("N_noexec", 0, r, with_commands(g, new), f"removed {sum(run)} exec"); continue
         if not full("N_ctrl", args.n_small) and any(k.strip() in ("C-c", "C-d", "C-z") for k in ks):
             new = [dict(c, keystrokes=(c["keystrokes"].strip() if c["keystrokes"].endswith("\n") else c["keystrokes"] + "\n"))
                    if c.get("keystrokes", "").strip() in ("C-c", "C-d", "C-z") else c for c in cmds]
@@ -260,7 +307,7 @@ def build(args) -> None:
     with open(args.out, "w") as f:
         for p in pairs:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
-    short = [s for s in POS + NEG if n[s] < (2 * args.n_sem_kind if s == "P_sem" else args.n_small if s in SMALL else args.n) * 0.5]
+    short = [s for s in POS + NEG if n[s] < (30 if s in WRITE else (2 * args.n_sem_kind if s == "P_sem" else args.n_small if s in SMALL else args.n) * 0.5)]
     stats = {}
     for s in POS + NEG:
         v = sorted(p["sim"] for p in pairs if p["set"] == s and p["sim"] is not None)
