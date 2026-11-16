@@ -1,0 +1,38 @@
+# alpha Gym 플러그인 (NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins). terminal 피벗 채점 — 논문 방식 (결정 65 · 66).
+# Gym `terminus_judge.yaml` 과 다른 점: (1) 서버가 완료 선언을 양방향으로 본다 (app.py) (2) 빠른 통과 임계 1.0 — keystrokes 가 완전히 같을 때만
+# judge 없이 통과 (3) agent 의 max_steps 1 (KNOWN_ISSUES 2026-11-14 재호출 가드).
+alpha_terminus_judge_resources_server:
+  resources_servers:
+    alpha_terminus_judge:
+      entrypoint: app.py
+      judge_model_server:
+        type: responses_api_models
+        name: judge_model
+      judge_responses_create_params:
+        input: []
+        temperature: 0.0
+        max_output_tokens: 2048
+      judge_prompt_template_fpath: prompt_templates/rubrics_v4.txt   # Gym terminus_judge 의 파일 (app.py 가 경로를 푼다)
+      judge_endpoint_max_concurrency: null
+      judge_system_message: null
+      judge_equal_label: "[[A=B]]"
+      judge_not_equal_label: "[[A!=B]]"
+      check_twice_swap: false
+      reward_if_swap_fails: 0.0
+      enable_string_similarity: true
+      string_similarity_threshold: 1.0
+      enable_llm_judge: true
+      domain: agent
+      verified: false
+      description: single-step terminal task — schema, two-way task_complete check, exact-match fast path, rubric LLM judge
+alpha_terminus_judge_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: alpha_terminus_judge_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      max_steps: 1

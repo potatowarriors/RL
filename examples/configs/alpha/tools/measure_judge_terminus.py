@@ -25,15 +25,18 @@ v2 는 유사도로 갈리지 않는 세트를 넣고, 유사도 임계 judge �
     N_wtrunc   heredoc 으로 쓰는 파일 본문의 뒤 1/3 줄을 뺌 (기능 누락) · N_sed `sed -i 's/A/B/'` 의 B 를 바꿈 (다른 편집) ·
     N_noexec   파일을 쓰고 실행하는 정답에서 실행 명령을 뺌 (작성만 대 작성 + 실행)
     (양성 P_wredir `cat > f << 'X'` ↔ `cat << 'X' > f` · P_pyfile `python3 << 'X'` ↔ 임시 파일에 쓰고 `python3 파일` — 쓰기 · 실행 명령의 등가)
-    N_ctrl     제어 키의 개행 유무 (`C-c` ↔ `C-c\\n`) — tmux send-keys 에서 `C-c\\n` 은 글자 "C-c" + Enter 라 프로세스를 끊지 못한다
+    K_ctrl     (v5 부터 보고 전용 — 결정 66: 정답에 제어 키가 든 행은 블렌드에서 뺀다. v4 에서 두 judge 모두 0/100 — judge 는 tmux 키 전송 규칙을 모른다)
+               제어 키의 개행 유무 (`C-c` ↔ `C-c\\n`) — tmux send-keys 에서 `C-c\\n` 은 글자 "C-c" + Enter 라 프로세스를 끊지 못한다
                (2026-11-16 재검토의 tmux 3.4 재현, Gym schemas.py 의 modifier 키 규칙). v2 는 이것을 양성으로 잘못 라벨했다
   보고만 (label None)
     U_*        MOPD1 학생의 실제 프로파일링 출력, 유사도 구간별 (0.1~0.3 · 0.3~0.5 · 0.5~0.7 · 0.7~0.95)
     B_*        N_drop · N_verb · P_reorder 의 analysis · plan 을 중립 문장으로 바꾼 변형 — 정답의 analysis · plan 복사가 judge 에게 단서를 주는지 본다
-    K_fastsed  `sed -i` 치환값만 바꿨는데 유사도 ≥ 0.95 라 judge 없이 통과하는 쌍 — 빠른 통과의 구멍을 드러낸다
-    K_earlytc  정답 task_complete false + 후보 = 정답 commands 그대로 + task_complete true — Gym 의 완료 검사가 단방향이라 통과한다 (알려진 구멍)
-검증 경로: TerminusJudgeResourcesServer 를 프로세스 안에 만들고 verify() 를 부른다 — 스키마 · 완료 일치 · 유사도 · judge 프롬프트 · 판정 파싱이 운영 코드다.
-설정 = Gym `terminus_judge.yaml` + 레시피 덮어쓰기 (`env.nemo_gym.terminus_judge_resources_server`). 병합 결과가 기대값과 다르면 중단한다.
+    (v5, 결정 66 — alpha_terminus_judge 플러그인: 완료 선언 양방향 검사 · 빠른 통과 임계 1.0)
+    N_fastsed  `sed -i` 치환값만 바꾼 유사도 ≥ 0.95 쌍 — 임계 0.95 에서는 judge 없이 통과했다 (v4 100/100). 이제 judge 가 다르다고 해야 한다
+    N_earlytc  정답 task_complete false + 후보 = 정답 commands 그대로 + task_complete true — Gym 의 완료 검사는 단방향이라 통과했다 (v4 100/100). 플러그인이 judge 없이 0 점으로 돌려야 한다
+검증 경로: 운영 서버 클래스 AlphaTerminusJudgeResourcesServer (alpha 플러그인 — Gym TerminusJudgeResourcesServer + 완료 선언 양방향 검사) 를
+프로세스 안에 만들고 verify() 를 부른다 — 스키마 · 완료 일치 · 유사도 · judge 프롬프트 · 판정 파싱이 운영 코드다. NEMO_GYM_EXTRA_ROOTS 필요.
+설정 = 플러그인 `alpha_terminus_judge.yaml` + 레시피 덮어쓰기 (`env.nemo_gym.alpha_terminus_judge_resources_server`). 병합 결과가 기대값과 다르면 중단한다.
 
   python measure_judge_terminus.py build --out pairs.jsonl [--profile-rollouts full/rollouts.jsonl]
   python measure_judge_terminus.py selftest --pairs pairs.jsonl          # CPU: 유사도 임계 judge 가 FAIL 해야 한다 (하나라도 PASS 면 종료 코드 1)
@@ -56,21 +59,24 @@ from pathlib import Path
 
 SOURCE = "/home/work/Datasets/LL_datasets/posttraining/RL/Nemotron-RL-Agentic-Terminal-Pivot-v1/atcb_terminal_pivot_release_final_v2.jsonl"
 POS = ["P_fast", "P_redirect", "P_reorder", "P_split", "P_flag", "P_sem", "P_wredir", "P_pyfile"]
-NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb", "N_ctrl", "N_wtrunc", "N_sed", "N_noexec"]
-HARD = ["P_reorder", "P_split", "P_flag", "P_sem", "P_wredir", "P_pyfile", "N_drop", "N_target", "N_verb", "N_ctrl", "N_wtrunc", "N_sed", "N_noexec"]
-SMALL = ("P_fast", "P_flag", "N_ctrl", "P_wredir", "P_pyfile", "N_wtrunc", "N_sed", "N_noexec")
+NEG = ["N_wait", "N_other", "N_repeat", "N_goldwait", "N_drop", "N_target", "N_verb", "N_wtrunc", "N_sed", "N_noexec", "N_fastsed", "N_earlytc"]
+HARD = ["P_reorder", "P_split", "P_flag", "P_sem", "P_wredir", "P_pyfile", "N_drop", "N_target", "N_verb", "N_wtrunc", "N_sed", "N_noexec", "N_fastsed"]
+SMALL = ("P_fast", "P_flag", "P_wredir", "P_pyfile", "N_wtrunc", "N_sed", "N_noexec", "N_fastsed", "N_earlytc")
 WRITE = ("P_wredir", "P_pyfile", "N_wtrunc", "N_sed", "N_noexec")   # 쓰기 · 실행 명령 세트 — 원본에서 만들 수 있는 수가 적다
 # (세트, 기대 보상, 최소 일치율). 유사도로 갈리지 않는 세트 (P_reorder · N_drop · N_target · N_verb) 가 핵심이다.
 CRITERIA = [("P_fast", 1.0, 1.00), ("P_redirect", 1.0, 0.90), ("P_reorder", 1.0, 0.80), ("P_split", 1.0, 0.85), ("P_flag", 1.0, 0.85),
             ("P_sem", 1.0, 0.75), ("P_wredir", 1.0, 0.80), ("P_pyfile", 1.0, 0.80),
             ("N_wait", 0.0, 0.99), ("N_other", 0.0, 0.99), ("N_repeat", 0.0, 0.99), ("N_goldwait", 0.0, 0.99),
-            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95), ("N_ctrl", 0.0, 0.80),
-            ("N_wtrunc", 0.0, 0.85), ("N_sed", 0.0, 0.85), ("N_noexec", 0.0, 0.85)]
+            ("N_drop", 0.0, 0.85), ("N_target", 0.0, 0.90), ("N_verb", 0.0, 0.95),
+            ("N_wtrunc", 0.0, 0.85), ("N_sed", 0.0, 0.85), ("N_noexec", 0.0, 0.85), ("N_fastsed", 0.0, 0.85), ("N_earlytc", 0.0, 1.00)]
+# judge 를 거치지 않고 판정돼야 하는 세트: (기대 실패 사유)
+NO_JUDGE = {"P_fast": "none", "N_earlytc": "task_complete_check_failed"}
+FAST_PASS = 1.0   # alpha_terminus_judge 의 빠른 통과 임계 (결정 66) — keystrokes 가 완전히 같을 때만
 MAX_PARSE_FAIL = 0.02
 MAX_ERROR_RATE = 0.01
 MAX_FLIP = 0.02          # 전 쌍
 MAX_FLIP_HARD = 0.05     # 유사도로 갈리지 않는 세트 각각
-EXPECTED_CFG = {"enable_string_similarity": True, "string_similarity_threshold": 0.95, "enable_llm_judge": True, "check_twice_swap": False}
+EXPECTED_CFG = {"enable_string_similarity": True, "string_similarity_threshold": FAST_PASS, "enable_llm_judge": True, "check_twice_swap": False}
 READ_VERBS = ("cat ", "ls ", "head ", "tail ", "wc ", "stat ", "file ")
 
 
@@ -159,26 +165,26 @@ def build(args) -> None:
                     add("N_wtrunc", 0, r, with_commands(g, new), f"{len(lines) * 2 // 3}/{len(lines)} lines"); continue
         sd = [(i, re.search(r"sed -i(?:\.\w+)? (['\"])s([/|#])([^/|#\n]+)\2([^/|#\n]{3,})\2(g?)\1", k)) for i, k in enumerate(ks)]
         sd = [(i, m) for i, m in sd if m]
-        if sd and (not full("N_sed", args.n_small) or not full("K_fastsed", args.n_small)):
+        if sd and (not full("N_sed", args.n_small) or not full("N_fastsed", args.n_small)):
             i, m = sd[0]
             k2 = ks[i][: m.start(4)] + m.group(4)[::-1] + "_alt" + ks[i][m.end(4):]
             new = [dict(c, keystrokes=k2) if j == i else c for j, c in enumerate(cmds)]
             sv = sim(ks, [c["keystrokes"] for c in new])
             if sv < 0.95 and not full("N_sed", args.n_small):
                 add("N_sed", 0, r, with_commands(g, new)); continue
-            if sv >= 0.95 and not full("K_fastsed", args.n_small):
-                add("K_fastsed", None, r, with_commands(g, new)); continue
+            if sv >= 0.95 and not full("N_fastsed", args.n_small):
+                add("N_fastsed", 0, r, with_commands(g, new)); continue
         if not full("N_noexec", args.n_small) and len(cmds) >= 2 and any(hd):
             run = [bool(re.match(r"(python3?|bash|sh|node|make|pytest|go run|cargo run|\./)\S*", k.strip())) and not h for k, h in zip(ks, hd)]
             if any(run) and not all(run):
                 new = [c for c, x in zip(cmds, run) if not x]
                 if 0.3 <= sim(ks, [c["keystrokes"] for c in new]) < 0.95:
                     add("N_noexec", 0, r, with_commands(g, new), f"removed {sum(run)} exec"); continue
-        if not full("N_ctrl", args.n_small) and any(k.strip() in ("C-c", "C-d", "C-z") for k in ks):
+        if not full("K_ctrl", args.n_small) and any(k.strip() in ("C-c", "C-d", "C-z") for k in ks):
             new = [dict(c, keystrokes=(c["keystrokes"].strip() if c["keystrokes"].endswith("\n") else c["keystrokes"] + "\n"))
                    if c.get("keystrokes", "").strip() in ("C-c", "C-d", "C-z") else c for c in cmds]
             if sim(ks, [c["keystrokes"] for c in new]) < 0.95:
-                add("N_ctrl", 0, r, with_commands(g, new)); continue
+                add("K_ctrl", None, r, with_commands(g, new)); continue
         if not full("P_flag", args.n_small):
             new, changed = [], False
             for c in cmds:
@@ -271,10 +277,14 @@ def build(args) -> None:
                     p = json.loads(prev[-1]["content"])
                 except json.JSONDecodeError:
                     p = None
-                if isinstance(p, dict) and any(k.strip() for k in keystrokes(p)) and sim(ks, keystrokes(p)) < 0.5:
+                pth = lambda xs: set(re.findall(r"(?<![\w.])/[\w./-]{4,}", " ".join(xs)))  # noqa: E731
+                same_target = pth(ks) & pth(keystrokes(p)) if isinstance(p, dict) else set()
+                # 직전 턴이 정답과 같은 경로를 다루면 실제로 같은 일일 수 있다 (v4 오탐 9 건 중 약 절반) — 라벨이 애매해 뺀다
+                if isinstance(p, dict) and any(k.strip() for k in keystrokes(p)) and sim(ks, keystrokes(p)) < 0.5 and not same_target \
+                        and pth(ks) and pth(keystrokes(p)):
                     add("N_repeat", 0, r, with_commands(g, p["commands"])); continue
-        if not full("K_earlytc", args.n_small):
-            add("K_earlytc", None, r, with_commands(g, cmds, task_complete=True)); continue
+        if not full("N_earlytc", args.n_small):
+            add("N_earlytc", 0, r, with_commands(g, cmds, task_complete=True)); continue
     for src, dst in (("N_drop", "B_drop"), ("N_verb", "B_verb"), ("P_reorder", "B_reorder")):
         for p in [q for q in pairs if q["set"] == src][: args.n_small]:
             c = json.loads(p["candidate_text"])
@@ -326,16 +336,17 @@ def judge_verdict(by: dict, parse_fail_rate: float, error_rate: float, truncated
         if not xs:
             fails.append(f"{name}: 쌍 없음")
             continue
-        if want == 0.0:  # 음성은 judge 가 "다르다" 고 한 것만 맞음으로 센다 (파싱 실패 · 오류의 보상 0 은 맞음이 아니다)
+        if name in NO_JUDGE:   # judge 없이 정해져야 하는 세트
+            ok = sum(1 for x in xs if x["reward"] == want and x["failure_reason"] == NO_JUDGE[name])
+            if any(x["judge_calls"] for x in xs):
+                fails.append(f"{name}: judge 가 호출된 쌍 {sum(1 for x in xs if x['judge_calls'])}")
+        elif want == 0.0:  # 음성은 judge 가 "다르다" 고 한 것만 맞음으로 센다 (파싱 실패 · 오류의 보상 0 은 맞음이 아니다)
             ok = sum(1 for x in xs if x["reward"] == 0.0 and x["failure_reason"] == "judge_not_equivalent")
         else:
             ok = sum(1 for x in xs if x["reward"] == 1.0)
         if ok / len(xs) < min_rate:
             fails.append(f"{name}: 일치율 {ok / len(xs):.3f} < {min_rate}")
-        if name == "P_fast":
-            if any(x["judge_calls"] for x in xs):
-                fails.append("P_fast: 빠른 통과인데 judge 가 호출됨")
-        elif any(x["judge_calls"] != 1 for x in xs):
+        if name not in NO_JUDGE and any(x["judge_calls"] != 1 for x in xs):
             fails.append(f"{name}: judge 호출이 1 이 아닌 쌍 {sum(1 for x in xs if x['judge_calls'] != 1)}")
     if parse_fail_rate > MAX_PARSE_FAIL:
         fails.append(f"판정 파싱 실패율 {parse_fail_rate:.3f} > {MAX_PARSE_FAIL}")
@@ -382,11 +393,14 @@ def selftest(args, quiet: bool = False) -> int:
         for p in pairs:
             if p["label"] is None or p["sim"] is None:
                 continue
-            if p["sim"] >= 0.95:
+            gd, cd = json.loads(p["row"]["expected_answer"]), json.loads(p["candidate_text"])
+            if cd.get("task_complete") and not gd.get("task_complete"):   # 플러그인의 완료 선언 검사 (judge 이전)
+                by[p["set"]].append({"reward": 0.0, "failure_reason": "task_complete_check_failed", "judge_calls": 0})
+                continue
+            if p["sim"] >= FAST_PASS:
                 by[p["set"]].append({"reward": 1.0, "failure_reason": "none", "judge_calls": 0})
                 continue
-            g = keystrokes(json.loads(p["row"]["expected_answer"]))
-            c = keystrokes(json.loads(p["candidate_text"]))
+            g, c = keystrokes(gd), keystrokes(cd)
             eq = fn(p["sim"], g, c)
             by[p["set"]].append({"reward": 1.0 if eq else 0.0, "failure_reason": "none" if eq else "judge_not_equivalent", "judge_calls": 1})
         fails = judge_verdict(by, 0.0, 0.0, 0)
@@ -402,17 +416,20 @@ def load_server(args):
     sys.path.insert(0, args.gym_root)
     from omegaconf import OmegaConf
 
+    import nemo_gym  # noqa: F401 — NEMO_GYM_EXTRA_ROOTS 의 플러그인 루트를 sys.path 에 올린다
     from nemo_gym.config_types import BaseServerConfig
     from nemo_gym.server_utils import setup_server_client
-    from resources_servers.terminus_judge.app import TerminusJudgeResourcesServer, TerminusJudgeResourcesServerConfig
+    from resources_servers.alpha_terminus_judge.app import (
+        AlphaTerminusJudgeResourcesServer as TerminusJudgeResourcesServer,
+        AlphaTerminusJudgeResourcesServerConfig as TerminusJudgeResourcesServerConfig,
+    )
 
-    gym = Path(args.gym_root) / "resources_servers" / "terminus_judge"
-    base = OmegaConf.load(gym / "configs" / "terminus_judge.yaml")["terminus_judge_resources_server"]["resources_servers"]["terminus_judge"]
+    plug = Path(__file__).resolve().parents[1] / "gym_plugins" / "resources_servers" / "alpha_terminus_judge"
+    base = OmegaConf.load(plug / "configs" / "alpha_terminus_judge.yaml")["alpha_terminus_judge_resources_server"]["resources_servers"]["alpha_terminus_judge"]
     recipe = OmegaConf.load(args.recipe)
-    over = recipe.env.nemo_gym["terminus_judge_resources_server"]["resources_servers"]["terminus_judge"]
+    over = recipe.env.nemo_gym.get("alpha_terminus_judge_resources_server", {}).get("resources_servers", {}).get("alpha_terminus_judge", {})
     merged = OmegaConf.to_container(OmegaConf.merge(base, over), resolve=True)
-    merged.update(host="127.0.0.1", port=1, entrypoint="app.py", name="terminus_judge")
-    merged["judge_prompt_template_fpath"] = str(gym / merged["judge_prompt_template_fpath"])
+    merged.update(host="127.0.0.1", port=1, entrypoint="app.py", name="alpha_terminus_judge")
     cfg = TerminusJudgeResourcesServerConfig.model_validate(merged)
     for k, v in EXPECTED_CFG.items():
         if getattr(cfg, k) != v:

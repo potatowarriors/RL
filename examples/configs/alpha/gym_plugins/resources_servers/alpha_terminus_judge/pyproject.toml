@@ -1,0 +1,20 @@
+# alpha Gym 플러그인 — resources_servers/alpha_terminus_judge (Gym terminus_judge + 완료 선언 양방향 검사, RL_PLAN.md 결정 66).
+[project]
+name = "alpha-terminus-judge"
+version = "0.1.0"
+requires-python = ">=3.13.14"
+dependencies = [
+    "nemo-gym[dev]",
+    "openapi-schema-validator==0.6.3",
+]
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61", "setuptools-scm"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["alpha_terminus_judge"]
+
+[tool.uv.sources]
+nemo-gym = { path = "../../../../../../3rdparty/Gym-workspace/Gym", editable = true }

@@ -1,13 +1,13 @@
 # teacher_terminal_pivot_judge_alpha.yaml — terminal 피벗 teacher, 논문 방식 보상 (RL_PLAN.md 결정 65, docs/KNOWN_ISSUES.md 2026-11-16).
 #
 # teacher_terminal_pivot_alpha.yaml (문자열 유사도 0.7 · judge 없음) 은 TB-2.1 에서 시작점보다 나빴다 — 기울기가 빈 대기 · 직전 명령 반복에
-# 몰렸다. 이 레시피는 PivotRL (arXiv 2603.21383 A.2) 의 terminal 검증기를 쓴다: 스키마 + 유사도 0.95 빠른 통과 + 미달이면 등가 LLM judge
-# (Gym `terminus_judge.yaml`, 프롬프트 rubrics_v4). 블렌드는 judge 기준 재프로파일링 뒤 분산 > 0 ∧ 평균 < λ 필터 + 정답 명령 중복 제거로 만든다.
+# 몰렸다. 이 레시피는 PivotRL (arXiv 2603.21383 A.2) 의 terminal 검증기를 쓴다: 스키마 + 완전 일치 빠른 통과 + 아니면 등가 LLM judge
+# (alpha 플러그인 `alpha_terminus_judge` = Gym `terminus_judge` + 완료 선언 양방향 검사, 프롬프트 rubrics_v4, 빠른 통과는 완전 일치만 — 결정 66). 블렌드는 judge 기준 재프로파일링 뒤 분산 > 0 ∧ 평균 < λ 필터 + 정답 명령 중복 제거로 만든다.
 #
 # 도구 teacher 레시피를 상속한다 (2노드 분리 · async age 2 · Muon lr 3e-6 warmup 10 · 64 × 16 · 128K/CP8 · 생성 8,192 · R3 · KL 0).
 # judge: Gemma-4-31B-it TP2 — 롤아웃 노드 GPU 8장 중 2장 (STEM teacher 와 같은 구성, 결정 21 · 게이트 J1). 롤아웃 vLLM 은 6장.
 # judge 판정 품질은 게이트 TJ1 (tools/measure_judge_terminus.py) 로 확인한다.
-# 데이터 행의 agent_ref 는 `terminus_judge_simple_agent` 여야 한다 (원본의 `terminus_judge_string_only_simple_agent` 는 judge 없는 설정).
+# 데이터 행의 agent_ref 는 `alpha_terminus_judge_simple_agent` 여야 한다 (원본의 `terminus_judge_string_only_simple_agent` 는 judge 없는 설정).
 #
 # 미정 (재프로파일링 뒤 결정): 블렌드 파일 · grpo.max_num_steps · max_num_epochs.
 defaults: teacher_tool_alpha.yaml
@@ -27,7 +27,8 @@ env:
     config_paths:
       # strict 유지 서버 (결정 13). NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins (launch.sh 가 넘긴다)
       - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
-      - resources_servers/terminus_judge/configs/terminus_judge.yaml
+      # alpha 플러그인: Gym terminus_judge + 완료 선언 양방향 검사 · 빠른 통과 임계 1.0 · agent max_steps 1 (결정 66)
+      - resources_servers/alpha_terminus_judge/configs/alpha_terminus_judge.yaml
     # judge: STEM teacher 와 같은 Gemma-4-31B-it 서버 (thinking 끔). Ray 가 롤아웃 노드의 남은 GPU 2장에 TP2 로 올린다.
     judge_model:
       responses_api_models:
@@ -51,19 +52,5 @@ env:
             language_model_only: true   # Gemma4 비전 인코더를 싣지 않는다
             enable_chunked_prefill: true
             max_num_seqs: 256
-    terminus_judge_resources_server:
-      resources_servers:
-        terminus_judge:
-          judge_model_server:
-            type: responses_api_models
-            name: judge_model           # Gym 설정 파일의 기본값도 judge_model 이다 — 정책 자신이 채점하지 않게 명시
-          judge_responses_create_params:
-            input: []
-            temperature: 0.0
-            max_output_tokens: 2048     # rubrics_v4 는 단계별 판정문을 쓴 뒤 [[A=B]] / [[A!=B]] 를 낸다
-          enable_string_similarity: true
-          string_similarity_threshold: 0.95   # Gym 기본값 — 이상이면 judge 없이 통과
-          enable_llm_judge: true
-          check_twice_swap: false       # rubrics_v4 는 GOLD/CANDIDATE 비대칭 프롬프트라 순서를 바꾸지 않는다 (Gym 설정 주석)
-    # 가드: 에이전트 재호출 금지 (KNOWN_ISSUES 2026-11-14)
-    terminus_judge_simple_agent: {responses_api_agents: {simple_agent: {max_steps: 1}}}
+    # 채점 설정은 플러그인 설정 파일이 정본이다 (유사도 1.0 빠른 통과 · judge_model · temperature 0 · 출력 2,048 · swap 끔).
+    # 여기서 덮어쓰지 않는다 — 게이트 TJ1 이 병합 결과를 단언한다.
