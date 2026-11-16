@@ -19,7 +19,8 @@ sleep/echo 뿐) 의 양의 advantage 몫과 들림 (양의 몫 ÷ 음의 몫).
 
   python examples/configs/alpha/tools/build_terminal_pivot_judge_blend.py --out <dir>/teacher_terminal_pivot_judge_v2.jsonl \
       [--lam 0.5] [--keep 1] [--tc-share 0.088] [--n-val-tasks 30] [--seed 20261116]
-종료 코드: 쏠림 기준 (넓은 반복류의 양의 advantage 몫 ≤ 5% ∧ 들림 ≤ 1.0 ∧ 단서 상태 (`cue`) 행 안에서도 들림 ≤ 1.0; 2026-11-16 블렌드 검토에서 정함 — 이전 기준 "빈 대기 + 직전 반복 ≤ 2%"
+`--drop-same-obs`: 마지막 관측이 직전 관측과 같은 상태 (`cue_obs`) 의 명령 행 제외 (사용자 2026-11-16 — 그 상태 안 반복류 들림 1.16).
+종료 코드: 쏠림 기준 (넓은 반복류의 양의 advantage 몫 ≤ 5% ∧ 들림 ≤ 1.0 ∧ 단서 상태 두 갈래 (`cue_obs` · `cue_prev`) 각각의 행 안에서도 들림 ≤ 1.0; 2026-11-16 블렌드 검토에서 정함 — 이전 기준 "빈 대기 + 직전 반복 ≤ 2%"
 는 반복을 가르치는 행만 모은 반례가 0.00% 로 통과했다) 을 못 넘으면 1.
 """
 
@@ -78,6 +79,7 @@ def main() -> int:
     ap.add_argument("--tc-share", type=float, default=0.088)
     ap.add_argument("--drop-rerun", choices=("none", "cue", "all"), default="none",
                     help="정답이 재실행 · sleep/echo · 빈 대기인 명령 행을 뺀다: none · cue (단서 상태 행만) · all")
+    ap.add_argument("--drop-same-obs", action="store_true", help="마지막 관측이 직전 관측과 같은 상태 (`cue_obs`) 의 명령 행을 뺀다")
     ap.add_argument("--n-val-tasks", type=int, default=30)
     ap.add_argument("--seed", type=int, default=20261116)
     a = ap.parse_args()
@@ -104,6 +106,10 @@ def main() -> int:
         pool = {u: d for u, d in pool.items()
                 if d["g_tc"] or not ((d["g_rerun"] or d["g_sleep"] or d["g_wait"]) and (a.drop_rerun == "all" or d["cue"]))}
         funnel[f"not_rerun_sleep_wait[{a.drop_rerun}]"] = len(pool)
+
+    if a.drop_same_obs:
+        pool = {u: d for u, d in pool.items() if d["g_tc"] or not d["cue_obs"]}
+        funnel["not_same_observation_state"] = len(pool)
 
     rng = random.Random(a.seed)
     tasks = sorted({d["task"] for d in pool.values()})
@@ -155,17 +161,24 @@ def main() -> int:
         cue = [d for d in sel if d["cue"]]
         sk_cue = skew(cue) if cue else {"pos_share": {}, "lift": {}}
         cue_lift = sk_cue["lift"].get("repeat_like") or 0.0
-        ok = wr <= MAX_REPEAT_LIKE_SHARE and (sk["lift"]["repeat_like"] or 0.0) <= MAX_REPEAT_LIKE_LIFT and cue_lift <= MAX_REPEAT_LIKE_LIFT
+        branch = {}
+        for key in ("cue_obs", "cue_prev"):  # 합치면 한쪽 쏠림이 가려진다 (2026-11-16 3차 검토) — 갈래마다 본다
+            rows_k = [d for d in sel if d[key]]
+            sk_k = skew(rows_k) if rows_k else {"pos_share": {}, "lift": {}}
+            branch[key] = {"rows": len(rows_k), "repeat_like_lift": sk_k["lift"].get("repeat_like") or 0.0,
+                           "repeat_like_pos_share": sk_k["pos_share"].get("repeat_like")}
+        ok = wr <= MAX_REPEAT_LIKE_SHARE and (sk["lift"]["repeat_like"] or 0.0) <= MAX_REPEAT_LIKE_LIFT \
+            and all(v["repeat_like_lift"] <= MAX_REPEAT_LIKE_LIFT for v in branch.values())
         st = {"file": path, "rows": len(keys), "tasks": len({d["task"] for d in sel}), "by_kind": collections.Counter(kind(d) for d in sel),
               "task_complete_share": round(sum(d["g_tc"] for d in sel) / len(sel), 4),
               "mean_profile_pass_rate": round(sum(passes(d) for d in sel) / sum(len(d["o"]) for d in sel), 4),
               "selection": st_sel, "funnel": funnel if path == a.out else None, "skew": sk,
               "repeat_like_pos_share": round(wr, 4),
               "gold_flags": {k: sum(bool(d[k]) for d in sel) for k in ("g_wait", "g_rerun", "g_sleep", "g_rep6", "g_near", "cue", "lenient1")},
-              "cue_rows": len(cue), "cue_repeat_like_lift": cue_lift, "cue_repeat_like_pos_share": sk_cue["pos_share"].get("repeat_like"),
+              "cue_branches": branch, "cue_rows": len(cue), "cue_repeat_like_lift": cue_lift, "cue_repeat_like_pos_share": sk_cue["pos_share"].get("repeat_like"),
               "skew_criterion": {"max_repeat_like_share": MAX_REPEAT_LIKE_SHARE, "max_repeat_like_lift": MAX_REPEAT_LIKE_LIFT,
                                  "cue_state_lift_max": MAX_REPEAT_LIKE_LIFT, "pass": ok},
-              "lam": a.lam, "keep": a.keep, "drop_rerun": a.drop_rerun, "tc_share_cap": a.tc_share, "source": SOURCE, "profile": PROFILE, "seed": a.seed}
+              "lam": a.lam, "keep": a.keep, "drop_rerun": a.drop_rerun, "drop_same_obs": a.drop_same_obs, "tc_share_cap": a.tc_share, "source": SOURCE, "profile": PROFILE, "seed": a.seed}
         with open(path + ".stats.json", "w") as fs:
             json.dump(st, fs, indent=1, ensure_ascii=False)
         print(json.dumps(st, ensure_ascii=False))
