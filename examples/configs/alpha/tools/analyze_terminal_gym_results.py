@@ -21,8 +21,8 @@ r"""terminal 피벗 스모크 게이트 (TS1) — 학습 경로가 남긴 Gym �
   R1  사유 분포가 프로파일 기준 (블렌드 행의 재채점 분포) 과 ±`--tol` (기본 0.06) 안
   R2  평균 보상이 기준 평균 × [0.6, 1.4] 안
 보고: 넓은 반복류 출력의 양의 advantage 몫 · 들림 (uuid 로 묶어 계산) · `schema_check_passed` 평균 (본 런 매 step 감시의 기준값).
-자가 시험: 실제 행을 변조한 5 종 (judge 장애 행 · 조기 완료에 보상 1 · 유사도 0.97 인데 judge 없이 보상 1 · judge 모델 이름 alpha ·
-`judge_evaluations` 키 삭제) 이 각각 FAIL 하는지 먼저 본다. 하나라도 PASS 면 도구가 고장이므로 종료 코드 2.
+자가 시험: 실제 행을 변조한 6 종 (judge 장애 행 · 조기 완료에 보상 1 · Gym 원본 서버 서명 · 유사도 0.97 인데 judge 없이 보상 1 ·
+judge 모델 이름 alpha · `judge_evaluations` 키 삭제) 이 각각 겨냥한 불변식 ID 로 FAIL 하는지 본다. 하나라도 안 터지면 종료 코드 2.
 """
 import argparse
 import collections
@@ -154,8 +154,14 @@ def evaluate(rows, a, tbl, base_dist, base_mean):
     return summ, fails
 
 
+def _early_tc(r):
+    exp = parse(r.get("expected_answer"))
+    pred = r.get("parsed_output") if isinstance(r.get("parsed_output"), dict) else parse(r.get("model_output"))
+    return exp is not None and pred is not None and bool(pred.get("task_complete")) and not exp.get("task_complete")
+
+
 def tampers(rows):
-    """실제 행을 변조한 음성 대조 5 종. 각각 evaluate 가 FAIL 해야 한다."""
+    """실제 행을 변조한 음성 대조 6 종 — (변조한 행들, 터져야 하는 불변식 ID). 대상 행이 없으면 None."""
     import copy
     out = {}
     t = copy.deepcopy(rows)
@@ -164,27 +170,34 @@ def tampers(rows):
         r.pop("model_output", None)
         r["_ng_failure_class"] = "judge_failed"
         r["reward"] = 0.0
-    out["judge 장애 5%"] = t
+    out["judge 장애 5%"] = (t, "I1")
     t = copy.deepcopy(rows)
-    hit = [r for r in t if str(r.get("failure_reason")) == "task_complete_check_failed" and not (r.get("judge_evaluations") or [])]
+    hit = [r for r in t if _early_tc(r)]
     for r in hit[:1]:
         r["reward"], r["failure_reason"] = 1.0, "none"
-    out["조기 완료에 보상 1"] = t if hit else None
+    out["조기 완료에 보상 1"] = (t if hit else None, "I2")
+    t = copy.deepcopy(rows)
+    hit = [r for r in t if _early_tc(r)]
+    donor = next((r for r in t if str(r.get("failure_reason")) == "judge_not_equivalent" and len(r.get("judge_evaluations") or []) == 1), None)
+    for r in hit:  # Gym 원본 서버의 서명: 조기 완료도 judge 로 가서 judge 가 떨어뜨린다
+        r["reward"], r["failure_reason"], r["task_complete_check_passed"] = 0.0, "judge_not_equivalent", True
+        r["judge_evaluations"] = copy.deepcopy(donor["judge_evaluations"]) if donor else []
+    out["원본 서버 서명 (조기 완료를 judge 가 판정)"] = (t if hit and donor else None, "I2")
     t = copy.deepcopy(rows)
     hit = [r for r in t if str(r.get("failure_reason")) == "judge_not_equivalent"]
     for r in hit[:1]:
         r["reward"], r["failure_reason"], r["judge_evaluations"], r["similarity_score"] = 1.0, "none", [], 0.97
-    out["유사도 0.97 빠른 통과"] = t if hit else None
+    out["유사도 0.97 빠른 통과"] = (t if hit else None, "I3")
     t = copy.deepcopy(rows)
     for r in t:
         for e in r.get("judge_evaluations") or []:
             if isinstance(e.get("response"), dict):
                 e["response"]["model"] = "alpha"
-    out["judge 모델 이름 alpha"] = t
+    out["judge 모델 이름 alpha"] = (t, "I4")
     t = copy.deepcopy(rows)
     for r in t:
         r.pop("judge_evaluations", None)
-    out["judge_evaluations 키 삭제"] = t
+    out["judge_evaluations 키 삭제"] = (t, "I3")
     return out
 
 
@@ -216,15 +229,20 @@ def main() -> int:
     base_mean = base["none"] / tot
     summ, fails = evaluate(rows, a, tbl, base_dist, base_mean)
     self_ok, self_log = True, {}
-    for name, t in tampers(rows).items():
+    had = {x.split()[0] for x in fails}
+    for name, (t, inv) in tampers(rows).items():
         if t is None:
             self_log[name] = "만들 수 없음 (대상 행 없음)"
             self_ok = False
             continue
+        if inv in had:
+            self_log[name] = f"판정 불가 — 원 표본이 이미 {inv} FAIL"
+            self_ok = False
+            continue
         _, f = evaluate(t, a, tbl, base_dist, base_mean)
-        new = [x for x in f if x not in fails]
-        self_log[name] = "FAIL (정상)" if new else "PASS — 도구가 못 잡음"
-        self_ok &= bool(new)
+        hit = inv in {x.split()[0] for x in f}
+        self_log[name] = f"{inv} FAIL (정상)" if hit else f"{inv} 가 안 터짐 — 도구가 못 잡음"
+        self_ok &= hit
     summ["selfcheck"] = self_log
     print(json.dumps(summ, ensure_ascii=False, indent=1))
     if not self_ok:

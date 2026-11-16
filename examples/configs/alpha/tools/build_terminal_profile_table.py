@@ -5,7 +5,7 @@
   task, klen, gk (정답 keystrokes, \\x00 구분),
   g_tc 완료 선언 · g_wait 빈 대기 · ctrl 제어 키 (`C-<글자>` 한 개짜리 keystroke — tmux 키 이름) ·
   g_rep6 정답이 최근 6턴 중 하나와 유사도 ≥ 0.7 · g_near 직전 턴과 유사도 0.5~0.7 · g_rerun 정답의 명령이 전부 앞 턴에 글자 그대로 있음 ·
-  g_sleep 정답이 sleep · echo 뿐 · cue 단서 상태 (마지막 관측이 직전 관측과 유사도 ≥ 0.9 이거나, 직전 행동이 빈 대기 · 넓은 반복류) · lenient1 통과가 1회뿐이고 그것이 정답과 유사도 < 0.3 인 judge 통과,
+  g_sleep 정답이 sleep · echo 뿐 · cue = cue_obs ∨ cue_prev 단서 상태 (마지막 관측이 직전 관측과 유사도 ≥ 0.9 이거나, 직전 행동이 빈 대기 · 넓은 반복류) · lenient1 통과가 1회뿐이고 그것이 정답과 유사도 < 0.3 인 judge 통과,
   o: [[보상, 사유, 유사도, 출력 종류, 넓은 반복류 여부] × 8] }
 출력 종류: recall (두 번 이상 호출) · invalid · tc · wait (빈 keystrokes) · repeat (직전 턴과 유사도 ≥ 0.7) · other.
 넓은 반복류 (2026-11-16 블렌드 검토의 정의): 빈 대기 · 빈 commands · 최근 6턴 중 하나와 유사도 ≥ 0.7 · 앞 턴 명령의 글자 그대로 재실행 · sleep/echo 뿐.
@@ -101,7 +101,7 @@ def main() -> int:
                         "g_rep6": bool(hist) and any(sim(gk, h) >= 0.7 for h in hist[-6:]),
                         "g_near": bool(hist) and 0.5 <= sp < 0.7,
                         "g_rerun": bool(body) and all(k in earlier for k in body),
-                        "g_sleep": is_sleep(gk), "cue": bool(same_obs or prev_rep), "o": [],
+                        "g_sleep": is_sleep(gk), "cue": bool(same_obs or prev_rep), "cue_obs": bool(same_obs), "cue_prev": bool(prev_rep), "o": [],
                     }
                 hist = hists[u]
                 po = x.get("parsed_output")
@@ -131,7 +131,7 @@ def main() -> int:
     with open(a.out, "w") as f:
         json.dump(rows, f)
     n = len(rows)
-    flags = ("g_tc", "g_wait", "ctrl", "g_rep6", "g_near", "g_rerun", "g_sleep", "cue", "lenient1")
+    flags = ("g_tc", "g_wait", "ctrl", "g_rep6", "g_near", "g_rerun", "g_sleep", "cue", "cue_obs", "cue_prev", "lenient1")
     print(json.dumps({"rows": n, **{k: sum(bool(d[k]) for d in rows.values()) for k in flags}}))
     return 0
 
