@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-18 | terminal 피벗 1 에폭 모델이 TB-2.1 에서 타임아웃 · 반복 · step 수가 함께 줄었는데 통과율은 그대로 | 완료 정답 행의 양의 신호로 완료 선언 문턱이 전역 하강 (완료 1~2 턴 전 선언 29 → 65%) — 반복 감소는 일찍 끝나서 생긴 구성 효과. 종료가 완료 선언 · 타임아웃뿐인 벤치의 행동 지표는 같은 step 구간끼리 비교하고, 피벗 블렌드는 `tools/measure_terminal_tc_shift.py` 로 완료 출력률을 잰다 (KNOWN_ISSUES 11-18) |
 | 11-14 | Gym 단일 스텝 런의 step 이 간헐적으로 30~60분 — 1,024 중 마지막 1 샘플이 수십 분, `turns_per_sample/max` 100 이상 | `</think>` 를 닫지 않은 응답은 메시지가 없어 simple_agent 가 상한 없이 재호출하고 요청이 턴마다 커진다 → `simple_agent` 를 쓰는 agent 마다 `env.nemo_gym.<agent>.responses_api_agents.simple_agent.max_steps: 1`. 새 레시피는 최근 레시피의 가드와 대조하고 첫 step 에서 `turns_per_sample/max` = 1 을 확인 (KNOWN_ISSUES 11-14) |
 | 11-11 | sub1 에서 돌린 에이전틱 벤치가 전부 BadRequestError, 게이트 A1~A5 는 PASS | 컨테이너 :8199 를 main1 의 묵은 역터널이 잡아 요청이 main1 fleet 로 감 (A2 는 fleet 식별을 안 봄) → 에이전틱은 터널이 가리키는 노드에서 돌리고, 다른 노드로 옮기기 전 두 노드의 `-R 8199` 프로세스를 확인 (Pai KNOWN_ISSUES 11-11 · `SFT_BENCHMARKS.md` §2.5) |
 | 11-11 | LCB 측정이 `servers failed` 인데 실행기 로그는 `DONE` — Gym agent 둘이 같은 `simple_agent/.venv` 의 pip 시드 갱신을 동시에 해 충돌 | 재시도로 통과. 완료 판정은 `DONE` 이 아니라 `lcb_summary.json` 존재로 한다 (KNOWN_ISSUES 11-11) |
