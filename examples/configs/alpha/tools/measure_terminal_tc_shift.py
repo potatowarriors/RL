@@ -22,7 +22,7 @@ r"""terminal 피벗 — 완료 선언 경계가 학습으로 어디서 움직였
 완료 출력률은 전체 출력 대비와 파싱된 출력 (tc · repeat_like · other) 대비를 둘 다 낸다.
 
 유효성 조건 (하나라도 어기면 종료 코드 1 — 결과를 해석하지 않는다; 2026-11-18 적대적 검토에서 실행 전에 고정):
-  V1  모든 층에서 잡음 바닥 (A 뒤 8 − A 앞 8) 의 완료 출력률 95% 구간이 0 을 포함
+  V1  모든 층에서 잡음 바닥 (A 뒤 8 − A 앞 8) 의 완료 출력률 99.2% 구간 (6 층 Bonferroni) 이 0 을 포함
   V2  두 모델 모두 recall · truncated 가 각각 3% 미만
   V3  S 재현 대조: A 의 S 층 repeat_like ≥ 20% 이고 C2 의 3 배 이상
   V4  양성 대조: S 층의 repeat_like 차 (B − A) 의 95% 구간 상한 < 0 (TB 에서 반복이 23.8 → 14.1% 로 줄었다)
@@ -36,6 +36,7 @@ import collections
 import importlib.util
 import json
 import random
+import re
 from pathlib import Path
 
 RL = "/home/work/Datasets/LL_datasets/posttraining/RL"
@@ -166,7 +167,8 @@ def category(tbl, row) -> str:
         return "truncated"
     po = parse_action(row)
     if po is None:
-        return "invalid"
+        # JSON 이 깨졌어도 완료 선언 문구가 있으면 따로 센다 (보조 지표 — 전체 출력의 약 0.5%)
+        return "invalid_tc_text" if re.search(r'"task_complete"\s*:\s*true', str(row.get("model_output"))) else "invalid"
     if po.get("task_complete") is True or po.get("is_task_complete") is True:
         return "tc"
     hist = []
@@ -179,7 +181,7 @@ def category(tbl, row) -> str:
     return "repeat_like" if tbl.repeat_like(tbl.ks(po), hist) else "other"
 
 
-CATS = ("tc", "repeat_like", "other", "invalid", "recall", "truncated")
+CATS = ("tc", "repeat_like", "other", "invalid", "invalid_tc_text", "recall", "truncated")
 
 
 def load_rollouts(path, tbl):
@@ -190,12 +192,25 @@ def load_rollouts(path, tbl):
     return {u: [c for _, c in sorted(v)] for u, v in out.items()}
 
 
-def boot(vals, rng, n=4000):
-    if not vals:
+def boot(pairs, rng, n=4000, level=0.95):
+    """과제 단위 클러스터 부트스트랩 — pairs = [(과제, 값)]. 과제를 재표본하고 그 과제의 행을 모두 넣는다 (같은 과제의 행은 독립이 아니다)."""
+    if not pairs:
         return (None, None, None)
-    m = sum(vals) / len(vals)
-    bs = sorted(sum(rng.choices(vals, k=len(vals))) / len(vals) for _ in range(n))
-    return (round(m, 4), round(bs[int(0.025 * n)], 4), round(bs[int(0.975 * n)], 4))
+    by = collections.defaultdict(list)
+    for t, v in pairs:
+        by[t].append(v)
+    tasks = sorted(by)
+    m = sum(v for _, v in pairs) / len(pairs)
+    bs = []
+    for _ in range(n):
+        tot = cnt = 0
+        for t in rng.choices(tasks, k=len(tasks)):
+            tot += sum(by[t])
+            cnt += len(by[t])
+        bs.append(tot / cnt)
+    bs.sort()
+    lo = (1 - level) / 2
+    return (round(m, 4), round(bs[int(lo * n)], 4), round(bs[min(n - 1, int((1 - lo) * n))], 4))
 
 
 def frac(xs, cat):
@@ -210,10 +225,11 @@ def frac_parsed(xs, cat="tc"):
 def analyze(a) -> int:
     tbl = _tbl()
     rng = random.Random(0)
-    layer = {}
+    layer, task = {}, {}
     for line in open(a.input):
         r = json.loads(line)
         layer[r["uuid"]] = r["probe"]
+        task[r["uuid"]] = r["task_name"]
     A, B = load_rollouts(a.a, tbl), load_rollouts(a.b, tbl)
     bad = {u for u in layer if len(A.get(u, [])) != 16 or len(B.get(u, [])) != 8}
     fails = []
@@ -236,19 +252,20 @@ def analyze(a) -> int:
             row = {"rows": len(us)}
             for cat in CATS:
                 row[cat] = {"A": round(sum(frac(A[u][:8], cat) for u in us) / len(us), 4), "B": round(sum(frac(B[u], cat) for u in us) / len(us), 4),
-                            "B-A": boot([frac(B[u], cat) - frac(A[u][:8], cat) for u in us], rng),
-                            "noise(A2-A1)": boot([frac(A[u][8:], cat) - frac(A[u][:8], cat) for u in us], rng)}
-            pa = [(frac_parsed(A[u][:8]), frac_parsed(B[u])) for u in us]
-            pa = [(x, y) for x, y in pa if x is not None and y is not None]
-            ma, mb = sum(x for x, _ in pa) / len(pa), sum(y for _, y in pa) / len(pa)
-            row["tc_of_parsed"] = {"A": round(ma, 4), "B": round(mb, 4), "B-A": boot([y - x for x, y in pa], rng),
+                            "B-A": boot([(task[u], frac(B[u], cat) - frac(A[u][:8], cat)) for u in us], rng),
+                            "noise(A2-A1)": boot([(task[u], frac(A[u][8:], cat) - frac(A[u][:8], cat)) for u in us], rng, level=0.992)}
+            row["tasks"] = len({task[u] for u in us})
+            pa = [(task[u], frac_parsed(A[u][:8]), frac_parsed(B[u])) for u in us]
+            pa = [(t, x, y) for t, x, y in pa if x is not None and y is not None]
+            ma, mb = sum(x for _, x, _ in pa) / len(pa), sum(y for _, _, y in pa) / len(pa)
+            row["tc_of_parsed"] = {"A": round(ma, 4), "B": round(mb, 4), "B-A": boot([(t, y - x) for t, x, y in pa], rng),
                                    "relative_to_headroom": round((mb - ma) / (1 - ma), 4) if ma < 1 else None}
             res[name + ("" if held is None else "/heldout")] = row
     for name in names:
         if name in res:
             lo, hi = res[name]["tc"]["noise(A2-A1)"][1:]
             if not (lo <= 0 <= hi):
-                fails.append(f"V1 {name} 잡음 바닥 구간 [{lo}, {hi}] 이 0 을 포함하지 않음")
+                fails.append(f"V1 {name} 잡음 바닥 99.2% 구간 [{lo}, {hi}] 이 0 을 포함하지 않음")
     if "S" in res and "C2" in res:
         s_rep, c2_rep = res["S"]["repeat_like"]["A"], res["C2"]["repeat_like"]["A"]
         if not (s_rep >= 0.20 and s_rep >= 3 * c2_rep):
@@ -258,11 +275,22 @@ def analyze(a) -> int:
     else:
         fails.append("S · C2 층 없음")
     if "S" in res and "S0" in res:
-        us = sorted({u.replace("tbprefix-S-", "") for u, p in layer.items() if p["layer"] == "S"} & {u.replace("tbprefix-S0-", "") for u, p in layer.items() if p["layer"] == "S0"})
-        d_s = [frac(B[u], "tc") - frac(A[u][:8], "tc") for u, p in layer.items() if p["layer"] == "S" and u not in bad]
-        d_0 = [frac(B[u], "tc") - frac(A[u][:8], "tc") for u, p in layer.items() if p["layer"] == "S0" and u not in bad]
-        bs = sorted(sum(rng.choices(d_s, k=len(d_s))) / len(d_s) - sum(rng.choices(d_0, k=len(d_0))) / len(d_0) for _ in range(4000))
-        res["S_minus_S0_tc_diff"] = {"mean": round(sum(d_s) / len(d_s) - sum(d_0) / len(d_0), 4), "ci95": [round(bs[100], 4), round(bs[3900], 4)], "paired_trials": len(us)}
+        # 대응형 클러스터 부트스트랩: 과제를 재표본하고 그 과제의 S 행과 S0 행을 함께 넣는다 (두 층은 시도 · 과제를 공유한다)
+        ds, d0 = collections.defaultdict(list), collections.defaultdict(list)
+        for u, p in layer.items():
+            if u in bad or p["layer"] not in ("S", "S0"):
+                continue
+            (ds if p["layer"] == "S" else d0)[task[u]].append(frac(B[u], "tc") - frac(A[u][:8], "tc"))
+        tasks = sorted(set(ds) | set(d0))
+        mean = lambda d, ts: (sum(sum(d[t]) for t in ts) / max(1, sum(len(d[t]) for t in ts)))
+        bs = []
+        for _ in range(4000):
+            ts = rng.choices(tasks, k=len(tasks))
+            if sum(len(ds[t]) for t in ts) and sum(len(d0[t]) for t in ts):
+                bs.append(mean(ds, ts) - mean(d0, ts))
+        bs.sort()
+        res["S_minus_S0_tc_diff"] = {"mean": round(mean(ds, tasks) - mean(d0, tasks), 4),
+                                     "ci95": [round(bs[int(0.025 * len(bs))], 4), round(bs[int(0.975 * len(bs))], 4)], "tasks": len(tasks)}
     summ = {"rows": len(layer), "rows_with_wrong_counts": len(bad), "overall": overall, "layers": res,
             "validity": "PASS" if not fails else "FAIL", "fails": fails}
     print(json.dumps(summ, ensure_ascii=False, indent=1))
