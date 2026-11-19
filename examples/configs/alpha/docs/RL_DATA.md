@@ -313,3 +313,30 @@ CPU · 읽기 전용 실사. 원천 루트 `/home/work/Datasets/LL_datasets/post
 - 공개 블렌드에는 `search_pivot_` · `terminus_judge_` · `terminal_multi_harness_*` · `droid_pivot_` 행이 없다 — `SPEC_rl_dataset_inventory.md` 의 해당 줄은 Ultra `mopd.yaml` 라우팅 패턴이다.
 - `SWE-Pivot-v1` 원본의 agent 이름 `single_step_tool_use_with_argument_comparison_swe` 는 Gym 설정에 없다. 같은 행이 Super `swe1.jsonl` 에 유효한 이름으로 들어 있다.
 
+## 7. 실행형 도구 환경 조사 (2026-11-19, `RL_PLAN.md` 결정 70)
+
+도구를 **실제로 실행** 하고 **코드로 채점** 하는 환경의 조사 결과다. 조사 범위: 로컬 Gym `3045a79` 전수 분류 (116 개, 그중 59 개는 설정 · grep 분류) · NVIDIA upstream (Gym `d5373bea` · NeMo-RL `e8508839` · HF `nvidia/` · Ultra / Super 보고서) · 프론티어 5 계열과 공개 환경. 프론티어 값의 정본은 [`FRONTIER.md`](FRONTIER.md) "agentic 전문가" 2026-11-19 세 행이고, 여기는 alpha 가 쓸 후보와 정정만 둔다. 경위는 [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) 2026-11-19.
+
+### 7.1 결론
+
+- 프론티어 (DeepSeek V3.2 · V4.1 · MiMo-V2.6 · Kimi K3) 는 "코드 mock 도구 + DB · 파일 상태 + 코드 검증기" 로 수렴했다. LLM 이 도구 결과를 지어내는 환경으로 RL 을 했다고 밝힌 곳은 없다.
+- NVIDIA 의 도구 사용 RL 은 혼합 블렌드 안의 **단일 스텝 PivotRL** 이 대부분이고 (모든 공개 RLVR 레시피 `max_rollout_turns: 1`), 실행형은 `workplace_assistant` 와 `indirect_prompt_injection` 이다. `conversational_tool_use_simulation` 은 데이터 생성용이다.
+- 공통된 설계: 결과 보상만 · 통과율로 난이도 필터 · 검증기 자체를 검증 · 환경 다양성이 이득의 원천.
+
+### 7.2 후보 (컨테이너 불필요)
+
+| 후보 | 도구 실행 · 보상 | 과제 | 사용자 시뮬레이터 | 상태 | 걸리는 점 |
+|---|---|---|---|---|---|
+| Gym `workplace_assistant` | DB 5 (이메일 · 캘린더 · 분석 · 업무 · CRM) · 도구 27 을 세션별로 실행. 예측 호출과 정답 호출을 각각 새 DB 에 재생해 다섯 상태가 같으면 1 (`utils.py` `is_correct`) | HF `nvidia/Nemotron-RL-agent-workplace_assistant` train 1,255 · val 545 (범주 5 개 균등) → `RL/Nemotron-RL-agent-workplace_assistant/` (2026-11-19 내려받음) | 없음 (사용자 턴 1 + 도구 최대 6 스텝) | 로컬 Gym · NeMo-RL 레시피 `examples/nemo_gym/grpo_workplace_assistant_nemotron_nano_v2_9b.yaml` 있음. NVIDIA 공개 결과 val 0.80 → 0.92 / 40 step (64 × 16) | 대화형 아님 · 최종 답변 미채점 · 한 도메인. **정답 호출이 0 개인 과제 13.5% (train 170 · val 71) 는 상태를 바꾸지 않으면 통과**. 정답 호출 수: 1 개 62.6% · 2 개 13.9% · 3 개 이상 10.0% |
+| EnvScaler ([리포](https://github.com/RUC-NLPIR/EnvScaler), MIT) | Python 클래스 환경 191 (속성 = 상태, 메서드 = 도구), 검증 함수 통과 비율이 보상 | RL 시나리오 2.5K · SFT 4.7K, 생성기 공개 | 없는 모드로 학습 가능 | 미설치 | Gym 플러그인을 새로 만들어야 함. 실행 미확인 |
+| tau2 계열 | 도메인 DB 도구 실제 실행. DB 해시 · 환경 검사 · 행동 일치 (COMMUNICATE 는 기본 LLM judge, Gym 의 tau2 agent 는 NL 판정을 뺀다) | 로컬 `tools/tau2-bench` v1.0.1: airline 50 (train 30) · retail 114 (train 74) · telecom base 114 (train 74) · **telecom full 2,285 (전부 코드 채점)** · banking_knowledge 97. 공개 합성 과제 AReaL-tau2-data 1,982 (Apache-2.0) | 필요 | Gym `responses_api_agents/tau2` 는 개발자 fork 를 요구 (로컬은 upstream) | 판정 벤치 τ³ 와 같은 도메인 (2026-10-10 "airline · retail 은 학습에 쓰지 않는다"). AReaL-SEA 는 사용자 모델을 SFT 해야 보상이 오염되지 않는다고 보고 |
+| Gym `indian_banking` | 도구 33 + 이관, 에피소드별 DB. ACTION × DB 해시 × COMMUNICATE (코드) | HF `NPCI/nemo-gym-indian-banking` train 250 · val 50 | 필요 | **Gym v0.7.0 신규 — 로컬에 없음** | Gym 승급 필요 · 과제 적음 |
+| Gym `toolsandbox` | 상태 샌드박스에서 Python 실행. milestone 유사도, minefield 면 0 | 기본 129 × 변형 8 = 1,032 (48 개는 RapidAPI 키 필요) | 필요 | 로컬에 있음 | 평가용 세트 · 시나리오 CC-BY-NC · 학습 분할 없음 |
+
+탈락: LLM judge 보상 (`finance_agent_v2` · `finance_sec_search` · `browsecomp_advanced_harness` · `gdpval` · `legal_agent_bench`) · 컨테이너 필수 (`deepswe` · `swebench` · `terminal_bench_2_1` · `ns_tools` · `litmus_agent` · `enterpriseops_gym`) · 도구 미실행 (`single_step_tool_use_with_argument_comparison` · `swe_pivot` · `terminal_multi_harness`) · 데이터 미공개 (`indirect_prompt_injection` train 은 NVIDIA 내부). 전체 분류표는 조사 때의 scratchpad `survey_gym/catalogue.md` 에 있었다 (영속 사본 없음 — 다시 필요하면 재생성).
+
+### 7.3 정정
+
+- §5.8 의 "`workplace_assistant` = 단일 스텝 도구 호출" 은 틀렸다. 도구를 최대 6 스텝 실행하는 다단계 환경이다.
+- §6 표의 conversational tool-use 행: 피벗은 도구 teacher 400 이 이미 했다 (τ³ retail · airline 잡음 안). **Ultra 가 피벗으로 올렸다고 보고한 TauBench Telecom (55.7 → 82.7) 은 alpha 에서 미측정** 이다 — 평가 스크립트가 Telecom 을 건너뛴다 (상대역 엔드포인트가 도구 요청을 받지 않음, Pai `run_tau.sh`).
+- `conversational_tool_use_simulation` 로 만든 `alpha_blends/convtool_e2e_v1/` (학습 7,483 · 검증 300) 는 학습에 쓰지 않는다 — 보상을 믿을 수 없다는 판정 (`STATUS.md` 11-19, Gemma · Qwen3.8 스모크와 대화 판독).

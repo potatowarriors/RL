@@ -57,6 +57,14 @@ alpha 지침은 여기와 [`examples/configs/alpha/CLAUDE.md`](../../examples/co
 - 체크포인트·레시피·브리지·플러그인을 바꾸면 `GATES.md` 의 재실행 조건을 따른다. 런 기동·재개·재시작은 `alpha-launch` skill 순서대로 한다.
 - **세션 점검**: 사용자 수준 CLAUDE.md(`/home/work/vidsearch/.claude-config/<노드>/CLAUDE.md`)의 내용이 이 세션 컨텍스트에 없으면 `CLAUDE_CONFIG_DIR` 없이 뜬 세션이다. 작업 전에 사용자에게 알리고 `/home/work/vidsearch/.claude-config/CLAUDE.md` 를 Read 로 읽는다.
 
+## 새 환경 · 학습 방식 설계 전 (사용자 지시 2026-11-19)
+
+제공되는 경로가 기본안이다 (공통 원칙 "판단 원칙"). teacher · 환경 · 블렌드 · 보상을 새로 설계하기 전에 아래를 **전수로** 확인해 표로 보고한다.
+- NeMo-RL `examples/nemo_gym/` 의 공개 레시피 (Ultra · Super · 3.5 계열) 가 그 능력을 어떤 Gym 환경 · 배치 · 턴 수로 학습했는가.
+- Gym `resources_servers/` · `responses_api_agents/` 에 그 능력의 환경이 있는가 — 도구 실행 방식 (실제 실행 · LLM 시뮬레이션) 과 보상 (코드 · judge) 까지. 정리본은 `examples/configs/alpha/docs/RL_DATA.md` §7, upstream `main` 의 신규 환경도 본다.
+- HF `nvidia/` 의 해당 환경 데이터셋과 기준선 보고서 (Ultra · Super) 의 해당 절.
+제공되는 경로를 벗어나는 안은 그 경로가 안 되는 근거를 보고에 적는다. 같은 계열의 방식이 두 번 실패하면 변형을 더 만들기 전에 이 조사를 다시 한다. 벤치가 건너뛰는 도메인은 "미측정" 으로 적는다.
+
 ## 커밋·이력 규칙
 
 1. 즉시 커밋·push 와 공유 워킹트리 규율은 공통 원칙을 따른다. 메시지는 `type(alpha): summary`
