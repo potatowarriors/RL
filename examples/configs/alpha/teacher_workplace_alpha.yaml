@@ -1,0 +1,37 @@
+# teacher_workplace_alpha.yaml — 실행형 도구 환경 teacher: Gym `workplace_assistant` (RL_PLAN.md 결정 70, docs/RL_DATA.md §7).
+#
+# 도구를 실제로 실행하고 코드로 채점하는 환경이다: DB 5 개 (이메일 · 캘린더 · 분석 · 업무 관리 · CRM) · 도구 27 개를 세션별로 실행하고,
+# 예측 호출과 정답 호출을 각각 새 DB 에 재생해 다섯 상태가 같으면 보상 1 (Gym resources_servers/workplace_assistant/utils.py is_correct).
+# judge · 사용자 시뮬레이터가 없다. 사용자 턴은 1 회이고 에이전트가 도구를 최대 6 스텝 부른다 (Gym 설정 simple_agent max_steps 6).
+#
+# 기본안 = NVIDIA 공개 레시피 examples/nemo_gym/grpo_workplace_assistant_nemotron_nano_v2_9b.yaml (64 × 16 · 1 에폭 · max_rollout_turns 1 ·
+# KL 0 · 10 step 마다 검증) 와 3.5 Super VL 가이드의 공개 결과 (val 0.80 → 0.92 / 40 step). 환경 · 배치 · 턴 수는 그대로 따른다.
+# 벗어나는 것: 옵티마이저와 lr 은 alpha 도구 teacher 설정 (Muon lr 3e-6 상수 warmup 10) — NVIDIA 는 Adam 5e-6 (Nano 9B) · 1e-6 (3.5 Super VL).
+# 2노드 분리 · async age 2 · 128K/CP8 · 생성 8,192 · R3 · GDN 상태 fp32 는 도구 teacher 레시피 상속.
+#
+# 시작점: MOPD1 학생 results/alpha/mopd1/hf/hf_step_00120. 프로파일 (2026-11-19, val 545 × 4): 통과 0.372 · 과제의 41% 가 일부 통과.
+# 데이터: RL/Nemotron-RL-agent-workplace_assistant/train.jsonl 1,255 (선별 없음) · 검증 validation.jsonl 545.
+# 규모: 2 에폭 = 38 스텝 (1,255 // 64 = 19 스텝/에폭).
+#
+# 실행: RECIPE=examples/configs/alpha/teacher_workplace_alpha.yaml DATA=<train.jsonl> VAL=<validation.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_workplace <tag> policy.model_name=<mopd1/hf/hf_step_00120>
+defaults: teacher_tool_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_workplace"
+  save_period: 19                       # 에폭마다 (1 개 약 155 GB)
+
+grpo:
+  max_num_steps: 38                     # 2 에폭 × 19 스텝
+  max_num_epochs: 2                     # async 루프가 max_num_steps 를 max_num_epochs × (행 수 // 프롬프트 수) 로 자른다
+  val_period: 10                        # NVIDIA 레시피와 같다 — 학습에 안 쓴 545 과제의 통과율을 학습 중에 본다
+  val_at_start: true
+  val_at_end: true
+  val_num_generations_per_prompt: 1
+
+env:
+  nemo_gym:
+    config_paths:
+      # strict 유지 서버 (결정 13). NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins (launch.sh 가 넘긴다)
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      - resources_servers/workplace_assistant/configs/workplace_assistant.yaml
