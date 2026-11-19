@@ -333,7 +333,7 @@ CPU · 읽기 전용 실사. 원천 루트 `/home/work/Datasets/LL_datasets/post
 | Gym `indian_banking` | 도구 33 + 이관, 에피소드별 DB. ACTION × DB 해시 × COMMUNICATE (코드) | HF `NPCI/nemo-gym-indian-banking` train 250 · val 50 | 필요 | **Gym v0.7.0 신규 — 로컬에 없음** | Gym 승급 필요 · 과제 적음 |
 | Gym `toolsandbox` | 상태 샌드박스에서 Python 실행. milestone 유사도, minefield 면 0 | 기본 129 × 변형 8 = 1,032 (48 개는 RapidAPI 키 필요) | 필요 | 로컬에 있음 | 평가용 세트 · 시나리오 CC-BY-NC · 학습 분할 없음 |
 
-탈락: LLM judge 보상 (`finance_agent_v2` · `finance_sec_search` · `browsecomp_advanced_harness` · `gdpval` · `legal_agent_bench`) · 컨테이너 필수 (`deepswe` · `swebench` · `terminal_bench_2_1` · `ns_tools` · `litmus_agent` · `enterpriseops_gym`) · 도구 미실행 (`single_step_tool_use_with_argument_comparison` · `swe_pivot` · `terminal_multi_harness`) · 데이터 미공개 (`indirect_prompt_injection` train 은 NVIDIA 내부). 전체 분류표는 조사 때의 scratchpad `survey_gym/catalogue.md` 에 있었다 (영속 사본 없음 — 다시 필요하면 재생성).
+탈락: LLM judge 보상 (`finance_agent_v2` · `finance_sec_search` · `browsecomp_advanced_harness` · `gdpval` · `legal_agent_bench`) · 컨테이너 필수 (`deepswe` · `swebench` · `terminal_bench_2_1` · `ns_tools` · `litmus_agent` · `enterpriseops_gym`) · 도구 미실행 (`single_step_tool_use_with_argument_comparison` · `swe_pivot` · `terminal_multi_harness`) · 데이터 미공개 (`indirect_prompt_injection` train 은 NVIDIA 내부). 전체 분류표 (116 행) 는 `$NRL_ROOT/p0_measure/gym_env_catalogue_20261119.md`.
 
 ### 7.3 정정
 
