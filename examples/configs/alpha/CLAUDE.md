@@ -27,6 +27,7 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
   `policy.generation.vllm_kwargs.mamba_ssm_cache_dtype: float32` + `policy.router_replay.enabled: true`. 둘을 끄면 R1 게이트 FAIL.
   `policy.generation.vllm_cfg.turn_end_token_id: 3` 을 끄면 Gym 멀티턴이 2번째 호출부터 깨진다 (R3).
 - Gym 레시피는 `chat_template_kwargs: null`. Ultra 의 `truncate_history_thinking: false` 를 복사하지 않는다 (비도구 이력 reasoning 복원, R3).
+  예외: 도구를 선언하지 않는 에이전트 환경 (Terminus-2 — 터미널 출력이 user 턴) 은 템플릿이 일반 대화로 봐서 이전 턴 사고를 자른다 → 그 레시피만 `truncate_history_thinking: false` 를 명시한다 (`docs/E2E_SANDBOX.md` §8).
 - CP>1 은 sequence packing 필수, `use_fused_linear_logprobs` 와 비호환이다 → `logprob_chunk_size` + `fuse_loss` (+ `defer_fp32_logits: true`).
   packing 의 시퀀스 간 상태 격리는 G1 PASS(비트 동일). CP>1 경로의 수치는 미검증이다 — 장문맥 레시피 전에 R1 을 그 경로로 돌린다 (G2).
 - **R3 를 켠 레시피에서 `moe_router_fusion` 금지.** mcore fused top-k 는 replay 전에 반환해 R3 가 에러 없이 꺼진다. Pai SFT 는 켰다 — 복사하지 않는다.

@@ -194,7 +194,7 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 
 alpha 에 걸리는 제약:
 - 문맥 128K. TB 궤적의 최대 prompt 는 중앙 107K · p90 183K 다 (Pai `SFT_BENCHMARKS.md`).
-- `harbor_agent` README 는 `truncate_history_thinking: false` 를 요구하고 alpha 규약은 `chat_template_kwargs: null` 이다. Terminus 는 비도구 시나리오라 alpha 템플릿이 이전 think 를 자른다. 다중 턴 토큰 연속성을 이 경로로 확인한 적이 없다 (GATES G3 미실행).
+- 이전 턴 사고: alpha 는 에이전트 궤적에서 이전 턴 사고를 **보존한다** (Pai 설계 규칙 2026-09-14 — 도구를 쓰는 궤적은 보존, 도구 없는 일반 대화는 DSV4 방식으로 제거. terminal SFT 인 NTC 는 `--keep-history-think` 로 구웠다). 템플릿은 도구가 선언됐거나 도구 호출 · 도구 턴이 있으면 자동으로 보존한다. Terminus-2 는 도구를 선언하지 않고 터미널 출력을 user 메시지로 보내므로 템플릿이 일반 대화로 보고 자른다. 그래서 이 환경의 레시피는 `chat_template_kwargs: {truncate_history_thinking: false}` 를 **명시해야 한다** — `harbor_agent` README 의 학습 요구 (`README.md:153-175`) 와 같고, 평가 (Pai `SFT_BENCHMARKS.md` "TB-2 추론 복원") 에서 이미 쓰는 설정이다. 빠지면 SFT 와 다른 렌더가 되고 다중 턴 토큰 연속성도 깨진다. alpha 레시피 규약의 `chat_template_kwargs: null` 은 템플릿이 시나리오를 스스로 가리는 환경용이다 (전역으로 켜면 일반 대화 이력까지 복원된다). SWE 의 `swe_agents` 는 도구를 선언하므로 `null` 그대로 보존된다. 이 경로의 다중 턴 토큰 연속성은 RL 쪽에서 아직 재지 않았다 (GATES G3 미실행).
 - NTC SFT 의 시스템 프롬프트와 Harbor 평가 프롬프트의 md5 가 다르다. Gym 이 고정한 Harbor 판의 프롬프트가 어느 쪽인지 미확인.
 
 제공되지 않아 만들어야 하는 것: 레시피 · `harbor_agent` 의 실패 마스킹 · 과제 이미지 빌드 경로 · 학습/검증 분할과 TB · NTC 겹침 검사 · 128K 에 맞춘 턴 수와 타임아웃. SWE 와 달리 "받아서 바로 돌리는" 경로가 아니다.

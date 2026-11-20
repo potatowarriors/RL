@@ -55,7 +55,7 @@ Xiaomi 는 학습 때 확인된 해킹 궤적이 2% 미만이었다고 밝혔다
 | main1 자원 | 220 코어 · RAM 2,015 GB (조회 시 가용 1,647 GB) · NFS 여유 42 TB |
 | 빈 rollout 처리 | 생성 토큰이 없는 Gym 결과가 오면 `nemo_rl/environments/nemo_gym.py:817-841` 이 `ValueError` 를 던져 스텝이 죽는다. Harbor 경로는 실패하면 바로 그런 결과(빈 `output`)를 돌려준다 |
 | 실패 rollout 마스킹 | `mask_sample` 을 `swe_agents`(`app.py:3859`) · `anyterminal_agent`(`app.py:575`)는 설정하고, `harbor_agent` 는 설정하지 않는다 |
-| alpha 레시피 규약과 충돌 | Harbor README 는 `truncate_history_thinking: false` 를 권하지만 alpha Gym 레시피는 `chat_template_kwargs: null` 이다 (`../CLAUDE.md`). 다중 턴 토큰 연속성을 alpha 템플릿으로 따로 확인해야 한다 |
+| 이전 턴 사고 설정 | Harbor README 는 학습에 `truncate_history_thinking: false` 를 요구한다. alpha 도 에이전트 궤적은 이전 턴 사고를 보존하므로 방향은 같다. 다만 Terminus-2 는 도구를 선언하지 않아 alpha 템플릿이 자동으로는 보존하지 않는다 → 이 환경의 레시피는 kwarg 을 명시해야 하고, 레시피 규약의 `chat_template_kwargs: null` 에는 예외가 된다 ([`../E2E_SANDBOX.md`](../E2E_SANDBOX.md) §8, 2026-11-20 정정) |
 | 컨텍스트 | alpha 상한 128K (`RL_PLAN.md` §4). 참조 설정(500 스텝 · 응답 65,536)은 그대로 못 쓴다. Ultra SWE teacher 는 `agent_max_turns` 200 · 196,608 · 32 × 16 · 에이전트 3,600 s · 메모리 64 GB (`examples/nemo_gym/nemotron-3-ultra/swe_teacher.yaml`) |
 | 호스트 메모리 | 다중 턴 에이전트에는 `max_steps: 1` 보호가 듣지 않는다. 행 수 × 패딩 길이 × 416 B × CP8 복제 예산을 다시 잡는다 (`KNOWN_ISSUES.md` 2026-10-20 호스트 OOM) |
 
