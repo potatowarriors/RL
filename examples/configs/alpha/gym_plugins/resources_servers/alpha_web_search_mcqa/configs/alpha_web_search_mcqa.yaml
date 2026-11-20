@@ -1,0 +1,32 @@
+# alpha Gym 플러그인 (NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins). 검색 도구 객관식 — Gym `google_search` 의 검색
+# 백엔드를 Tavily 로 (결정 72 · 73). 데이터: nvidia/Nemotron-RL-knowledge-web_search-mcqa (행의 agent_ref 는 아래 agent 이름이어야 한다).
+# Gym `google_search.yaml` 과 다른 점: (1) 검색 = Tavily (2) 검색 백엔드 장애가 있던 롤아웃은 mask_sample (3) agent 에 max_steps.
+alpha_web_search_mcqa_resources_server:
+  resources_servers:
+    alpha_web_search_mcqa:
+      entrypoint: app.py
+      # 키 값을 여기 쓰지 않는다 (설정 덤프 · W&B 에 남는다). env 형식 파일의 `TAVILY_API_KEY=` 줄을 서버가 읽는다.
+      tavily_api_key_file: /home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha/.env
+      search_depth: basic        # 검색당 1 크레딧 (advanced 는 2 — Gym tavily_search 의 값). 본 학습 값은 측정 뒤 결정
+      max_results: 10
+      max_result_chars: 2000
+      exclude_domains: []        # NVIDIA 의 제외 목록은 내부 파일이라 없다
+      search_max_tries: 3
+      mask_on_search_error: true
+      num_workers: 1             # 세션 통계가 프로세스 메모리에 있다
+      domain: agent
+      verified: false
+      description: multiple-choice questions answered with web search (Tavily) and page browsing; reward = boxed option letter match
+alpha_web_search_mcqa_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: alpha_web_search_mcqa_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      # 잠정값. Gym google_search.yaml 에는 상한이 없다 — `</think>` 를 닫지 않은 응답에 재호출이 끝없이 이어진다 (KNOWN_ISSUES 2026-11-14).
+      # 모델 호출 10 회 = 도구 호출 최대 9 회 + 답. 검색 횟수 분포를 잰 뒤 정한다.
+      max_steps: 10

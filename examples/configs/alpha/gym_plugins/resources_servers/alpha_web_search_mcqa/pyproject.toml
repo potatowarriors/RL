@@ -1,0 +1,22 @@
+# alpha Gym 플러그인 — resources_servers/alpha_web_search_mcqa (Gym google_search 의 검색 백엔드를 Tavily 로, RL_PLAN.md 결정 72 · 73).
+# tavily-python · trafilatura 는 Gym tavily_search · google_search 의 requirements.txt 와 같은 버전으로 고정한다.
+[project]
+name = "alpha-web-search-mcqa"
+version = "0.1.0"
+requires-python = ">=3.13.14"
+dependencies = [
+    "nemo-gym[dev]",
+    "tavily-python==0.7.21",
+    "trafilatura==2.0.0",
+]
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61", "setuptools-scm"]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["alpha_web_search_mcqa"]
+
+[tool.uv.sources]
+nemo-gym = { path = "../../../../../../3rdparty/Gym-workspace/Gym", editable = true }

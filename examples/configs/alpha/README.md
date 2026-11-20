@@ -67,6 +67,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |
 | `tools/inject_identity_blend.py` | RL 블렌드 identity 주입 (`docs/RL_DATA.md` §2) |
 | `gym_plugins/resources_servers/rdkit_chemistry/` | Gym 0.6.0 에 없는 Ultra rdkit 화학 행 채점 서버 (정수 정답 일치, 테스트 17건). STEM 레시피가 `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |
+| `gym_plugins/resources_servers/alpha_web_search_mcqa/` · `tools/check_web_search_mcqa.py` | 검색 객관식 환경 — Gym `google_search` 의 검색 백엔드를 Tavily 로 (결정 72 · 73, 테스트 50건). 검색 백엔드 장애가 있던 롤아웃은 `mask_sample`. 사전 검사 도구는 데이터 행 ↔ 서버 정합과 실제 한 문항 (`--live`) 을 본다 (GATES WS1) |
 | `gym_plugins/responses_api_models/alpha_vllm_model/` | Gym 정책 서버 플러그인 — 도구 정의의 `strict` 를 유지한다 (결정 13). `NEMO_GYM_EXTRA_ROOTS` 로 싣는다 |
 | `docs/` | 문서 — 색인 [`docs/README.md`](docs/README.md) |
 | `skills/alpha-rl/` | Claude Code skill — 작업 유형별 문서 지도. `.claude/skills/alpha-rl` 링크로 등록, upstream 훅의 "skill 먼저"를 받는다 |
