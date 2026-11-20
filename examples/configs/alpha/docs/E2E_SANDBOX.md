@@ -18,7 +18,7 @@
 | 우리 쪽 Apptainer 설정 | 후보 측정 완료, 선택은 승인 대기 (§5) |
 | 태스크 이미지 → `.sif` | **지금 세션에서도 변환된다** (실측 3건). 도구 준비됨, 대량 변환은 승인 대기 (§7.2) |
 | SWE E2E 레시피 | 제공 경로 · 프론티어 조사 완료, 설정 결정 대기 (§7) |
-| Terminal E2E | 제공 경로 조사 (§8) |
+| Terminal E2E | 제공 경로 조사 완료 — 환경은 `harbor_agent` 하나, 레시피 · 이미지 · 실패 마스킹은 만들어야 함 (§8) |
 
 ## 2. 왜 막혔나
 
@@ -165,21 +165,39 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 | 3 | 배치 · lr | 8 × 8 ~ 32 × 16 · 1e-6 ~ 3e-6 | 호스트 메모리 (다중 턴 궤적 × CP8 복제, `KNOWN_ISSUES.md` 2026-10-20) 와 bf16 반영률 (결정 23) |
 | 4 | 동시 실행 · 메모리 상한 | 768 ~ 1,024 · 32 ~ 64 GB | 2 노드 440 코어 · RAM 4 TB 를 학습 · vLLM 과 나눠 쓴다. 롤아웃당 CPU · RAM · 시간은 미측정 — 스모크가 잰다 |
 | 5 | 도구 형식 | OpenHands CodeAct · OpenCode · Codex 프롬프트 혼합 | alpha SFT 의 도구 형식과 얼마나 맞는지 미확인. SWE 피벗 데이터는 세 하니스 형식을 모두 담고 있다 |
-| 6 | 빈 롤아웃 | 실패한 롤아웃은 Gym 이 `mask_sample` 로 표시하고 GRPO 가 loss 에서 뺀다 (`grpo.py` `_apply_mask_sample_filter`, 이 fork 에 있음) | 생성 토큰이 아예 없는 결과가 오면 `nemo_rl/environments/nemo_gym.py` 가 `ValueError` 로 step 을 죽인다 (831행). upstream main 도 같은 예외를 던진다 (2026-11-20 확인). 컨테이너 기동 실패가 여기에 걸리는지는 미측정 — 스모크에서 없는 `.sif` 로 일부러 일으켜 본다. 고쳐야 하면 본체 패치 (별도 커밋 · 독립 검토) |
+| 6 | 빈 롤아웃 | 실패한 롤아웃은 `swe_agents` 가 `instance_config.mask_sample` 로 표시하고 (NeMo-RL 이 읽는 위치) GRPO 가 loss 에서 뺀다 (`grpo.py` `_apply_mask_sample_filter`, 이 fork 에 있음) | 생성 토큰이 아예 없는 결과가 오면 `nemo_rl/environments/nemo_gym.py` 가 `ValueError` 로 step 을 죽인다 (831행). upstream main 도 같은 예외를 던진다 (2026-11-20 확인). 컨테이너 기동 실패가 여기에 걸리는지는 미측정 — 스모크에서 없는 `.sif` 로 일부러 일으켜 본다. 고쳐야 하면 본체 패치 (별도 커밋 · 독립 검토) |
 | 7 | 과제 선별 | Cascade 2 는 전부 통과 · 전부 실패 과제를 걸렀다 | 학생 통과율 사전 측정 (결정 40 의 5) 이 선별 근거가 된다 |
 | 8 | 판정 벤치 | SWE-V | 기존 경로 (gpu06 docker) 그대로 |
 
-## 8. Terminal E2E — 지금까지 확인한 것
+## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
-| 항목 | 확인한 내용 |
-|---|---|
-| 제공 레시피 | NeMo-RL `examples/` 에 terminal E2E 환경을 쓰는 레시피는 없다. Ultra 는 terminal 을 PivotRL 로만 학습했다 (`FRONTIER.md` "전문가 분할") |
-| Gym `harbor_agent` | Harbor 태스크 + 자체 Singularity 환경. 명령은 `singularity exec --pwd … --writable-tmpfs --fakeroot --containall --pid` (`custom_envs/singularity/singularity.py`). README 에 NeMo RL 학습 절이 있다. 학습용 에이전트는 Terminus-2 변형이고 실패 롤아웃 마스킹이 없다 (`study/mimo_code_harbor.md` §4) |
-| Gym `anyterminal_agent` | Harbor 태스크 형식 + Apptainer sandbox provider (`instance start` → `exec`, root 명령은 `--fakeroot`). 타임아웃 때 `mask_sample`. 메모리 상한 32 GB (`ulimit -v`) |
-| 인프라 조건 | SWE 와 같은 세 설정에 `clone` 의 namespace 플래그 (요청에 포함) 가 더 필요하다. 리허설에서 `--fakeroot --containall --pid` · fakeroot instance · 다중 uid 매핑이 모두 통과했다 (§5 의 설정으로) |
-| 프로젝트 이력 | terminal 피벗 teacher 를 두 번 시도하고 접었다 (결정 69). 판정 벤치는 TB-2.1 (Terminus-2 · Harbor, gpu06) |
+조사 에이전트의 보고 (파일 경로 근거) 를 옮긴 것이다. 실패 마스킹을 읽는 위치 · `harbor_agent` 의 실패 처리 · 로컬 데이터 존재는 주 세션이 다시 확인했다.
 
-행동 형식 · 학습 지원 범위 · 데이터셋은 전수 조사 뒤 별도로 보고한다 (§9 의 9).
+- 학습 기능 (token ID · 다중 턴 연속성 · "NeMo RL Training" 문서) 을 갖춘 terminal E2E 경로는 Gym `harbor_agent` + `Terminus2NemoGym` **하나** 다.
+- 그 행동 형식 (본문의 Terminus-2 JSON) 은 alpha terminal SFT 데이터 (NTC 365,705 궤적) 와 **같다**.
+- 이 환경을 쓰는 NeMo-RL 레시피는 **없다**. 공개 Ultra · Super 블렌드 13 개에도 해당 행이 0 이다.
+- 실패한 롤아웃을 마스킹하는 장치가 없다. 실패하면 빈 output + 보상 0 을 돌려주고, NeMo-RL 은 빈 결과에서 step 을 죽인다.
+
+| 환경 | 행동 형식 | 컨테이너 명령 | 학습 지원 | alpha 에 걸리는 점 |
+|---|---|---|---|---|
+| `harbor_agent` + Singularity 환경 (기본 설정) | 본문 JSON (Terminus-2) | `singularity exec --no-mount … --pwd … --writable-tmpfs --fakeroot --containall --pid` (`custom_envs/singularity/singularity.py:364-377`) — 리허설에서 root-mapped 로 PASS | 예 — token ID · logprob 수집, 직전 턴 ID 를 다음 요청에 실음. `mask_sample` 없음 (0 건) | 빈 결과 → `ValueError` · 이미지 안에 python3 + uvicorn 필요 · 실행 파일 이름 `singularity` 고정 · 세션 network 공유 |
+| `harbor_agent` + Gym sandbox 환경 | 같음 | Gym Apptainer provider | 제공 설정은 평가용 (token 수집 끔) | pull 가능한 이미지 참조만 받음 · 기동 사용자로 실행 |
+| `anyterminal_agent` + `terminus_2_agent` | 본문 JSON (Terminus-2) | `apptainer instance start` 뒤 매 exec 가 `--fakeroot instance://` | 부분 — 기본값이 token 수집 끔 · 요약 켬, 학습 설정 · 문서 없음. `mask_sample` 을 응답 최상위에 두는데 NeMo-RL 은 `instance_config.mask_sample` 만 읽는다 (`nemo_rl/experience/rollouts.py` `_extract_mask_sample_flags`) | 리허설에서 실패한 exec 형태 (§5 의 우회를 Gym 설정으로 옮길 수 있는지 미시험) |
+| `anyterminal_agent` + `hermes_agent` | 함수 호출 | 같음 | token ID 수집 패치 있음 | alpha terminal SFT 형식과 다름 |
+| `terminal_bench_2_1` 서버 + OpenCode | 함수 호출 | PTY 필요 (opensandbox 전용) | 아니오 — 정책 롤아웃의 verify 가 미구현 | 판정 벤치 자체 |
+
+| 데이터 | 규모 | 로컬 | 주의 |
+|---|---|---|---|
+| Nemotron-Terminal-Synthetic-Tasks (Harbor 형식, `harbor_agent` README 의 예시 데이터) | `task.toml` 수 — easy 44,969 · medium 203,749 (두 샤드) · mixed 5,984 | 있음 `SFT/Nemotron-Terminal-Synthetic-Tasks/skill_based/` (압축 약 1 GB, 미해제) | 과제 이미지가 NVIDIA 내부 레지스트리를 가리킨다 (표본 2) — Dockerfile 로 다시 빌드해야 한다 (docker + 레지스트리 필요) · 정답 풀이 없음 · 채점이 실행 중 `pip install pytest` 를 한다 |
+| Terminal-Bench 2.0 · 2.1 | 각 89 | gpu06 에만 | 판정 벤치 — 학습에 쓰지 않는다 |
+| Terminal-Pivot-v1 (단일 스텝) | 31,111 | 있음 | 과제 환경은 들어 있지 않다 |
+
+alpha 에 걸리는 제약:
+- 문맥 128K. TB 궤적의 최대 prompt 는 중앙 107K · p90 183K 다 (Pai `SFT_BENCHMARKS.md`).
+- `harbor_agent` README 는 `truncate_history_thinking: false` 를 요구하고 alpha 규약은 `chat_template_kwargs: null` 이다. Terminus 는 비도구 시나리오라 alpha 템플릿이 이전 think 를 자른다. 다중 턴 토큰 연속성을 이 경로로 확인한 적이 없다 (GATES G3 미실행).
+- NTC SFT 의 시스템 프롬프트와 Harbor 평가 프롬프트의 md5 가 다르다. Gym 이 고정한 Harbor 판의 프롬프트가 어느 쪽인지 미확인.
+
+제공되지 않아 만들어야 하는 것: 레시피 · `harbor_agent` 의 실패 마스킹 · 과제 이미지 빌드 경로 · 학습/검증 분할과 TB · NTC 겹침 검사 · 128K 에 맞춘 턴 수와 타임아웃. SWE 와 달리 "받아서 바로 돌리는" 경로가 아니다.
 
 ## 9. 열린 결정
 
@@ -193,7 +211,7 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 | 6 | 빈 롤아웃 처리 | upstream 수정 여부 확인 → 없으면 본체 패치 (별도 커밋 · 독립 검토) | 스모크 전 |
 | 7 | 세션 단위 적용이 안 될 때 노드 전체 적용 수용 | 인프라 답을 본 뒤 | 인프라 답 |
 | 8 | gpu06 `alpha-eval` 의 리허설 산출물 삭제 | 시험 세션 결과와 대조한 뒤 | 시험 세션 뒤 |
-| 9 | Terminal E2E 환경 · 데이터 | §8 의 조사 결과로 별도 보고 | SWE 뒤 |
+| 9 | Terminal E2E 착수 여부 · 환경 | 제공 경로는 `harbor_agent` 하나이고 레시피 · 이미지 · 실패 마스킹을 만들어야 한다 (§8). SWE 를 먼저 하고 그 뒤에 설계 보고 | SWE 뒤 |
 
 ## 10. 산출물
 
