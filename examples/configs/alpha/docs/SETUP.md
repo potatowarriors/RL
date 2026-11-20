@@ -108,6 +108,15 @@ source nemo_rl_env.sh
 §1 경로는 전부 NFS(`$NRL_ROOT`)라 재설치가 필요 없다. 로컬 venv 를 쓰는 구성이면 venv 만 다시 만든다.
 스크립트를 다시 돌려도 멱등이다. 노드·GPU 쪽 공통 복원은 `project_s/RESTORE_AFTER_REBOOT.md` 가 정본이다.
 
+**Apptainer (SWE · Terminal E2E 샌드박스)** 는 컨테이너 로컬 설치라 세션을 다시 만들면 사라진다. 인프라의 세 설정 (seccomp · AppArmor · `/dev/fuse`) 이 적용된 세션에서, 샌드박스가 뜨는 모든 노드 (main1 · sub1) 에 아래를 다시 실행한다. 설정이 적용되지 않은 세션에서는 설치돼도 `exec` 가 실패한다 ([`E2E_SANDBOX.md`](E2E_SANDBOX.md) §5 · §6).
+
+```bash
+cd /home/work/vidsearch/repos/project_s/NeMo-RL/examples/configs/alpha/tools/apptainer
+./acceptance.sh                         # 0~6 단계: 세션에 설정이 들어왔는지 (Apptainer 없이도 돈다)
+./setup_session.sh --pid-mode bindproc  # 설치 + 우리 쪽 설정. --pid-mode 는 승인된 방식으로
+./acceptance.sh                         # 7 단계 이후: Apptainer 실행
+```
+
 §4 경로(RL 전용 세션)가 재생성된 경우:
 
 - 유지: `NeMo-RL/` 클론·서브모듈·`venvs/`·설치 스크립트 (모두 NFS)
