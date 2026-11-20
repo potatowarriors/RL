@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-20 | τ³ retail 판정기를 Claude 로 바꾸면 사전 검사가 400, 고쳐도 NL 판정 대화의 약 5% 가 `infrastructure_error` 로 빠짐 | 하니스가 `temperature: 0` 을 보내고 (Claude 5.5 계열은 거부) 응답 전체를 `json.loads` 함 (판정 앞에 풀이 문장이 붙으면 실패, 모델 무관) → 판정기는 Sonnet 5.5 + `TAU2_LLM_NL_ASSERTIONS_EXTRA_ARGS='{"temperature":null}'` (결정 71). 파싱 실패 대응은 보류 — 인프라 오류가 0 이 아니면 그 대화를 열어 원인을 확인하고 보고한다 (KNOWN_ISSUES 11-20) |
 | 11-19 | agentic teacher 를 피벗 단독 · LLM 시뮬레이션 E2E 로 8일 진행했으나 전부 기각 | 기준선이 그 능력을 어떤 환경 · 구성으로 학습했는지와 Gym 이 제공하는 환경을 먼저 조사하지 않음 (Ultra 는 혼합 블렌드의 단일 스텝 피벗 + 실행형 `workplace_assistant`, LLM 시뮬레이션은 데이터 생성용) → 새 환경 · 방식 설계 전에 `RL_DATA.md` §7 의 환경 표와 `examples/nemo_gym/` 레시피 · 기준선 보고서를 먼저 본다 (`.claude/rules/alpha.md`, KNOWN_ISSUES 11-19) |
 | 11-18 | terminal 피벗 1 에폭 모델이 TB-2.1 에서 타임아웃 · 반복 · step 수가 함께 줄었는데 통과율은 그대로 | 완료 정답 행의 양의 신호로 완료 선언 문턱이 전역 하강 (완료 1~2 턴 전 선언 29 → 65%) — 반복 감소는 일찍 끝나서 생긴 구성 효과. 종료가 완료 선언 · 타임아웃뿐인 벤치의 행동 지표는 같은 step 구간끼리 비교하고, 피벗 블렌드는 `tools/measure_terminal_tc_shift.py` 로 완료 출력률을 잰다 (KNOWN_ISSUES 11-18) |
 | 11-14 | Gym 단일 스텝 런의 step 이 간헐적으로 30~60분 — 1,024 중 마지막 1 샘플이 수십 분, `turns_per_sample/max` 100 이상 | `</think>` 를 닫지 않은 응답은 메시지가 없어 simple_agent 가 상한 없이 재호출하고 요청이 턴마다 커진다 → `simple_agent` 를 쓰는 agent 마다 `env.nemo_gym.<agent>.responses_api_agents.simple_agent.max_steps: 1`. 새 레시피는 최근 레시피의 가드와 대조하고 첫 step 에서 `turns_per_sample/max` = 1 을 확인 (KNOWN_ISSUES 11-14) |

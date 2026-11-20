@@ -8,6 +8,17 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
+## τ³ retail 을 Claude 판정기로 재면 판정 대화의 약 5% 가 인프라 오류로 빠진다 — 하니스가 temperature 0 을 보내고 응답 전체를 JSON 으로 읽는다 (2026-11-20, 🔶 하니스 대응 보류 — 사용자 결정 71)
+
+- **증상**: (1) 판정기를 `anthropic/claude-opus-5-5` 로 바꾸자 사전 검사 T3 가 400 `temperature is deprecated for this model` (Sonnet 5.5 도 같다). (2) `temperature` 를 비워 T3 를 통과시킨 뒤의 실제 측정 (11-20 retail 114 × 4, 결과 Pai `eval_sft/results/tw_w1_s114_fp32pc0` · `mopd1_s3_iter120_fp32pc0`) 에서 NL 판정이 붙은 대화 160 중 8 · 9 가 `infrastructure_error` — `reward_info.info` 가 `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. 하니스는 이 대화를 지표에서 뺀다 (`Excluding N infrastructure error simulation(s) from metrics`).
+- **원인**: vendored tau2 의 NL-assertion 평가기 (`evaluator_nl_assertions.py`) 가 `DEFAULT_LLM_NL_ASSERTIONS_ARGS` 에 `temperature: 0.0` 을 항상 넣고, 판정 응답 전체를 `json.loads` 로 읽는다. Claude 5.5 계열은 temperature 를 거부하고, 계산 · 개수 세기가 필요한 기대 결과 ("총액 $8,276.23 을 말해야 한다" · "가능한 옵션이 10 개라고 말해야 한다") 에서는 JSON 앞에 풀이 문장을 먼저 쓴다. Sonnet 5.5 를 같은 프롬프트로 직접 부른 표본 (재시도 없음) 에서 2/40 · 5/60 이 같은 실패였고 `response_format: {"type": "json_object"}` 로도 그대로였다. 모델 문제가 아니라 하니스의 엄격한 파싱 문제다.
+- **대응 (현재)**: `TAU2_LLM_NL_ASSERTIONS_EXTRA_ARGS='{"temperature":null}'` 로 temperature 만 뺀다 (하니스 코드는 그대로). 파싱 실패는 **그대로 둔다** — 하니스를 고치는 것 (응답에서 JSON 객체만 뽑아 읽기) 은 측정 방식 변경이라 사용자가 판단을 보류했다. 판정 모델은 Sonnet 5.5 (결정 71).
+- **결과에 미치는 영향**: 11-20 retail 의 하니스 수치 (22.4 → 26.0) 는 실패한 대화를 빼고 계산한 값이고, 과제별 짝 비교 (+3.3 pt) 는 0 점으로 넣었다. 두 모델의 실패 수가 9 대 8 이라 차이에 주는 영향은 0.2 pt 이내. 실패가 특정 과제 (계산 · 개수 세기) 에 몰리므로 그 과제들의 판정이 체계적으로 빠진다.
+- **잘못 보고한 것**: 측정 직후 "Claude 판정 실패 0 건 · 인프라 오류는 판정기와 무관" 이라고 보고했다 — 오류 로그에서 가장 많은 줄 (정답 행동 재생 경고) 만 보고 인프라 오류 대화 자체를 열어 보지 않았다. 판정된 대화 수도 435~437 이 아니라 150 이다. 사용자가 그 보고를 근거로 판정 모델을 고르려 할 때 다시 확인해 바로잡았다.
+- **교훈**: (1) `harness_fail` · `infrastructure_error` 가 0 이 아니면 그 대화를 열어 원인을 확인한 뒤 보고한다 — 로그의 빈도 순 요약으로 단정하지 않는다. (2) 판정기 사전 검사가 쉬운 예제 하나로 통과해도 실제 판정에서 형식이 깨질 수 있다. 판정기를 바꾸면 실제 대화 표본으로 파싱 성공률을 먼저 잰다. (3) 사용자가 비교 · 선택에 쓸 수치는 말하기 전에 원자료에서 다시 센다.
+- **선행 사례**: Pai `run_tau.sh` 주석 (2026-09-27) — Gemini 도 `response_format=json_object` 없이는 판정을 코드 펜스로 감싸 `json.loads` 가 실패해, 판정기별 추가 인자로 막았다. 같은 계열의 문제다.
+- **독립 검증**: 하지 않음 — 원인이 오류 문구와 응답 원문으로 직접 확인된다 (실패한 응답의 머리가 풀이 문장, 꼬리가 올바른 JSON).
+
 ## agentic teacher 단계에서 이미 제공되는 환경 · 레시피를 조사하지 않고 자체 방식으로 진행해 약 8일을 썼다 (2026-11-11 ~ 11-19, 작업 방식의 실수 — 사용자 지적 2026-11-19)
 
 - **무엇을 했나**: 결정 59 (teacher 다섯) 뒤 SWE 피벗 단독 teacher (11-12 ~ 14, 폐기) → terminal 피벗 단독 teacher 두 번 (문자열 채점 `p1` · `p2` 11-13 ~ 16, 논문 방식 `j1` 11-16 ~ 18) → 대화형 도구 사용을 LLM 시뮬레이션 E2E 로 (11-19: 과제 7,783 개 역추출 · 스모크 9 회) 순서로 진행했다. 넷 다 벤치를 올리지 못했거나 보상을 믿을 수 없다는 판정으로 끝났다.
