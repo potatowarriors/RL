@@ -21,6 +21,7 @@ Gym `google_search` 와 다른 점:
    그래도 429 가 오면 `search_rate_limit_max_wait_s` 까지 기다렸다 다시 부른다. 롤아웃 수백 개가 한꺼번에 검색해도 장애로 세지 않는다.
 
 6. `search_credit_budget` 를 주면 서버가 쓴 크레딧이 그 값을 넘기 전에 검색을 멈춘다 (넘친 검색은 장애 `budget_exhausted` 로 세고 마스크).
+   장부는 보수적이다 — 과금 여부를 알 수 없는 실패 (시간 초과 · 5xx · 연결 끊김) 는 쓴 것으로 센다. 과금되지 않는 거절 (4xx) 만 돌려놓는다.
    Tavily 응답에 `usage` 가 없으면 깊이의 정가 (basic 1 · advanced 2) 로 세고 `num_search_usage_missing` 에 남긴다 — 0 으로 읽지 않는다.
 7. `search_backend: none` 은 대조용이다. 도구 · 지시문 · 턴 구조는 그대로 두고 `search` 는 결과 0 건, `browse` 는 본문 없음을 돌려준다
    (Tavily 를 부르지 않고 페이지도 가져오지 않는다). 검색이 준 정보의 몫을 가르는 데 쓴다.
@@ -78,8 +79,8 @@ class AlphaWebSearchMcqaResourcesServerConfig(GoogleSearchResourcesServerConfig)
     max_results: int = 10
     max_result_chars: int = 2000
     exclude_domains: list[str] = Field(default_factory=list)
-    search_max_tries: int = 3  # 5xx · 시간 초과 · 연결 오류에 대한 시도 수
-    search_retry_backoff_s: float = 0.5
+    search_max_tries: int = 6  # 5xx · 시간 초과 · 연결 오류에 대한 시도 수 (대기 1 · 2 · 4 · 8 · 16 초 — 짧은 장애를 넘긴다)
+    search_retry_backoff_s: float = 1.0
     search_timeout_s: float = 30.0
     search_max_per_minute: Optional[float] = None  # 서버 전체의 검색 호출 속도 상한 (없으면 제한하지 않는다)
     search_rate_limit_max_wait_s: float = 120.0  # 429 를 받은 검색 하나가 다시 부르며 기다리는 최대 시간
@@ -173,7 +174,7 @@ def blocked_url_reason(url: str, exclude_domains: tuple[str, ...] = ()) -> Optio
     """가져오면 안 되는 URL 이면 모델에게 보일 사유를 돌려준다. 이름을 푸느라 막힐 수 있다 — 이벤트 루프 밖에서 부른다."""
     try:
         parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
+        host = (parsed.hostname or "").lower().rstrip(".")  # `huggingface.co.` 도 같은 호스트다
     except ValueError:
         return "invalid URL"
     if parsed.scheme not in ("http", "https") or not host:
@@ -241,15 +242,21 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
         return self._session_stats.setdefault(request.session[SESSION_ID_KEY], Counter())
 
     async def _tavily_search(self, query: str, stats: Counter) -> dict:
+        """결과 dict 를 돌려준다 (`_charged` = 장부에 올린 크레딧). 시도마다 정가를 먼저 잡고, 과금되지 않는 거절에서만 돌려놓는다."""
         loop = asyncio.get_running_loop()
+        cost = 2 if self.config.search_depth == "advanced" else 1
+        budget = self.config.search_credit_budget
         failures, rate_hits, rate_deadline = 0, 0, None
         while True:
-            if self._limiter is not None:
-                await self._limiter.wait()
-            client = self._tavily_clients[self._num_search_requests % len(self._tavily_clients)]
-            self._num_search_requests += 1
+            if budget is not None and self._credits_committed + cost > budget:
+                raise SearchBackendError("budget_exhausted", RuntimeError(f"{self._credits_committed} + {cost} > {budget}"))
+            self._credits_committed += cost
             try:
-                return await client.search(
+                if self._limiter is not None:
+                    await self._limiter.wait()
+                client = self._tavily_clients[self._num_search_requests % len(self._tavily_clients)]
+                self._num_search_requests += 1
+                results = await client.search(
                     query,
                     search_depth=self.config.search_depth,
                     max_results=self.config.max_results,
@@ -259,22 +266,33 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
                     timeout=self.config.search_timeout_s,
                 )
             except BadRequestError:
+                self._credits_committed -= cost
                 raise  # 질의 탓 — 모델에게 보이고 장애로 세지 않는다
             except InvalidAPIKeyError as e:
+                self._credits_committed -= cost
                 raise SearchBackendError("invalid_api_key", e) from e
             except ForbiddenError as e:  # 403 · 432 (요금제 한도) · 433 (종량제 한도) — 다시 불러도 같다
+                self._credits_committed -= cost
                 raise SearchBackendError("usage_limit", e) from e
             except UsageLimitExceededError as e:  # 429 분당 한도 — 기다리면 풀린다
+                self._credits_committed -= cost
                 rate_deadline = rate_deadline or loop.time() + self.config.search_rate_limit_max_wait_s
                 if loop.time() >= rate_deadline:
                     raise SearchBackendError("rate_limited", e) from e
                 delay = min(self.config.search_retry_backoff_s * 2 ** min(rate_hits, 6), 30.0)
                 rate_hits += 1
-            except Exception as e:  # 5xx · 시간 초과 · 연결 오류
+            except Exception as e:  # 5xx · 시간 초과 · 연결 오류 — 과금됐을 수 있어 잡아 둔 크레딧을 돌려놓지 않는다
                 failures += 1
                 if failures >= self.config.search_max_tries:
                     raise SearchBackendError("unavailable", e) from e
                 delay = self.config.search_retry_backoff_s * 2 ** (failures - 1)
+            else:
+                reported = (results.get("usage") or {}).get("credits")
+                if reported is None:
+                    stats["search_usage_missing"] += 1
+                    reported = cost
+                self._credits_committed += int(reported) - cost
+                return results | {"_charged": int(reported)}
             stats["search_retries"] += 1
             await asyncio.sleep(delay)
 
@@ -287,28 +305,15 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
             return BaseGetSearchQueryResponse(search_results="Query is too long")
         if self.config.search_backend == "none":
             return BaseGetSearchQueryResponse(search_results=format_search_results({}, self.config.max_result_chars))
-        cost = 2 if self.config.search_depth == "advanced" else 1
         try:
-            if self.config.search_credit_budget is not None and self._credits_committed + cost > self.config.search_credit_budget:
-                raise SearchBackendError("budget_exhausted", RuntimeError(f"{self._credits_committed} + {cost} > {self.config.search_credit_budget}"))
-            self._credits_committed += cost  # 응답 전에 잡아 둔다 — 동시에 들어온 검색이 상한을 함께 넘지 않게
-            try:
-                results = await self._tavily_search(body.query, stats)
-            except BaseException:
-                self._credits_committed -= cost  # 실패한 요청은 크레딧을 쓰지 않는다
-                raise
+            results = await self._tavily_search(body.query, stats)
         except BadRequestError:
             return BaseGetSearchQueryResponse(search_results="Error: the search engine rejected this query")
         except SearchBackendError as e:
             stats["search_errors"] += 1
             print(f"alpha_web_search_mcqa: 검색 백엔드 실패 — {e}")
             return BaseGetSearchQueryResponse(search_results=f"Error: search is unavailable ({e.kind})")
-        reported = (results.get("usage") or {}).get("credits")
-        if reported is None:
-            stats["search_usage_missing"] += 1
-            reported = cost
-        self._credits_committed += int(reported) - cost
-        stats["search_credits"] += int(reported)
+        stats["search_credits"] += results["_charged"]
         return BaseGetSearchQueryResponse(search_results=format_search_results(results, self.config.max_result_chars))
 
     def _browse_sync(self, url: str) -> tuple[bool, str]:

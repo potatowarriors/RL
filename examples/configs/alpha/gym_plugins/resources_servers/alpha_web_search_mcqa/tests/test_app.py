@@ -180,6 +180,7 @@ def test_excluded_domains_apply_to_browse_urls():
     excluded = ("huggingface.co", "hf.co")
     assert blocked_url_reason("https://huggingface.co/datasets/nvidia/x", excluded) == "URL is in excluded domains"
     assert blocked_url_reason("https://cdn-lfs.hf.co/x", excluded) == "URL is in excluded domains"
+    assert blocked_url_reason("https://huggingface.co./datasets/x", excluded) == "URL is in excluded domains"  # 끝의 점
     assert blocked_url_reason("https://nothuggingface.co/x", excluded) is None
     assert blocked_url_reason("https://en.wikipedia.org/wiki/X", excluded) is None
 
@@ -295,6 +296,7 @@ def test_transient_failures_are_retried():
     assert run(server.search(session(), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
     assert len(fake.calls) == 3
     always = FakeTavily(RuntimeError("503 " + SECRET))
+    assert AlphaWebSearchMcqaResourcesServerConfig.model_fields["search_max_tries"].default == 6
     server2 = make_server(always, search_max_tries=3)
     assert run(server2.search(session(), BaseSearchQueryRequest(query="q"))).search_results == "Error: search is unavailable (unavailable)"
     assert len(always.calls) == 3
@@ -370,12 +372,26 @@ def test_credit_budget_stops_searches_before_overspending_even_when_concurrent()
     assert run(server2.search(session(), BaseSearchQueryRequest(query="q"))).search_results.endswith("(budget_exhausted)") and len(advanced.calls) == 1
 
 
-def test_failed_search_does_not_consume_budget():
-    fake = FakeTavily(ForbiddenError("limit"), {"results": [HIT], "usage": {"credits": 1}})
-    server = make_server(fake, search_credit_budget=1)
-    run(server.search(session("a"), BaseSearchQueryRequest(query="q")))
-    assert server._credits_committed == 0
-    assert run(server.search(session("b"), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
+def test_budget_ledger_releases_uncharged_rejections_and_keeps_unknown_failures():
+    ok = {"results": [HIT], "usage": {"credits": 1}}
+    for rejection in (ForbiddenError("limit"), BadRequestError("bad"), InvalidAPIKeyError("key")):  # 과금되지 않는 거절
+        fake = FakeTavily(rejection, ok)
+        server = make_server(fake, search_credit_budget=1)
+        run(server.search(session("a"), BaseSearchQueryRequest(query="q")))
+        assert server._credits_committed == 0
+        assert run(server.search(session("b"), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
+    rate = make_server(FakeTavily(UsageLimitExceededError("429"), UsageLimitExceededError("429"), ok), search_credit_budget=1)
+    assert run(rate.search(session(), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results") and rate._credits_committed == 1
+
+    # 시간 초과 · 5xx 는 과금됐을 수 있다 — 장부에서 빼지 않는다. 그래서 재시도가 상한을 넘겨 쓰지 못한다.
+    flaky = FakeTavily(TimeoutError("t"), RuntimeError("503"), ok)
+    server = make_server(flaky, search_credit_budget=10)
+    assert run(server.search(session(), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
+    vr = run(server.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message("x")))))
+    assert (server._credits_committed, vr.num_search_credits, vr.num_search_retries) == (3, 1, 2)
+    tight = FakeTavily(TimeoutError("t"), ok)
+    server2 = make_server(tight, search_credit_budget=1)
+    assert run(server2.search(session(), BaseSearchQueryRequest(query="q"))).search_results.endswith("(budget_exhausted)") and len(tight.calls) == 1
 
 
 def test_missing_usage_is_counted_at_list_price_not_zero():

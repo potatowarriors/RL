@@ -12,9 +12,10 @@ alpha_web_search_mcqa_resources_server:
       max_result_chars: 2000
       search_backend: tavily     # none = 대조용 (검색 결과 0 건 · browse 본문 없음)
       # 이 데이터셋이 공개된 곳 — 질문을 그대로 검색하면 정답이 실린 행이 걸릴 수 있다. NVIDIA 의 제외 목록은 내부 파일이라 없다.
-      exclude_domains: [huggingface.co, hf.co]
+      exclude_domains: [huggingface.co, hf.co, hf-mirror.com]
       search_credit_budget: null # 서버가 쓸 크레딧 상한
-      search_max_tries: 3
+      search_max_tries: 6            # 5xx · 시간 초과 재시도 (대기 1 · 2 · 4 · 8 · 16 초)
+      search_retry_backoff_s: 1.0
       search_max_per_minute: null   # Tavily 분당 한도: 개발 키 100 · 운영 키 1,000 (유료 요금제 또는 종량제). 키에 맞춰 준다
       mask_on_search_error: true
       num_workers: 1             # 세션 통계가 프로세스 메모리에 있다

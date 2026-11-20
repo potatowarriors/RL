@@ -13,10 +13,14 @@ tools − notools 는 지시문 · 턴 수 · 총 생성량이 함께 달라서 
   self-test                                                      변조한 합성 결과가 겨냥한 검사에서 걸리는지 본다
 
 analyze 는 먼저 유효성 (V1~V7) 을 본다. 하나라도 FAIL 이면 수치를 결론으로 쓰지 않는다 (종료 코드 1). 값이 없는 키는 0 으로 읽지 않고 FAIL 이다.
-판정 규칙 (실행 전에 고정):
-  "검색이 기여한다" = tools − placebo 의 문항별 짝 차 부트스트랩 95% 구간 하한 > 0 이고, 끝까지 답한 롤아웃만으로 다시 낸 구간 하한도 > 0.
-  두 구간의 결론이 다르면 "판정 보류" (잘림 · 스텝 상한이 차이를 만들었을 수 있다). 검색 성공이 한 번도 없으면 "도구 미사용 — 판정 불가".
-  구간이 0 을 품으면 "구분 안 됨" 이지 "기여 없음" 이 아니다. 48 문항 × 4 의 구간 반폭은 약 0.08~0.09 — 80% 로 잡는 차이는 약 0.15 다.
+검색 백엔드 장애 · 크레딧 장부 어긋남은 행의 5% (INFRA_TOLERANCE — 인프라 허용치, 효과 판정과 무관한 상수) 까지는 그 롤아웃을 빼고 진행한다.
+판정 규칙 (실행 전에 고정). "검색이 기여한다" 는 아래 네 구간의 95% 하한이 모두 0 보다 클 때만 낸다:
+  ① tools − placebo (주 대조)  ② 끝까지 답한 롤아웃만으로 다시 낸 것 (잘림 · 스텝 상한이 만든 차이를 가른다)
+  ③ 질문 원문이 도구 결과에 그대로 나온 롤아웃을 뺀 것 (답안지를 찾은 효과를 가른다)  ④ tools − notools (도구 없이도 되는 수준을 넘는가)
+  ①이 양인데 ②~④ 중 하나라도 아니면 "판정 보류". placebo − notools 의 상한 < 0 이면 placebo 가 모델을 망가뜨린 것이라 "판정 보류".
+  실패 뒤 다시 뽑힌 롤아웃이 5% 를 넘으면 "판정 보류". 검색 성공이 한 번도 없으면 "도구 미사용 — 판정 불가".
+  구간이 0 을 품으면 "구분 안 됨" 이지 "기여 없음" 이 아니다. 48 문항 × 4 의 구간 반폭은 약 0.08~0.11 — 대조 하나를 80% 로 잡는 차이가 약 0.15 이고,
+  네 조건을 함께 요구하므로 실제 검출력은 그보다 낮다. 이 측정은 양성 판정에 엄격하다 (거짓 양성을 피하는 쪽).
 종료 코드: 0 = 유효, 1 = 유효성 FAIL, 2 = 자가 시험 실패.
 """
 
@@ -48,6 +52,7 @@ REQUIRED_KEYS = ("reward", "response", "responses_create_params", "expected_answ
                  "_ng_task_index", "_ng_rollout_index", *COUNT_KEYS)
 EPOCH_ROLLOUTS = 2929 * 16
 USD_PER_CREDIT = 0.008  # Tavily 종량제 (결제 전 확인 필요)
+INFRA_TOLERANCE = 0.05  # 인프라 탓 행 (백엔드 장애 · 장부 어긋남 · 다시 뽑힘) 의 허용 비율
 LEAK_SHINGLE = 10  # 질문 본문의 연속 단어 수 — 이만큼이 도구 결과에 그대로 나오면 질문 자체가 실린 페이지로 본다
 
 
@@ -133,14 +138,22 @@ def normalize_option(parsed):
 
 
 def end_state(row):
-    """message = 끝까지 답함 · incomplete = 생성 상한 등 · step_cap = 스텝 상한 (마지막이 도구 결과면 그 결과를 모델이 못 봤다) · other."""
+    """message = 끝까지 답함 · generation_cap = 생성 상한에 잘림 · context_overflow = 문맥이 차서 모델이 아무것도 못 냄 (Gym 이 빈 응답으로 바꾼다)
+    · step_cap = 스텝 상한 (마지막이 도구 결과면 그 결과를 모델이 못 봤다) · other."""
     output = row["response"]["output"]
     last = output[-1] if output else {}
     if row["response"].get("incomplete_details"):
-        return "incomplete"
+        return "context_overflow" if last.get("type") in ("function_call_output", None) else "generation_cap"
     if last.get("type") == "message" and last.get("role") == "assistant":
         return "message"
     return "step_cap" if last.get("type") in ("function_call_output", "function_call", "reasoning") else "other"
+
+
+END_STATES = ("message", "generation_cap", "context_overflow", "step_cap", "other")
+
+
+def backend_failed(row):
+    return bool(row["num_search_errors"] or row.get("instance_config") or any(kind == "backend_error" for _, kind, _, _ in tool_events(row)))
 
 
 def tool_events(row):
@@ -209,7 +222,7 @@ def row_problems(r, arm, search_cost):
         problems.append("V2 placebo 인데 검색 결과 · 본문 · 크레딧이 있음")
     if handled["search"] != r["num_search_calls"] or handled["browse"] != r["num_browse_calls"]:
         problems.append("V3 세션 통계 ≠ 대화 기록")
-    if r["num_search_errors"] or r.get("instance_config") or kinds["search:backend_error"]:
+    if backend_failed(r):
         problems.append("V4 검색 백엔드 장애")
     if rescore(r)[0] != r["reward"]:
         problems.append("V5 보상 재계산 불일치")
@@ -241,24 +254,40 @@ def validity(sample, arms, repeats, search_cost=1):
             found["V1"].append(f"{arm}: (문항, 반복) 조합이 {len(expected)} 개와 다름 (고유 {len(ids)} · 중복 {sum(n > 1 for n in ids.values())})")
         if any(r["reward"] not in (0.0, 1.0) for r in rows):
             found["V1"].append(f"{arm}: 보상이 0 · 1 이 아닌 행")
+    notes = collections.defaultdict(list)
     if not found["V1"]:  # 아래 검사는 키가 있어야 한다
         for arm, rows in arms.items():
             per_check = collections.Counter()
             for r in rows:
-                for p in row_problems(r, arm, search_cost):
+                for p in set(row_problems(r, arm, search_cost)):
                     per_check[tuple(p.split(" ", 1))] += 1
             for (check, text), n in sorted(per_check.items()):
-                found[check].append(f"{arm}: {text} {n} 행")
+                line = f"{arm}: {text} {n} 행 ({n / len(rows):.1%})"
+                # 인프라 탓 행은 허용치까지 그 롤아웃을 빼고 진행한다 (한 번뿐인 예산에서 한 행 때문에 전부 버리지 않으려고)
+                (notes if check in ("V4", "V7") and n / len(rows) <= INFRA_TOLERANCE else found)[check].append(line)
             bad = sum(r["expected_answer"] != sample[r["_ng_task_index"]]["expected_answer"] or
                       r["responses_create_params"]["input"] != sample[r["_ng_task_index"]]["responses_create_params"]["input"] for r in rows)
             if bad:
                 found["V6"].append(f"{arm}: 표본의 같은 번호 문항과 질문 · 정답이 다른 행 {bad}")
-        kinds = collections.Counter(f"{name}:{kind}" for r in arms["tools"] for name, kind, _, _ in tool_events(r))
-        calls = sum(n for k, n in kinds.items() if k.startswith("search:"))
-        if calls and not kinds["search:ok"]:
-            found["V7"].append(f"tools: 검색 호출 {calls} 회 중 결과가 있는 검색 0 회 (거절 {kinds['search:rejected']} · 빈 결과 {kinds['search:ok_empty']})")
-    return [(f"{v} {names[v]}", not found[v], "; ".join(found[v][:4]) + (f" … 외 {len(found[v]) - 4}" if len(found[v]) > 4 else ""))
-            for v in names if v == "V1" or not found["V1"]]
+        kinds = collections.Counter(f"{name}:{kind}" for r in arms["tools"] for name, kind, reached, _ in tool_events(r) if reached)
+        searches = sum(n for k, n in kinds.items() if k.startswith("search:"))
+        browses = sum(n for k, n in kinds.items() if k.startswith("browse:"))
+        answered = kinds["search:ok"] + kinds["search:ok_empty"]
+        if searches and not kinds["search:ok"]:
+            found["V7"].append(f"tools: 검색 {searches} 회 중 결과가 있는 검색 0 회")
+        if searches and answered / searches < 0.8:
+            found["V7"].append(f"tools: 검색 엔진이 답한 검색 {answered}/{searches} ({answered / searches:.1%}) < 80%")
+        if searches and kinds["search:rejected"] / searches > 0.1:
+            found["V7"].append(f"tools: 검색 엔진이 거절한 검색 {kinds['search:rejected']}/{searches} > 10%")
+        if browses >= 10 and not kinds["browse:ok"]:
+            found["V7"].append(f"tools: browse {browses} 회 중 본문을 얻은 것 0 회")
+    out = []
+    for v in names:
+        if v != "V1" and found["V1"]:
+            continue
+        lines = found[v] or [f"주의 (허용치 {INFRA_TOLERANCE:.0%} 안 — 그 롤아웃을 빼고 진행): " + "; ".join(notes[v])] * bool(notes[v])
+        out.append((f"{v} {names[v]}", not found[v], "; ".join(lines[:4]) + (f" … 외 {len(lines) - 4}" if len(lines) > 4 else "")))
+    return out
 
 
 def smoke_check(path, arm, search_cost):
@@ -274,6 +303,10 @@ def smoke_check(path, arm, search_cost):
     calls = sum(n for k, n in kinds.items() if k.startswith("search:"))
     if arm == "tools" and calls and not kinds["search:ok"]:
         problems.append("V7 검색을 불렀는데 결과가 있는 검색이 없다")
+    if arm == "tools" and calls and kinds["search:rejected"] / calls > 0.5:
+        problems.append("V7 검색의 절반 넘게 검색 엔진이 거절했다")
+    if arm == "tools" and sum(n for k, n in kinds.items() if k.startswith("browse:")) >= 3 and not kinds["browse:ok"]:
+        problems.append("V7 browse 를 3 회 이상 불렀는데 본문을 얻은 것이 없다")
     if complete and not ends["message"]:
         problems.append("끝까지 답한 행이 하나도 없다 (생성 상한 · 스텝 상한 · 사고를 닫지 않음)")
     print(f"smoke-check {arm}: 행 {len(rows)} · 보상 합 {sum(r.get('reward', 0) for r in rows)} · 끝 상태 {dict(ends)} · 도구 결과 {dict(kinds)} · "
@@ -315,15 +348,26 @@ def sign(ci):
     return None if ci["lo"] is None else 1 if ci["lo"] > 0 else -1 if ci["hi"] < 0 else 0
 
 
-def verdict(primary, completed_only, search_success_share):
-    if not search_success_share:
+def verdict(m):
+    """판정 규칙 (모듈 설명) 을 수치 dict 에 적용한다."""
+    if not m["usage_tools"]["rollouts_with_successful_search"]:
         return "도구 미사용 — 판정 불가"
-    a, b = sign(primary), sign(completed_only)
-    if a is None or b is None:
-        return "판정 보류 (끝까지 답한 롤아웃이 부족해 다시 낼 수 없다)"
-    if a != b:
-        return "판정 보류 (잘림 · 스텝 상한 롤아웃을 빼면 결론이 달라진다)"
-    return {1: "검색이 기여한다", -1: "검색이 깎는다", 0: "구분 안 됨"}[a]
+    conditions = {"끝까지 답한 롤아웃만": m["primary_completed_only"], "누출 롤아웃 제외": m["leak"]["primary_without_leaked"],
+                  "도구 없음 대비": m["tools_minus_notools"]}
+    primary = sign(m["primary_tools_minus_placebo"])
+    if primary is None:
+        return "판정 보류 (주 대조를 낼 수 없다)"
+    redrawn = [f"{arm} {share:.1%}" for arm, share in m["redrawn_share"].items() if arm in TOOL_ARMS and share > INFRA_TOLERANCE]
+    if redrawn:
+        return f"판정 보류 (실패 뒤 다시 뽑힌 롤아웃이 많다: {', '.join(redrawn)})"
+    if primary == 1:
+        holds = [name for name, ci in conditions.items() if sign(ci) != 1]
+        if m["placebo_minus_notools"]["hi"] is not None and m["placebo_minus_notools"]["hi"] < 0:
+            holds.append("placebo 가 도구 없음보다 낮다 — 빈 결과가 모델을 망가뜨렸다")
+        return "검색이 기여한다" if not holds else f"판정 보류 (주 대조는 양이나: {' · '.join(holds)})"
+    if primary == -1:
+        return "검색이 깎는다" if sign(m["primary_completed_only"]) == -1 else "판정 보류 (주 대조는 음이나 끝까지 답한 롤아웃만으로는 아니다)"
+    return "구분 안 됨"
 
 
 def pct(values, q):
@@ -331,11 +375,14 @@ def pct(values, q):
     return values[min(len(values) - 1, int(q * len(values)))]
 
 
-def metrics(sample, arms, repeats):
+def metrics(sample, arms, repeats, redrawn=None):
     n = len(sample)
-    reward = {arm: by_task(rows, lambda r: r["reward"], n) for arm, rows in arms.items()}
-    done = {arm: by_task(rows, lambda r: r["reward"], n, keep=lambda r: end_state(r) == "message") for arm, rows in arms.items()}
-    out = {"n_tasks": n, "chance_floor": statistics.mean(1 / n_options(r) for r in sample)}
+    usable = lambda r: not backend_failed(r)  # noqa: E731 — 백엔드 장애 롤아웃은 학습에서도 손실에서 빠진다
+    reward = {arm: by_task(rows, lambda r: r["reward"], n, keep=usable) for arm, rows in arms.items()}
+    done = {arm: by_task(rows, lambda r: r["reward"], n, keep=lambda r: usable(r) and end_state(r) == "message") for arm, rows in arms.items()}
+    out = {"n_tasks": n, "chance_floor": statistics.mean(1 / n_options(r) for r in sample),
+           "excluded_backend_failed": {arm: sum(not usable(r) for r in rows) for arm, rows in arms.items()},
+           "redrawn_share": {arm: (redrawn or {}).get(arm, 0) / len(rows) for arm, rows in arms.items()}}
     for arm in arms:
         m, se = mean_se(reward[arm])
         out[f"reward_{arm}"] = {"mean": m, "se": se}
@@ -348,12 +395,14 @@ def metrics(sample, arms, repeats):
     leaked = {(r["_ng_task_index"], r["_ng_rollout_index"]) for r in arms["tools"] if question_leaked(r)}
     out["leak"] = {"rollouts_with_question_text_in_results": len(leaked) / len(arms["tools"]),
                    "primary_without_leaked": paired_ci(
-                       by_task(arms["tools"], lambda r: r["reward"], n, keep=lambda r: (r["_ng_task_index"], r["_ng_rollout_index"]) not in leaked),
+                       by_task(arms["tools"], lambda r: r["reward"], n,
+                               keep=lambda r: usable(r) and (r["_ng_task_index"], r["_ng_rollout_index"]) not in leaked),
                        reward["placebo"])}
     out["by_difficulty"] = {}
     for level in sorted({r["task_difficulty_qwen3_32b_avg_8"] for r in sample}):
         idx = [i for i, r in enumerate(sample) if r["task_difficulty_qwen3_32b_avg_8"] == level]
-        out["by_difficulty"][str(level)] = {arm: statistics.mean(statistics.mean(reward[arm][i]) for i in idx) for arm in arms}
+        level_means = {arm: [statistics.mean(reward[arm][i]) for i in idx if reward[arm][i]] for arm in arms}  # 쓸 롤아웃이 없는 문항은 뺀다
+        out["by_difficulty"][str(level)] = {arm: statistics.mean(v) if v else None for arm, v in level_means.items()}
 
     for arm in TOOL_ARMS:
         rows = arms[arm]
@@ -384,7 +433,7 @@ def metrics(sample, arms, repeats):
         have = [u for u in usage if u.get("input_tokens") is not None and u.get("output_tokens") is not None]
         out[f"answers_{arm}"] = {
             "answer_found": statistics.mean(p is not None for p in parsed),
-            "end_states": {k: ends[k] / len(rows) for k in ("message", "incomplete", "step_cap", "other")},
+            "end_states": {k: ends[k] / len(rows) for k in END_STATES},
             "format_only_miss": statistics.mean(r["reward"] == 0 and normalize_option(p) == r["expected_answer"] for r, p in zip(rows, parsed)),
             "usage_missing_rows": len(rows) - len(have),  # 없는 값은 평균에 넣지 않는다
             "input_tokens_sum_mean": statistics.mean(u["input_tokens"] for u in have) if have else None,
@@ -392,7 +441,7 @@ def metrics(sample, arms, repeats):
             "output_tokens_sum_mean": statistics.mean(u["output_tokens"] for u in have) if have else None,
             "output_tokens_sum_max": max(u["output_tokens"] for u in have) if have else None,
         }
-    out["verdict"] = verdict(out["primary_tools_minus_placebo"], out["primary_completed_only"], out["usage_tools"]["rollouts_with_successful_search"])
+    out["verdict"] = verdict(out)
     return out
 
 
@@ -403,24 +452,28 @@ def fmt_ci(ci):
 def analyze(out_dir, paths, repeats, search_cost, json_path):
     sample = read_jsonl(Path(out_dir) / "sample.jsonl")
     arms = {arm: read_jsonl(paths[arm]) for arm in ARMS}
+    sidecars = {arm: Path(paths[arm]).with_name(Path(paths[arm]).stem + "_failures.jsonl") for arm in ARMS}
+    redrawn = {arm: len(read_jsonl(f)) if f.exists() else 0 for arm, f in sidecars.items()}  # 실패 기록 1 줄 = 다시 뽑힌 롤아웃 1 개
     checks = validity(sample, arms, repeats, search_cost)
     for name, ok, detail in checks:
-        print(f"{'PASS' if ok else 'FAIL'}  {name}{'' if ok else ' — ' + detail}")
+        print(f"{'PASS' if ok else 'FAIL'}  {name}{' — ' + detail if detail else ''}")
     valid = all(ok for _, ok, _ in checks)
     result = {"valid": valid, "checks": [{"name": n, "pass": ok, "detail": d} for n, ok, d in checks]}
     if all(ok for name, ok, _ in checks if name[:2] in ("V1", "V6")):  # 행이 온전하면 수치는 보여 준다 — 유효성 FAIL 이면 결론으로 쓰지 않는다
-        m = metrics(sample, arms, repeats)
+        m = metrics(sample, arms, repeats, redrawn)
         result["metrics"] = m
-        print("\n보상  " + " · ".join(f"{arm} {m[f'reward_{arm}']['mean']:.3f} ± {m[f'reward_{arm}']['se']:.3f}" for arm in ARMS) +
+        print(f"\n뺀 롤아웃 (백엔드 장애): {m['excluded_backend_failed']} · 실패 뒤 다시 뽑힌 롤아웃: {redrawn}")
+        print("보상  " + " · ".join(f"{arm} {m[f'reward_{arm}']['mean']:.3f} ± {m[f'reward_{arm}']['se']:.3f}" for arm in ARMS) +
               f" · 무작위 {m['chance_floor']:.3f}  (문항 {m['n_tasks']} × 반복 {repeats}, ± 는 문항 단위 표준오차)")
-        print(f"주 대조  tools − placebo = {fmt_ci(m['primary_tools_minus_placebo'])}")
-        print(f"  끝까지 답한 롤아웃만 = {fmt_ci(m['primary_completed_only'])}")
-        print(f"  질문 원문이 결과에 나온 롤아웃 ({m['leak']['rollouts_with_question_text_in_results']:.1%}) 을 뺀 것 = {fmt_ci(m['leak']['primary_without_leaked'])}")
+        print(f"① 주 대조  tools − placebo = {fmt_ci(m['primary_tools_minus_placebo'])}")
+        print(f"② 끝까지 답한 롤아웃만 = {fmt_ci(m['primary_completed_only'])}")
+        print(f"③ 질문 원문이 결과에 나온 롤아웃 ({m['leak']['rollouts_with_question_text_in_results']:.1%}) 을 뺀 것 = {fmt_ci(m['leak']['primary_without_leaked'])}")
+        print(f"④ tools − notools = {fmt_ci(m['tools_minus_notools'])}  (지시문 · 턴 수 · 총 생성량이 함께 다르다 — 단독으로는 검색의 기여가 아니다)")
+        print(f"   placebo − notools = {fmt_ci(m['placebo_minus_notools'])}  (상한 < 0 이면 빈 결과가 모델을 망가뜨린 것)")
         print(f"  → 판정: {m['verdict']}")
-        print(f"서술용  tools − notools = {fmt_ci(m['tools_minus_notools'])} · placebo − notools = {fmt_ci(m['placebo_minus_notools'])}"
-              " (지시문 · 턴 수 · 총 생성량이 함께 다르다)")
         print("잡음 (같은 갈래의 반복 앞 절반 − 뒤 절반): " + " · ".join(f"{arm} {fmt_ci(m[f'noise_aa_{arm}'])}" for arm in ARMS))
-        print("난이도 표지별: " + " · ".join(f"{k}: " + " / ".join(f"{v[arm]:.3f}" for arm in ARMS) for k, v in m["by_difficulty"].items()) +
+        print("난이도 표지별: " + " · ".join(f"{k}: " + " / ".join("값 없음" if v[arm] is None else f"{v[arm]:.3f}" for arm in ARMS)
+                                         for k, v in m["by_difficulty"].items()) +
               f"  ({' / '.join(ARMS)})")
         for arm in TOOL_ARMS:
             u = m[f"usage_{arm}"]
@@ -439,8 +492,8 @@ def analyze(out_dir, paths, repeats, search_cost, json_path):
             tokens = "usage 없음" if a["input_tokens_sum_mean"] is None else (
                 f"입력 토큰 합 평균 {a['input_tokens_sum_mean']:,.0f} (최대 {a['input_tokens_sum_max']:,}) · 출력 토큰 합 평균 "
                 f"{a['output_tokens_sum_mean']:,.0f} (최대 {a['output_tokens_sum_max']:,})")
-            print(f"[{arm}] 답 찾음 {a['answer_found']:.1%} · 끝 상태: 답함 {e['message']:.1%} / 생성 상한 등 {e['incomplete']:.1%} / 스텝 상한 {e['step_cap']:.1%}"
-                  f" / 기타 {e['other']:.1%} · 형식만 틀린 0 점 {a['format_only_miss']:.1%} · {tokens} · usage 없는 행 {a['usage_missing_rows']}")
+            print(f"[{arm}] 답 찾음 {a['answer_found']:.1%} · 끝 상태: 답함 {e['message']:.1%} / 생성 상한 {e['generation_cap']:.1%} / 문맥 초과 {e['context_overflow']:.1%}"
+                  f" / 스텝 상한 {e['step_cap']:.1%} / 기타 {e['other']:.1%} · 형식만 틀린 0 점 {a['format_only_miss']:.1%} · {tokens} · usage 없는 행 {a['usage_missing_rows']}")
     print("\n유효성:", "PASS" if valid else "FAIL — 수치를 결론으로 쓰지 않는다")
     if json_path:
         Path(json_path).write_text(json.dumps(result, ensure_ascii=False, indent=1))
@@ -532,11 +585,59 @@ def self_test():
             problems.append(name)
 
     # 판정 규칙: 유효성은 통과하지만 결론을 내면 안 되는 경우
-    def judged(mutate):
+    def judged(mutate, redrawn=None):
         sample, arms = _synthetic(n_tasks=12, repeats=4)
         mutate(sample, arms)
         bad = {name[:2] for name, ok, _ in validity(sample, arms, 4) if not ok}
-        return bad, metrics(sample, arms, 4)
+        return bad, metrics(sample, arms, 4, redrawn)
+
+    def set_reward(r, correct):
+        letter = r["expected_answer"] if correct else "ABCD"[("ABCD".index(r["expected_answer"]) + 1) % 4]
+        r["response"]["output"][-1] = _message(letter)
+        r.update(reward=1.0 if correct else 0.0, parsed_option=letter)
+
+    def placebo_damaged(s, a):  # tools 와 notools 는 같은 실력, placebo 만 빈 결과에 포기 (상자 없는 답) — 검색 내용의 몫이 아니다
+        for r in a["tools"] + a["notools"]:
+            set_reward(r, r["_ng_task_index"] % 2 == 0)
+        for r in a["placebo"]:
+            set_reward(r, False)
+            r["response"]["output"][-1] = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I could not find it."}]}
+            r.update(answer_found=False, parsed_option="")
+
+    def leak_only(s, a):  # 검색이 도운 것은 질문 원문 (과 정답) 이 실린 페이지가 걸린 문항뿐
+        for r in a["placebo"] + a["notools"]:
+            set_reward(r, False)
+        for r in a["tools"]:
+            leaked = r["_ng_task_index"] < 6
+            set_reward(r, leaked)
+            if leaked:
+                stem = r["responses_create_params"]["input"].split("\n")[0]
+                r["response"]["output"][1]["output"] = json.dumps({"search_results": f"Search Results\n==============\n[1] T (a.org)\n    URL: https://a.org\n    Summary: {stem} Answer: A\n\n"})
+
+    def search_mostly_rejected(s, a):
+        for r in a["tools"][1:]:
+            r["response"]["output"][1]["output"] = json.dumps({"search_results": "Error: the search engine rejected this query"})
+            r["num_search_credits"] = 0
+
+    def browse_dead(s, a):
+        for r in a["tools"]:
+            r["response"]["output"][3]["output"] = json.dumps({"page_content": "No HTML found"})
+            r["num_browse_errors"] = 1
+
+    def backend_failed_rows(k):
+        def mutate(s, a):
+            for r in a["tools"][:k]:
+                r.update(num_search_errors=1, instance_config={"mask_sample": True}, reward=0.0)
+                r["response"]["output"][-1] = _message("Z")
+        return mutate
+
+    def overflow_and_cap(s, a):
+        a["tools"][0]["response"].update(incomplete_details={"reason": "max_output_tokens"})
+        a["tools"][0]["response"]["output"].pop()                     # 마지막이 도구 결과 = 모델이 아무것도 못 냄
+        a["tools"][0]["reward"] = 0.0
+        a["tools"][1]["response"].update(incomplete_details={"reason": "max_output_tokens"})
+        a["tools"][1]["response"]["output"][-1] = {"type": "reasoning", "summary": []}
+        a["tools"][1]["reward"] = 0.0
 
     def no_tool_use(s, a):  # tools 갈래가 도구를 한 번도 안 불렀는데 보상만 높다
         for r in a["tools"]:
@@ -571,6 +672,17 @@ def self_test():
         "판정: 도구 호출 0 회인데 보상 차이": (judged(no_tool_use), lambda bad, m: not bad and m["verdict"].startswith("도구 미사용")),
         "판정: placebo 만 잘림": (judged(placebo_truncated), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")),
         "판정: 검색 갈래가 뚜렷이 높음": (judged(clear_win), lambda bad, m: not bad and m["verdict"] == "검색이 기여한다"),
+        "판정: placebo 만 망가짐 (tools = notools)": (judged(placebo_damaged), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")
+                                             and sign(m["primary_tools_minus_placebo"]) == 1),
+        "판정: 누출된 문항에서만 효과": (judged(leak_only), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")
+                               and sign(m["primary_tools_minus_placebo"]) == 1),
+        "판정: 다시 뽑힌 롤아웃이 많음": (judged(clear_win, redrawn={"tools": 6}), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")),
+        "유효성: 검색이 거의 다 거절": (judged(search_mostly_rejected), lambda bad, m: "V7" in bad),
+        "유효성: browse 가 전부 실패": (judged(browse_dead), lambda bad, m: "V7" in bad),
+        "유효성: 백엔드 장애 1 행 (2%) 은 빼고 진행": (judged(backend_failed_rows(1)), lambda bad, m: not bad and m["excluded_backend_failed"]["tools"] == 1),
+        "유효성: 백엔드 장애 10 행 (21%) 은 FAIL": (judged(backend_failed_rows(10)), lambda bad, m: "V4" in bad),
+        "끝 상태: 문맥 초과와 생성 상한을 가른다": (judged(overflow_and_cap), lambda bad, m: abs(m["answers_tools"]["end_states"]["context_overflow"] - 1 / 48) < 1e-9
+                                    and abs(m["answers_tools"]["end_states"]["generation_cap"] - 1 / 48) < 1e-9),
         "잡음 추정이 파일 순서와 무관": (judged(shuffled), lambda bad, m: not bad and m["noise_aa_tools"] == base["noise_aa_tools"]
                                 and m["primary_tools_minus_placebo"] == base["primary_tools_minus_placebo"]),
         "질문 원문 누출 표시": (judged(leak), lambda bad, m: m["leak"]["rollouts_with_question_text_in_results"] == 1.0),
