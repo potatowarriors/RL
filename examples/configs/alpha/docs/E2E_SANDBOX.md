@@ -16,7 +16,7 @@
 | 요청 사양 검증 | 별도 Docker 호스트 리허설 2회 + 독립 검증 2회, 재판정 = 확인 (§4) |
 | 시험 세션 수용 시험 | 대기 — `tools/apptainer/acceptance.sh` (지금의 막힌 세션에서 5 단계 FAIL 을 보고함) |
 | 우리 쪽 Apptainer 설정 | 후보 측정 완료, 선택은 승인 대기 (§5) |
-| 태스크 이미지 → `.sif` | **지금 세션에서도 변환된다** (실측 3건). 도구 준비됨, 대량 변환은 승인 대기 (§7.2) |
+| 태스크 이미지 → `.sif` | **변환 중 — Super `swe2` 1,444 개** (사용자 승인 2026-11-20). 파일럿 40/40 PASS, 본 변환 기동 승인 대기 (§7.2) |
 | SWE E2E 레시피 | 제공 경로 · 프론티어 조사 완료, 설정 결정 대기 (§7) |
 | Terminal E2E | 제공 경로 조사 완료 — 환경은 `harbor_agent` 하나, 레시피 · 이미지 · 실패 마스킹은 만들어야 함 (§8) |
 
@@ -143,6 +143,10 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 - **변환은 지금 세션에서도 된다** — `apptainer build` 는 namespace 를 쓰지 않는다. `$NRL_ROOT/apptainer_test/` 의 1.5.5 로 실측: R2E-Gym 42 s · 0.56 GB, SWE-rebench-V2 78 s · 0.43 GB, SWE-Gym 115 s · 1.1 GB (`sif_samples/`).
 - 도구 `tools/apptainer/build_sifs.py`: 블렌드가 쓰는 행만 받고, Gym 이 찾는 이름으로 저장하고, 이어받고, 풀 속도를 제한한다. 이름 검산은 두 블렌드 9,234 개 (SWE-Gym 26 개 중복 제외) 에서 어긋남 0.
 - 풀 한도: 이 노드의 익명 한도는 시간당 100 이다 (레지스트리 응답 헤더 실측). 그 한도면 Super 약 18 시간 · Ultra 약 98 시간 (시간당 80 기준). 3 건을 받는 동안 잔여 수가 줄지 않아 실제로 걸리는지는 미확정이다.
+- **파일럿 (2026-11-20 17:05, `swe2` · 노드마다 20 개 · 워커 4)**: 40/40 변환 · 실패 0 · `--verify` 재확인 40/40. main1 626 s · sub1 482 s, 임시 공간 최대 22 · 25 GiB. R2E-Gym (n=37) 중앙 59 s · 평균 0.65 GiB, SWE-Gym (n=3) 중앙 188 s · 평균 3.28 GiB (최대 5.46) → `swe2` 전체 추정 약 1.6 TiB (위 표의 1.1 TiB 는 압축 크기 표본에서 낸 값, SWE-Gym 표본이 3 개라 불확실).
+- 풀 한도는 출구 IP 마다 따로다 — main1 · sub1 의 `docker-ratelimit-source` 가 다르고 둘 다 100/시간. 그래서 목록을 샤드로 갈라 두 노드에서 받는다 (`--shard K/N`, 파일 이름의 CRC). 파일럿 40 개를 받는 동안 잔여 수는 두 노드 모두 100 → 100 이었다 (원인 미확인 — 한도가 실제로 걸리는지는 여전히 미확정, 걸리면 도구가 429 를 보고 10분 쉬고 재시도한다).
+- 변환한 파일은 내용 확인을 통과해야 제 이름을 얻는다: squashfs 목록이 끝까지 읽히고 Gym 이 쓰는 저장소 경로 (`/testbed`, SWE-rebench-V2 는 `/{repo 이름}`) 가 있어야 한다. 자가 시험의 음성 대조: 없는 경로 · 절반으로 자른 파일 · SIF 아닌 파일을 모두 거부. 데이터 블록 손상과 실행 가능 여부는 이 확인으로 잡지 못한다 (시험 세션의 표본 실행 · 정답 패치 채점).
+- 저장 위치 `$NRL_ROOT/sif/swe/` (두 노드 같은 경로, NFS 여유 36 TiB). 레시피의 `container_formatter` 는 `…/sif/swe/r2egym_{instance_id}.sif` · `…/sif/swe/swegym_sweb.eval.x86_64.{instance_id}.sif` · `…/sif/swe/swerebench/{instance_id}.sif` 꼴이 된다 (Gym `_find_container` 가 이름을 바꿔 가며 찾는다).
 - NFS 여유 17 TB (90% 사용). 변환 임시 공간은 로컬 디스크 (여유 435 GB) 를 쓴다.
 - 변환은 실행 쪽과 같은 1.4.5 로 한다 — `$NRL_ROOT/apptainer_test/root145/` (공식 deb 를 sha256 확인 뒤 `dpkg-deb -x`, 시스템 무변경). 도구로 1건 실측 (0.56 GB), 1.5.5 로 만든 파일도 1.4.5 가 구조를 읽는다. 실행 (`exec`) 호환은 시험 세션에서 확인한다.
 
@@ -203,8 +207,8 @@ alpha 에 걸리는 제약:
 
 | # | 결정 | 권고 | 시점 |
 |---|---|---|---|
-| 1 | 태스크 이미지 대량 변환 착수 | 인프라 적용 전에 시작한다. Super `swe2` 1,444 개부터 (약 1.1 TiB · 풀 한도 기준 약 18 시간) | 지금 |
-| 2 | SWE 데이터 | `swe2` 로 시작하고 효과를 본 뒤 Ultra `swe` 로 넓힌다 — Qwen3 가이드와 같은 데이터이고 준비가 6 배 가볍다 | 레시피 전 |
+| 1 | 태스크 이미지 대량 변환 착수 | **결정됨 (사용자 2026-11-20)**: Super `swe2` 1,444 개만 먼저, `$NRL_ROOT/sif/swe/`, 두 노드 병렬. 파일럿 PASS, 본 변환 기동과 풀 상한 (80/시간 유지 · 해제) 은 승인 대기 | 지금 |
+| 2 | SWE 데이터 | 이미지는 `swe2` 부터 받는다 (결정 1). 학습 데이터로의 확정과 Ultra `swe` 확대는 `swe2` 변환 뒤 | 레시피 전 |
 | 3 | 학생 통과율 사전 측정 (결정 40 의 5) | gpu06 docker 평가 경로로 지금 잴 수 있다. 과제 선별의 근거가 된다 | 지금 (GPU 승인) |
 | 4 | `--pid` 처리 방식 | PID namespace 유지 + 바깥 `/proc` bind (§5) | 시험 세션 |
 | 5 | 레시피 값 (문맥 · 턴 · 배치 · lr · 동시 실행 · 메모리 상한) | Qwen3 가이드를 기준안으로, 스모크 실측으로 조정 — 별도 보고 | 스모크 전 |
@@ -219,7 +223,9 @@ alpha 에 걸리는 제약:
 |---|---|
 | `tools/apptainer/acceptance.sh` | 시험 세션 수용 시험 (단계마다 원인 하나) |
 | `tools/apptainer/setup_session.sh` | 세션에 Apptainer 설치 · 우리 쪽 설정 (`--pid-mode bindproc` · `--multi-uid`). 세션을 다시 만들 때마다, 두 노드에서 |
-| `tools/apptainer/build_sifs.py` | 블렌드가 참조하는 이미지를 `.sif` 로 (이어받기 · 풀 속도 제한 · 이름 검산) |
+| `tools/apptainer/build_sifs.py` | 블렌드가 참조하는 이미지를 `.sif` 로 (이어받기 · 풀 속도 제한 · 이름 검산 · 샤드 분할 · 내용 확인 `--verify` · 자가 시험 `--self-test`) |
+| `tools/apptainer/launch_build_sifs.sh` | 본 변환을 세션과 분리해 띄운다 (노드마다 샤드 하나, 프로세스 그룹 기록) |
+| `$NRL_ROOT/sif/swe/` | 변환된 `.sif` · 기록 `build_log.shard*of2.jsonl` · 로그 `logs/` |
 | `tools/apptainer/seccomp_rules.json` · `docker-apptainer` · `docker-apptainer.userns` · `infra_worksheet.md` | 인프라에 넘긴 요청 사양과 작업 안내 |
 | `$NRL_ROOT/apptainer_test/rehearsal_20261120/` | 리허설 스크립트 · 프로파일 · 로그 (`final_run.log` · `round2/run_{A..F}.log`) · 검증 자료 (`review/01~06`) |
 | `$NRL_ROOT/apptainer_test/sif_samples/` · `alpine.sif` | 수용 시험용 `.sif` (R2E-Gym · SWE-rebench-V2 · SWE-Gym 각 1) |
