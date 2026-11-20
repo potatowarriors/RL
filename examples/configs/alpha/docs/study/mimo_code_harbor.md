@@ -136,6 +136,46 @@ README 가 "token ID 를 돌려주지 않을 수 있어 학습은 지원하지 �
 판정: **(a) 실패.** Apptainer 는 setuid 설치나 user namespace 중 하나가 있어야 실행하는데 이 세션에는 둘 다 없다. 원인은 Backend.AI 세션의 seccomp 정책이라 우리 쪽 설정으로는 못 푼다.
 남는 길: (b) gpu06 docker · 세션 seccomp 정책 완화를 인프라에 요청 · proot 실행 (Gym `swe_agents` 가 `apptainer exec` 를 부르므로 변환 층이 필요하고, 네트워크 차단을 못 하며 ptrace 비용은 미측정) · (c) 외부 sandbox.
 
+### 6.2 차단 원인 재조사 · 요청 사양 리허설 · 독립 검증 (2026-11-20, GPU 미사용)
+
+목적: 인프라에 보안 설정 변경을 한 번에 정확히 요청하기 위한 사양 확정. 산출물(프로파일 · 시험 스크립트 · 로그 · 검증 자료)은 `$NRL_ROOT/apptainer_test/rehearsal_20261120/`.
+
+**세션을 막는 층 (main1 실측, seccomp · AppArmor · capability · `/dev/fuse` 는 sub1 동일)**
+
+| 층 | 실측 | 영향 |
+|---|---|---|
+| seccomp | `unshare(0)` · `setns` EPERM, `clone3` ENOSYS, `keyctl` · `io_uring_setup` EPERM (root 도 같음) | user namespace 생성 불가 |
+| AppArmor | `docker-default (enforce)` — 템플릿에 `deny mount`, `pivot_root` 규칙 없음 | seccomp 만 풀면 mount 에서 막힘 (집행 동작은 미측정) |
+| 장치 | `/dev/fuse` 없음, `mknod` 뒤 open EPERM | SIF 마운트 불가 |
+| `/proc` | Docker 마스킹 10곳 + NVIDIA 런타임의 `/proc/driver/nvidia` | `--pid` 의 새 procfs 마운트 거부 |
+
+적용 계층: seccomp 는 dockerd 기본값이 아니라 Backend.AI 에이전트가 컨테이너마다 넘기는 `runner/default-seccomp.json` + 추가 허용 목록이다 (OSS main `agent/docker/agent.py` `_apply_seccomp_profile`; 같은 코드의 `CapAdd [IPC_LOCK, SYS_NICE]` · nofile 1048576 이 세션 실측과 일치). 그 JSON 은 moby 기본과 syscall 426 개 · 조건이 같다. 배포 버전이 OSS main 과 같은지는 미확인.
+
+**리허설** — gpu06 `alpha-eval` 안쪽 dockerd 29.1.3 (커널 5.4 · cgroup v1 · AppArmor 미적용), 세션을 흉내 낸 컨테이너 (`ubuntu:24.04` + `docker/install_apptainer.sh` 의 Apptainer 1.4.5, uid 1100, CapBnd `a88465fb`).
+
+| 시험 | 결과 |
+|---|---|
+| 음성 대조: 기본 seccomp | FAIL `Failed to create user namespace` (세션과 같은 증상) |
+| `unshare` `setns` `mount` `umount2` `pivot_root` 허용 + `/dev/fuse` | `apptainer exec` · `--writable-tmpfs` · `apptainer build` PASS |
+| 한 개씩 뺀 절제 | `setns` · `umount2` 를 빼면 FAIL, `pivot_root` · `clone3` · 신형 mount API 7종은 빼도 PASS |
+| `clone` 의 namespace 플래그 허용 | `--fakeroot` (root-mapped) 에만 필요 |
+| `/dev/fuse` 없음 | FAIL `fuse: device not found` — 대체 경로 없음 |
+| `--pid` (swe_agents 명령 그대로) | FAIL `can't mount proc filesystem to /proc`; `/proc` 마스킹을 푼 대조에서는 PASS |
+| `apptainer.conf` `allow pid ns = no` | 명령을 바꾸지 않고 PASS. 실제 이미지 `sweb.eval.x86_64.django_1776_django-11099` (변환 48 s · 1.1 GB) 에서 `/etc/hosts` 쓰기 · 저장소 수정 · 테스트 22 개 `tests_rc=0` |
+| 실행 신원 | uid 1100 그대로 PASS (파일 소유자가 1100 으로 보임). `sudo` real root 는 FAIL. 컨테이너 안 root 는 `APPTAINER_FAKEROOT=1 APPTAINER_IGNORE_FAKEROOT_COMMAND=1` 로 PASS |
+| `newuidmap` · `newgidmap` (다중 uid) | seccomp 를 꺼도 FAIL, CAP_SYS_ADMIN 을 더하면 PASS — Ubuntu 24.04 `uidmap` 빌드가 `capset` · `seteuid` 없이 euid 0 으로 map 을 여는 탓 (objdump 확인) |
+| `exec --fakeroot instance://` | FAIL `Failed to enter in user namespace` — seccomp · 마스킹을 다 풀어도 같음 |
+
+**독립 검증** (Opus 5.5 · xhigh, 블라인드 2단계): 판정 **증거 부족** — seccomp 목록과 `/dev/fuse` 는 확인, AppArmor 는 미측정. 반론 요지:
+(H1) 요청이 dockerd `daemon.json` 에 적용되면 효과가 없다 — 위 "적용 계층".
+(H2) AppArmor 는 `deny mount` 를 지워야 하고 (deny 우선) 새 이름 프로파일은 signal · ptrace peer 이름을 맞춰야 한다. `unconfined` 는 수용 시험을 전부 통과시키는 과다 부여다.
+(H3) 호스트 커널 6.5.0-15 는 CVE-2024-1086 미수정 (수정 6.5.0-26, USN-6707-1) 이고 user namespace + `CLONE_NEWNET` 로 닿는다 — `unshare` · `clone` 을 `CLONE_NEWNET` 없을 때만 허용하는 완화안 (미시험).
+(H4) `allow pid ns = no` 면 샌드박스 프로세스가 같은 uid 로 세션 프로세스에 신호를 보낼 수 있고 (`kill -9 -1`) 타임아웃 때 잔류 프로세스가 남는다 (미시험).
+(M) 수용 시험은 `ls /dev/fuse` 가 아니라 open 으로, 하네스의 `swe_real` PASS 조건에 hosts_write 가 없고 결과 파일이 재사용된다.
+정정: 커널 6.5 에서도 FUSE 하위 계층이면 fuse-overlayfs 를 쓴다.
+
+**열린 항목**: 2차 리허설 (Backend.AI 방식 프로파일 그대로 · `CLONE_NEWNET` 제외 변형 · PID 격리 선택지 비교 · 하네스 수정) · AppArmor 집행 · NVIDIA 덮임 · 커널 6.5 는 인프라 시험 세션에서만 확인 가능 · Backend.AI 의 세션 단위 적용 방법.
+
 ## 7. 착수 때 다시 확인할 것
 
 - Xiaomi 원본과 FineEnvs 판의 갱신 여부 — 태스크 수, 이미지 digest, mimoagent 커밋. 이 문서의 수치는 2026-10-21 조회값이다.
