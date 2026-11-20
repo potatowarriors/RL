@@ -8,6 +8,15 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
+## Apptainer 요청 사양 리허설 — 시험 도구 교착 · 의도하지 않은 이미지 내려받기 · 근거 없는 결론 셋 (2026-11-20, ✅ 정리 · 결론 철회)
+
+- **증상**: (1) gpu06 `alpha-eval` 에서 `strace -f -Z` 로 Apptainer 실행을 통째로 추적하던 시험이 멈췄다. 내 시험 프로세스 6개 (strace 는 D 상태, FUSE 데몬과 컨테이너 프로세스는 ptrace 정지) 가 약 11분 남았고 `docker kill` 로 죽지 않았다. (2) 읽기 전용으로 의도한 상태 확인에서 `docker run ubuntu:24.04` 가 이미지를 내려받았다 (공용 서버 디스크 117 MB). (3) 보고에 근거 없는 결론을 셋 적었다 — "다중 uid 매핑은 CAP_SYS_ADMIN 이 있어야만 된다" · "커널 6.5 에서는 커널 overlayfs 를 쓴다" · "실제 이미지 실행이 막힌 syscall 을 시도하지 않는다".
+- **원인**: (1) strace 가 tracee 의 메모리를 읽을 때 그 페이지가 FUSE 위의 파일이면 FUSE 데몬이 응답해야 한다. 그 데몬은 같은 strace 의 ptrace 요청 중이라 얼어 있고 SIGKILL 도 받지 못한다. (2) `docker run` 은 로컬에 없는 이미지를 받는다. (3) 앞의 둘은 대조 실험 없이 실패 메시지에서 원인을 단정했다. 셋째는 방법이 틀렸다 — seccomp 필터가 여럿이면 ERRNO 가 TRACE 보다 우선하므로 `strace --seccomp-bpf` 는 Docker 필터가 막은 호출에서 멈추지 않는다. 일부러 일으킨 거부가 기록되는지 보는 양성 대조가 없었다.
+- **대응**: (1) `alpha-eval` 에 fusectl 을 잠시 마운트해 해당 연결 (dev 0:398 · 소유 uid 1100, 보이는 연결은 내 것 둘뿐) 을 abort 했다. 프로세스 종료를 확인하고 마운트를 풀었다. (2) 사용자에게 보고했고 이미지는 남겼다 (삭제는 승인 대상). (3) 독립 검증이 반박했다. `newuidmap` 은 objdump 로 빌드를 확인하고 file capability 로 바꿔 다중 uid 매핑을 실측으로 통과시켰다. syscall 조사 결론은 철회했다 — 실제 세션의 기능 수용 시험이 판정한다.
+- **교훈**: FUSE 를 쓰는 실행을 `strace -f` 로 통째로 추적하지 않는다. 공용 호스트의 상태 확인에 `docker run` 을 쓰지 않는다 (`docker image inspect`, 또는 이미 있는 이미지를 지정). 거부 · 실패를 세는 도구는 양성 대조부터 한다. 실패 원인은 대조로 가른 뒤에 적는다 (seccomp 를 끈 대조 · capability 를 더한 대조가 실제 원인을 갈랐다).
+- **선행 사례**: upstream · 프론티어 · Ultra 설정에 해당 없음 (리허설 방법의 문제). seccomp 동작 우선순위는 seccomp(2), `--seccomp-bpf` 의 한계는 strace(1) 에 적혀 있다.
+- **독립 검증**: Opus 5.5 · xhigh 2회 (1차 증거 부족 → 2차 확인). (3) 의 세 결론은 검증자의 반박으로 드러났다. 자료 `$NRL_ROOT/apptainer_test/rehearsal_20261120/review/`, 정리 [`E2E_SANDBOX.md`](E2E_SANDBOX.md) §4.
+
 ## τ³ retail 을 Claude 판정기로 재면 판정 대화의 약 5% 가 인프라 오류로 빠진다 — 하니스가 temperature 0 을 보내고 응답 전체를 JSON 으로 읽는다 (2026-11-20, 🔶 하니스 대응 보류 — 사용자 결정 71)
 
 - **증상**: (1) 판정기를 `anthropic/claude-opus-5-5` 로 바꾸자 사전 검사 T3 가 400 `temperature is deprecated for this model` (Sonnet 5.5 도 같다). (2) `temperature` 를 비워 T3 를 통과시킨 뒤의 실제 측정 (11-20 retail 114 × 4, 결과 Pai `eval_sft/results/tw_w1_s114_fp32pc0` · `mopd1_s3_iter120_fp32pc0`) 에서 NL 판정이 붙은 대화 160 중 8 · 9 가 `infrastructure_error` — `reward_info.info` 가 `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. 하니스는 이 대화를 지표에서 뺀다 (`Excluding N infrastructure error simulation(s) from metrics`).

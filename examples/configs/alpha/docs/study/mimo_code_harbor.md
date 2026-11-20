@@ -136,76 +136,11 @@ README 가 "token ID 를 돌려주지 않을 수 있어 학습은 지원하지 �
 판정: **(a) 실패.** Apptainer 는 setuid 설치나 user namespace 중 하나가 있어야 실행하는데 이 세션에는 둘 다 없다. 원인은 Backend.AI 세션의 seccomp 정책이라 우리 쪽 설정으로는 못 푼다.
 남는 길: (b) gpu06 docker · 세션 seccomp 정책 완화를 인프라에 요청 · proot 실행 (Gym `swe_agents` 가 `apptainer exec` 를 부르므로 변환 층이 필요하고, 네트워크 차단을 못 하며 ptrace 비용은 미측정) · (c) 외부 sandbox.
 
-### 6.2 차단 원인 재조사 · 요청 사양 리허설 · 독립 검증 (2026-11-20, GPU 미사용)
+### 6.2 차단 원인 재조사 · 요청 사양 · 착수 준비 (2026-11-20)
 
-목적: 인프라에 보안 설정 변경을 한 번에 정확히 요청하기 위한 사양 확정. 산출물(프로파일 · 시험 스크립트 · 로그 · 검증 자료)은 `$NRL_ROOT/apptainer_test/rehearsal_20261120/`.
-
-**세션을 막는 층 (main1 실측, seccomp · AppArmor · capability · `/dev/fuse` 는 sub1 동일)**
-
-| 층 | 실측 | 영향 |
-|---|---|---|
-| seccomp | `unshare(0)` · `setns` EPERM, `clone3` ENOSYS, `keyctl` · `io_uring_setup` EPERM (root 도 같음) | user namespace 생성 불가 |
-| AppArmor | `docker-default (enforce)` — 템플릿에 `deny mount`, `pivot_root` 규칙 없음 | seccomp 만 풀면 mount 에서 막힘 (집행 동작은 미측정) |
-| 장치 | `/dev/fuse` 없음, `mknod` 뒤 open EPERM | SIF 마운트 불가 |
-| `/proc` | Docker 마스킹 10곳 + NVIDIA 런타임의 `/proc/driver/nvidia` | `--pid` 의 새 procfs 마운트 거부 |
-
-적용 계층: seccomp 는 dockerd 기본값이 아니라 Backend.AI 에이전트가 컨테이너마다 넘기는 `runner/default-seccomp.json` + 추가 허용 목록이다 (OSS main `agent/docker/agent.py` `_apply_seccomp_profile`; 같은 코드의 `CapAdd [IPC_LOCK, SYS_NICE]` · nofile 1048576 이 세션 실측과 일치). 그 JSON 은 moby 기본과 syscall 426 개 · 조건이 같다. 배포 버전이 OSS main 과 같은지는 미확인.
-
-**리허설** — gpu06 `alpha-eval` 안쪽 dockerd 29.1.3 (커널 5.4 · cgroup v1 · AppArmor 미적용), 세션을 흉내 낸 컨테이너 (`ubuntu:24.04` + `docker/install_apptainer.sh` 의 Apptainer 1.4.5, uid 1100, CapBnd `a88465fb`).
-
-| 시험 | 결과 |
-|---|---|
-| 음성 대조: 기본 seccomp | FAIL `Failed to create user namespace` (세션과 같은 증상) |
-| `unshare` `setns` `mount` `umount2` `pivot_root` 허용 + `/dev/fuse` | `apptainer exec` · `--writable-tmpfs` · `apptainer build` PASS |
-| 한 개씩 뺀 절제 | `setns` · `umount2` 를 빼면 FAIL, `pivot_root` · `clone3` · 신형 mount API 7종은 빼도 PASS |
-| `clone` 의 namespace 플래그 허용 | `--fakeroot` (root-mapped) 에만 필요 |
-| `/dev/fuse` 없음 | FAIL `fuse: device not found` — 대체 경로 없음 |
-| `--pid` (swe_agents 명령 그대로) | FAIL `can't mount proc filesystem to /proc`; `/proc` 마스킹을 푼 대조에서는 PASS |
-| `apptainer.conf` `allow pid ns = no` | 명령을 바꾸지 않고 PASS. 실제 이미지 `sweb.eval.x86_64.django_1776_django-11099` (변환 48 s · 1.1 GB) 에서 `/etc/hosts` 쓰기 · 저장소 수정 · 테스트 22 개 `tests_rc=0` |
-| 실행 신원 | uid 1100 그대로 PASS (파일 소유자가 1100 으로 보임). `sudo` real root 는 FAIL. 컨테이너 안 root 는 `APPTAINER_FAKEROOT=1 APPTAINER_IGNORE_FAKEROOT_COMMAND=1` 로 PASS |
-| `newuidmap` · `newgidmap` (다중 uid) | seccomp 를 꺼도 FAIL, CAP_SYS_ADMIN 을 더하면 PASS — Ubuntu 24.04 `uidmap` 빌드가 `capset` · `seteuid` 없이 euid 0 으로 map 을 여는 탓 (objdump 확인) |
-| `exec --fakeroot instance://` | FAIL `Failed to enter in user namespace` — seccomp · 마스킹을 다 풀어도 같음 |
-
-**독립 검증** (Opus 5.5 · xhigh, 블라인드 2단계): 판정 **증거 부족** — seccomp 목록과 `/dev/fuse` 는 확인, AppArmor 는 미측정. 반론 요지:
-(H1) 요청이 dockerd `daemon.json` 에 적용되면 효과가 없다 — 위 "적용 계층".
-(H2) AppArmor 는 `deny mount` 를 지워야 하고 (deny 우선) 새 이름 프로파일은 signal · ptrace peer 이름을 맞춰야 한다. `unconfined` 는 수용 시험을 전부 통과시키는 과다 부여다.
-(H3) 호스트 커널 6.5.0-15 는 CVE-2024-1086 미수정 (수정 6.5.0-26, USN-6707-1) 이고 user namespace + `CLONE_NEWNET` 로 닿는다 — `unshare` · `clone` 을 `CLONE_NEWNET` 없을 때만 허용하는 완화안 (미시험).
-(H4) `allow pid ns = no` 면 샌드박스 프로세스가 같은 uid 로 세션 프로세스에 신호를 보낼 수 있고 (`kill -9 -1`) 타임아웃 때 잔류 프로세스가 남는다 (미시험).
-(M) 수용 시험은 `ls /dev/fuse` 가 아니라 open 으로, 하네스의 `swe_real` PASS 조건에 hosts_write 가 없고 결과 파일이 재사용된다.
-정정: 커널 6.5 에서도 FUSE 하위 계층이면 fuse-overlayfs 를 쓴다.
-
-**2차 리허설** (같은 장소, 하네스 수정: 결과 파일을 실행마다 새로 · PASS 조건에 `/etc/hosts` 쓰기 포함, 로그 `round2/run_{A..F}.log`)
-
-| 항목 | 결과 |
-|---|---|
-| Backend.AI 기본 프로파일 그대로 (음성 대조) | FAIL — 세션과 같은 증상 |
-| 이름 6개를 조건 없이 추가 (에이전트의 "추가 허용" 방식) | 전부 PASS, 새 netns 도 만들어짐 |
-| `unshare` · `clone` 을 `CLONE_NEWNET` 없을 때만 허용 + `setns` `mount` `umount2` `pivot_root` | 전부 PASS, `unshare -Urn` 과 `clone(NEWUSER\|NEWNET)` 은 EPERM |
-| PID: `allow pid ns = no` | 샌드박스 안의 `kill` 이 세션 프로세스를 **죽임**, 트리 kill 뒤 고아 데몬이 **남음** |
-| PID: namespace 유지 + `mount proc = no` | 신호 격리 · 정리됨. `<(…)` · `/dev/stdout` · `ps` 가 **안 됨** |
-| PID: namespace 유지 + `mount proc = no` + `APPTAINER_BIND=/proc` | 신호 격리 · 정리됨, `<(…)` 됨. `/proc` 의 pid 가 바깥 번호라 `pgrep` · `pkill` · `ps -p` 가 자기 프로세스를 **못 잡음** |
-| PID: 별도 uid 로 실행 | 세션 프로세스는 안전하나 학습 쪽 트리 kill 이 **실패** (killpg 실패 2 · 잔류 1) |
-| 바깥 `/proc` 를 통한 접근 (PID 방식과 무관) | 세션 프로세스의 `oom_score_adj` 를 0 → 1000 으로 **쓸 수 있음**. environ · cwd · mem 은 거부 |
-| 후보 구성 (`CLONE_NEWNET` 제외 + `/dev/fuse` + namespace 유지 + 바깥 `/proc` bind) | 실제 SWE 이미지 uid 1100 · root-mapped 둘 다 PASS, `--fakeroot --containall --pid` PASS, `instance start --fakeroot` 뒤 `exec` (fakeroot 없이) id 0 PASS |
-| `newuidmap` · `newgidmap` 을 file capability 로 (`cap_setuid=ep` · `cap_setgid=ep`) | 다중 uid fakeroot PASS — CAP_SYS_ADMIN 불필요 |
-| AppArmor 프로파일 `round2/apparmor/docker-apptainer` | `apparmor_parser 4.0.1 -Q` 문법 통과, 깨뜨린 대조는 거부. 집행은 미측정 |
-
-시험 도구 사고: `strace -f` 가 FUSE 데몬을 멈춘 채 FUSE 위의 메모리를 읽다가 교착 (프로세스 6개 · 약 11분). fusectl 로 해당 연결 하나를 abort 해 정리. FUSE 를 쓰는 실행을 `strace -f` 로 통째로 추적하지 않는다.
-
-**재판정** (같은 검증자): **확인** — 필수 보완을 반영한 문안 기준. 반론 요지:
-(H1) seccomp-bpf 방식 census 는 다른 필터가 ERRNO 로 막은 호출에서 멈추지 않으므로 "막힌 syscall 을 시도하지 않는다" 는 결론은 철회한다 (실제 세션의 기능 시험이 판정).
-(H2) 위 `oom_score_adj` 쓰기 — 실측으로 확인.
-(H3) `CLONE_NEWNET` 을 막으면 `--net --network none` 격리도 못 쓰고, 샌드박스는 세션 netns 를 공유한다 (Ray · vLLM 포트).
-(M) AppArmor 프로파일의 부팅 적재 · `apparmor=` 를 넣는 경로 · seccomp JSON 의 업그레이드 유지 · 이름 목록 방식 금지를 문안에 넣는다. `APPTAINER_BIND` 가 Gym 의 subprocess 환경으로 전달되는지는 미시험.
-설계대로의 새 procfs 는 커널 6.5 에서 `/proc` 마스킹을 풀지 않고는 얻을 수 없다.
-
-**요청 사양 (확정 후보)**: ① seccomp — 에이전트가 넘기는 JSON 에 `{"names":["setns","mount","umount2","pivot_root"],"action":"SCMP_ACT_ALLOW"}` 와 `{"names":["unshare","clone"],"action":"SCMP_ACT_ALLOW","args":[{"index":0,"value":1073741824,"valueTwo":0,"op":"SCMP_CMP_MASKED_EQ"}]}` 추가 ② AppArmor `docker-apptainer` ③ `/dev/fuse` (cgroup `rwm`). 수용 시험 `accept/acceptance.sh` — 지금의 막힌 세션에서 5 단계 FAIL 을 보고함 (음성 대조).
-
-**인프라 쪽 작업 지점** (Backend.AI 공개 코드 main 기준, 배포 버전 미확인 · 적용 미시험, 안내문 `accept/infra_worksheet.md`):
-seccomp 는 `<site-packages>/ai/backend/runner/default-seccomp.json` 의 `syscalls` 배열에 규칙 둘을 추가 — 에이전트가 컨테이너 생성 때마다 읽고, 노드의 모든 세션에 적용되며, 업그레이드 때 덮어써진다. 플러그인의 `get_additional_allowed_syscalls()` 는 이름만 받아 인자 조건을 못 담는다.
-AppArmor 는 호스트 `/etc/apparmor.d/docker-apptainer` 적재 + `HostConfig.SecurityOpt` 에 `apparmor=docker-apptainer`, `/dev/fuse` 는 `HostConfig.Devices`. 이 둘을 넣는 설정 항목은 `agent.toml` 에 없다 (저장소에 apparmor 문자열 없음) — compute 플러그인의 `generate_docker_args()` (그 슬롯을 받은 세션만) 또는 `agent/docker/agent.py` 수정 (`/dev/infiniband` 블록이 선례, 노드 전체).
-
-**열린 항목**: 사용자 결정 (`CLONE_NEWNET` 차단 여부 · 노드 전체 적용 수용 여부 · PID 방식) · 인프라 요청 발송 · 시험 세션에서만 닫히는 것 (AppArmor 집행 · NVIDIA 덮임 · 커널 6.5 · cgroup v2 · Backend.AI 의 적용 방법).
+[`../E2E_SANDBOX.md`](../E2E_SANDBOX.md) 로 옮겼다. 요지: 막는 층은 seccomp · AppArmor `docker-default` · `/dev/fuse` 셋이다.
+인프라에 세 설정을 요청했고 (전달 2026-11-20), 요청 사양은 gpu06 리허설 2회와 독립 검증 2회로 정했다.
+§6 결정 4 의 순서 (세션 안 Apptainer → gpu06 docker → 외부 sandbox) 에서 gpu06 은 학습 경로가 되지 못한다 — 롤아웃이 Ray 노드에서 실행되고 공유 경로를 전제한다.
 
 ## 7. 착수 때 다시 확인할 것
 

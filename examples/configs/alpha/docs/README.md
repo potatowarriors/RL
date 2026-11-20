@@ -40,6 +40,7 @@
 | [study/pivotrl_study.md](study/pivotrl_study.md) | PivotRL 스터디 — 방법·Ultra 사용처·공개 자산 실사·agentic SFT 이후 적용 설계·게이트 (2026-09-22, Pai 에서 이관) |
 | [study/grpo_objective_gradient.md](study/grpo_objective_gradient.md) | GRPO 목적함수·기울기 스터디 — 현 레시피에서 미분되는 것은 `log π_θ` 뿐, KL 0·clip 사문, TIS 가중치, advantage 수치 표(k=1 불연속·그룹 합≠0), Megatron 워커 집계 순서 (2026-10-15) |
 | [study/forward_reverse_kl.md](study/forward_reverse_kl.md) | Forward vs Reverse KL 스터디 — Hamad 블로그 요약(mode-covering·mode-seeking, LLM 학습별 방향, k1·k3 추정), 장난감 실험 재현(reverse KL 의 대칭점 국소 최소), MOPD 가 reverse KL 인 이유와 함의 (2026-10-19) |
+| [E2E_SANDBOX.md](E2E_SANDBOX.md) | SWE · Terminal E2E 샌드박스 (Apptainer) — 세션을 막는 세 층, 인프라 요청 사양과 근거 (리허설 2회 · 독립 검증 2회), 우리 쪽 설정 (PID 격리 선택지 실측), 적용 뒤 순서, SWE E2E 제공 경로 · 데이터 · 이미지 · 프론티어 비교, 열린 결정 (2026-11-20) |
 | [study/mimo_code_harbor.md](study/mimo_code_harbor.md) | MiMo-V2.6-RL Code (Harbor) 실사 — agentic SWE teacher 후보 2,602 태스크, Harbor 판이 낡은 부분, Gym 경로 비교(`swe_agents` + MiMo 처리기 채택), 필요 작업 15건, 결정 1~5 (2026-10-21, 착수는 MOPD1 뒤) |
 | [study/s5_pipeline_timeline.md](study/s5_pipeline_timeline.md) | s5 파이프라인 타임라인 (2026-10-22 그림) — 나이 1 규칙으로 다음 물결이 refit 뒤에만 기동돼 물결 쌍이 함께 끝나고 엔진이 2-step 마다 15~35분 비는 관측; 다시 그리기 `tools/plot_pipeline_timeline.py` |
 | [study/benchmark_results.md](study/benchmark_results.md) | alpha_v2 벤치 결과 전체 (2026-11-06 스냅샷) — Code·Math teacher 계보의 LCB·AIME25·HMMT, Pai 스위트 T1·T2·T3·에이전틱 전 체크포인트, 도구 teacher τ³, 측정 조건과 GDN 상태 dtype 경계 (10-21) |

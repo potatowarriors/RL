@@ -65,6 +65,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-20 | Apptainer 리허설에서 `strace -f` 추적이 FUSE 와 교착 (공용 서버에 프로세스 6개 · 11분) · seccomp 거부를 `strace --seccomp-bpf` 로 세어 "시도 없음" 으로 오판 | tracee 메모리 읽기가 멈춘 FUSE 데몬을 기다린다 · 다른 필터의 ERRNO 가 TRACE 보다 우선한다 → FUSE 를 쓰는 실행은 `strace -f` 로 통째로 추적하지 않고, 거부 집계는 양성 대조부터 (`docs/E2E_SANDBOX.md` §5) |
 | 11-20 | τ³ retail 판정기를 Claude 로 바꾸면 사전 검사가 400, 고쳐도 NL 판정 대화의 약 5% 가 `infrastructure_error` 로 빠짐 | 하니스가 `temperature: 0` 을 보내고 (Claude 5.5 계열은 거부) 응답 전체를 `json.loads` 함 (판정 앞에 풀이 문장이 붙으면 실패, 모델 무관) → 판정기는 Sonnet 5.5 + `TAU2_LLM_NL_ASSERTIONS_EXTRA_ARGS='{"temperature":null}'` (결정 71). 파싱 실패 대응은 보류 — 인프라 오류가 0 이 아니면 그 대화를 열어 원인을 확인하고 보고한다 (KNOWN_ISSUES 11-20) |
 | 11-19 | agentic teacher 를 피벗 단독 · LLM 시뮬레이션 E2E 로 8일 진행했으나 전부 기각 | 기준선이 그 능력을 어떤 환경 · 구성으로 학습했는지와 Gym 이 제공하는 환경을 먼저 조사하지 않음 (Ultra 는 혼합 블렌드의 단일 스텝 피벗 + 실행형 `workplace_assistant`, LLM 시뮬레이션은 데이터 생성용) → 새 환경 · 방식 설계 전에 `RL_DATA.md` §7 의 환경 표와 `examples/nemo_gym/` 레시피 · 기준선 보고서를 먼저 본다 (`.claude/rules/alpha.md`, KNOWN_ISSUES 11-19) |
 | 11-18 | terminal 피벗 1 에폭 모델이 TB-2.1 에서 타임아웃 · 반복 · step 수가 함께 줄었는데 통과율은 그대로 | 완료 정답 행의 양의 신호로 완료 선언 문턱이 전역 하강 (완료 1~2 턴 전 선언 29 → 65%) — 반복 감소는 일찍 끝나서 생긴 구성 효과. 종료가 완료 선언 · 타임아웃뿐인 벤치의 행동 지표는 같은 step 구간끼리 비교하고, 피벗 블렌드는 `tools/measure_terminal_tc_shift.py` 로 완료 출력률을 잰다 (KNOWN_ISSUES 11-18) |
