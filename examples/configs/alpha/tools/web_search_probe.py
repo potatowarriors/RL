@@ -14,13 +14,19 @@ tools − notools 는 지시문 · 턴 수 · 총 생성량이 함께 달라서 
 
 analyze 는 먼저 유효성 (V1~V7) 을 본다. 하나라도 FAIL 이면 수치를 결론으로 쓰지 않는다 (종료 코드 1). 값이 없는 키는 0 으로 읽지 않고 FAIL 이다.
 검색 백엔드 장애 · 크레딧 장부 어긋남은 행의 5% (INFRA_TOLERANCE — 인프라 허용치, 효과 판정과 무관한 상수) 까지는 그 롤아웃을 빼고 진행한다.
-판정 규칙 (실행 전에 고정). "검색이 기여한다" 는 아래 네 구간의 95% 하한이 모두 0 보다 클 때만 낸다:
+판정 규칙 (실행 전에 고정). 유효성이 FAIL 이면 판정을 내지 않는다. "검색이 기여한다" 는 아래 구간의 95% 하한이 모두 0 보다 클 때만 낸다:
   ① tools − placebo (주 대조)  ② 끝까지 답한 롤아웃만으로 다시 낸 것 (잘림 · 스텝 상한이 만든 차이를 가른다)
-  ③ 질문 원문이 도구 결과에 그대로 나온 롤아웃을 뺀 것 (답안지를 찾은 효과를 가른다)  ④ tools − notools (도구 없이도 되는 수준을 넘는가)
+  ③ 백엔드 장애로 뺀 tools 롤아웃을 0 점으로 넣어 다시 낸 것 (장애가 어려운 문항에 몰려 효과가 부풀지 않았는가)
+  ④ tools − notools (도구 없이도 되는 수준을 넘는가)
   ①이 양인데 ②~④ 중 하나라도 아니면 "판정 보류". placebo − notools 의 상한 < 0 이면 placebo 가 모델을 망가뜨린 것이라 "판정 보류".
-  실패 뒤 다시 뽑힌 롤아웃이 5% 를 넘으면 "판정 보류". 검색 성공이 한 번도 없으면 "도구 미사용 — 판정 불가".
-  구간이 0 을 품으면 "구분 안 됨" 이지 "기여 없음" 이 아니다. 48 문항 × 4 의 구간 반폭은 약 0.08~0.11 — 대조 하나를 80% 로 잡는 차이가 약 0.15 이고,
-  네 조건을 함께 요구하므로 실제 검출력은 그보다 낮다. 이 측정은 양성 판정에 엄격하다 (거짓 양성을 피하는 쪽).
+  질문 원문이 도구 결과에 그대로 나온 (또는 제외 도메인의 결과를 받은) tools 롤아웃이 5% 를 넘으면 "판정 보류 (누출)" — 누출은 모델이 답을 모를 때
+  몰리므로 그 롤아웃만 빼고 다시 내는 것으로는 가를 수 없다 (뺀 대조는 서술용으로만 낸다). 실패 뒤 다시 뽑힌 롤아웃이 5% 를 넘어도 "판정 보류".
+  "검색이 깎는다" 는 ① · ② · ④ 의 상한이 모두 0 보다 작을 때만 낸다. 검색 성공이 한 번도 없으면 "도구 미사용 — 판정 불가".
+  결과가 있는 검색을 한 롤아웃이 30% 미만이면 차이가 안 보여도 "판정 불가 (도구 사용 부족)" — 학습 전 모델이 도구를 덜 쓴 것이지 환경의 한계가 아니다.
+  구간이 0 을 품으면 "구분 안 됨" 이지 "기여 없음" 이 아니다. 48 문항 × 4 에서 "기여" 가 나올 확률 (모의): 실제 차이 0.10 이면 약 0.4, 0.15 면 약 0.8,
+  0.20 이면 약 0.95. 이 측정은 양성 판정에 엄격하다 (거짓 양성을 피하는 쪽).
+알려진 한계: 빈 결과가 모델을 조금 망가뜨린 몫과 지시문 · 턴 수의 몫이 비슷하면 ① 과 ④ 가 함께 양이 될 수 있다 — 세 갈래로는 가르지 못한다.
+            스텝 상한이 5 라 검색 횟수 분포가 5 에서 잘린다 (비용 · 효과 모두 이 상한에서의 값).
 종료 코드: 0 = 유효, 1 = 유효성 FAIL, 2 = 자가 시험 실패.
 """
 
@@ -52,7 +58,10 @@ REQUIRED_KEYS = ("reward", "response", "responses_create_params", "expected_answ
                  "_ng_task_index", "_ng_rollout_index", *COUNT_KEYS)
 EPOCH_ROLLOUTS = 2929 * 16
 USD_PER_CREDIT = 0.008  # Tavily 종량제 (결제 전 확인 필요)
-INFRA_TOLERANCE = 0.05  # 인프라 탓 행 (백엔드 장애 · 장부 어긋남 · 다시 뽑힘) 의 허용 비율
+INFRA_TOLERANCE = 0.05  # 인프라 탓 행 (백엔드 장애 · 장부 어긋남 · 다시 뽑힘) 의 허용 비율 — 한 갈래에서 이런 행을 합쳐서 센다
+LEAK_TOLERANCE = 0.05   # 누출 롤아웃 비율이 이를 넘으면 판정 보류
+MIN_SEARCH_USE = 0.30   # 결과가 있는 검색을 한 롤아웃 비율이 이보다 낮으면 "구분 안 됨" 을 근거로 쓰지 않는다
+EXCLUDED_DOMAINS = ("huggingface.co", "hf.co", "hf-mirror.com")  # 플러그인 설정과 같아야 한다 (실행기가 기동 설정과 대조)
 LEAK_SHINGLE = 10  # 질문 본문의 연속 단어 수 — 이만큼이 도구 결과에 그대로 나오면 질문 자체가 실린 페이지로 본다
 
 
@@ -138,12 +147,17 @@ def normalize_option(parsed):
 
 
 def end_state(row):
-    """message = 끝까지 답함 · generation_cap = 생성 상한에 잘림 · context_overflow = 문맥이 차서 모델이 아무것도 못 냄 (Gym 이 빈 응답으로 바꾼다)
-    · step_cap = 스텝 상한 (마지막이 도구 결과면 그 결과를 모델이 못 봤다) · other."""
+    """message = 끝까지 답함 · generation_cap = 생성 상한에 잘림 · context_overflow = 문맥이 차서 모델이 아무것도 못 냄
+    · step_cap = 스텝 상한 (마지막이 도구 결과면 그 결과를 모델이 못 봤다) · other.
+
+    문맥 초과는 Gym vllm_model 이 incomplete_details 가 붙은 빈 assistant 메시지로 바꾼다 — 마지막 도구 결과 뒤에 모델이 낸 것이 없으면 문맥 초과로 본다.
+    """
     output = row["response"]["output"]
     last = output[-1] if output else {}
     if row["response"].get("incomplete_details"):
-        return "context_overflow" if last.get("type") in ("function_call_output", None) else "generation_cap"
+        tail = output[max((i for i, o in enumerate(output) if o.get("type") == "function_call_output"), default=-1) + 1:]
+        generated = any(o.get("type") in ("reasoning", "function_call") or (o.get("type") == "message" and output_text(o).strip()) for o in tail)
+        return "generation_cap" if generated else "context_overflow"
     if last.get("type") == "message" and last.get("role") == "assistant":
         return "message"
     return "step_cap" if last.get("type") in ("function_call_output", "function_call", "reasoning") else "other"
@@ -173,8 +187,10 @@ def tool_events(row):
             body = json.loads(o["output"])
         except (json.JSONDecodeError, TypeError):
             body = None
-        text = body.get("search_results") if name == "search" and isinstance(body, dict) else None
-        page = body.get("page_content") if name == "browse" and isinstance(body, dict) else None
+        # 어느 핸들러가 답했는지는 응답 본문의 키로 본다. Gym 은 `/{이름}` 으로 보내서 `search? Actually…` 같은 이름도 /search 핸들러에 닿는다.
+        text = body.get("search_results") if isinstance(body, dict) and isinstance(body.get("search_results"), str) else None
+        page = body.get("page_content") if isinstance(body, dict) and isinstance(body.get("page_content"), str) else None
+        name = "search" if text is not None else "browse" if page is not None else re.split(r"[?#]", name, maxsplit=1)[0]
         if name not in ("search", "browse"):
             kind = "unknown_tool"
         elif text is None and page is None:
@@ -192,6 +208,17 @@ def tool_events(row):
 
 def words(text):
     return re.findall(r"\w+", text.lower())
+
+
+def from_excluded_domain(row):
+    """검색 결과의 URL 이 제외 도메인인가 (검색 엔진이 제외 목록을 지켰는지의 사후 확인)."""
+    for name, kind, _, text in tool_events(row):
+        if name == "search" and kind == "ok":
+            for host in re.findall(r"^    URL: \S*?://([^/\s:]+)", text, re.MULTILINE):
+                host = host.lower().rstrip(".")
+                if any(host == d or host.endswith("." + d) for d in EXCLUDED_DOMAINS):
+                    return True
+    return False
 
 
 def question_leaked(row):
@@ -257,37 +284,48 @@ def validity(sample, arms, repeats, search_cost=1):
     notes = collections.defaultdict(list)
     if not found["V1"]:  # 아래 검사는 키가 있어야 한다
         for arm, rows in arms.items():
-            per_check = collections.Counter()
+            per_check, infra_rows = collections.Counter(), 0
             for r in rows:
-                for p in set(row_problems(r, arm, search_cost)):
+                problems = set(row_problems(r, arm, search_cost))
+                infra_rows += any(p[:2] in ("V4", "V7") for p in problems)
+                for p in problems:
                     per_check[tuple(p.split(" ", 1))] += 1
+            # 인프라 탓 행 (백엔드 장애 · 장부 어긋남) 은 한 갈래에서 합쳐 허용치까지 봐준다 — 한 번뿐인 예산에서 한 행 때문에 전부 버리지 않으려고.
+            # 백엔드 장애 행은 보상 계산에서 빠진다 (학습에서도 손실에서 빠진다). 장부가 어긋난 행은 그대로 남아 비용 추정에 들어간다.
+            tolerated = infra_rows / len(rows) <= INFRA_TOLERANCE
             for (check, text), n in sorted(per_check.items()):
                 line = f"{arm}: {text} {n} 행 ({n / len(rows):.1%})"
-                # 인프라 탓 행은 허용치까지 그 롤아웃을 빼고 진행한다 (한 번뿐인 예산에서 한 행 때문에 전부 버리지 않으려고)
-                (notes if check in ("V4", "V7") and n / len(rows) <= INFRA_TOLERANCE else found)[check].append(line)
+                (notes if check in ("V4", "V7") and tolerated else found)[check].append(line)
             bad = sum(r["expected_answer"] != sample[r["_ng_task_index"]]["expected_answer"] or
                       r["responses_create_params"]["input"] != sample[r["_ng_task_index"]]["responses_create_params"]["input"] for r in rows)
             if bad:
                 found["V6"].append(f"{arm}: 표본의 같은 번호 문항과 질문 · 정답이 다른 행 {bad}")
-        kinds = collections.Counter(f"{name}:{kind}" for r in arms["tools"] for name, kind, reached, _ in tool_events(r) if reached)
-        searches = sum(n for k, n in kinds.items() if k.startswith("search:"))
-        browses = sum(n for k, n in kinds.items() if k.startswith("browse:"))
-        answered = kinds["search:ok"] + kinds["search:ok_empty"]
-        if searches and not kinds["search:ok"]:
-            found["V7"].append(f"tools: 검색 {searches} 회 중 결과가 있는 검색 0 회")
-        if searches and answered / searches < 0.8:
-            found["V7"].append(f"tools: 검색 엔진이 답한 검색 {answered}/{searches} ({answered / searches:.1%}) < 80%")
-        if searches and kinds["search:rejected"] / searches > 0.1:
-            found["V7"].append(f"tools: 검색 엔진이 거절한 검색 {kinds['search:rejected']}/{searches} > 10%")
-        if browses >= 10 and not kinds["browse:ok"]:
-            found["V7"].append(f"tools: browse {browses} 회 중 본문을 얻은 것 0 회")
+        found["V7"] += search_liveness_problems(arms["tools"], min_browses=10, max_rejected=0.1, min_answered=0.8)
     out = []
     for v in names:
         if v != "V1" and found["V1"]:
             continue
-        lines = found[v] or [f"주의 (허용치 {INFRA_TOLERANCE:.0%} 안 — 그 롤아웃을 빼고 진행): " + "; ".join(notes[v])] * bool(notes[v])
+        lines = found[v] or [f"주의 (인프라 탓 행이 허용치 {INFRA_TOLERANCE:.0%} 안): " + "; ".join(notes[v])] * bool(notes[v])
         out.append((f"{v} {names[v]}", not found[v], "; ".join(lines[:4]) + (f" … 외 {len(lines) - 4}" if len(lines) > 4 else "")))
     return out
+
+
+def search_liveness_problems(rows, min_browses, max_rejected, min_answered):
+    """tools 갈래의 검색 · browse 가 살아 있는가. 모델 탓 질의 (빈 · 400 자 초과) 는 검색 엔진에 가지 않으므로 분모에서 뺀다."""
+    kinds = collections.Counter(f"{name}:{kind}" for r in rows for name, kind, reached, _ in tool_events(r) if reached)
+    sent = kinds["search:ok"] + kinds["search:ok_empty"] + kinds["search:rejected"] + kinds["search:backend_error"]
+    browses = sum(n for k, n in kinds.items() if k.startswith("browse:"))
+    answered = kinds["search:ok"] + kinds["search:ok_empty"]
+    problems = []
+    if sent and not kinds["search:ok"]:
+        problems.append(f"tools: 검색 엔진에 보낸 {sent} 회 중 결과가 있는 검색 0 회")
+    if sent and answered / sent < min_answered:
+        problems.append(f"tools: 검색 엔진이 답한 검색 {answered}/{sent} ({answered / sent:.1%}) < {min_answered:.0%}")
+    if sent and kinds["search:rejected"] / sent > max_rejected:
+        problems.append(f"tools: 검색 엔진이 거절한 검색 {kinds['search:rejected']}/{sent} > {max_rejected:.0%}")
+    if browses >= min_browses and not kinds["browse:ok"]:
+        problems.append(f"tools: browse {browses} 회 중 본문을 얻은 것 0 회")
+    return problems
 
 
 def smoke_check(path, arm, search_cost):
@@ -300,13 +338,8 @@ def smoke_check(path, arm, search_cost):
     complete = [r for r in rows if not any(k not in r for k in REQUIRED_KEYS)]
     kinds = collections.Counter(f"{name}:{kind}" for r in complete for name, kind, _, _ in tool_events(r))
     ends = collections.Counter(end_state(r) for r in complete)
-    calls = sum(n for k, n in kinds.items() if k.startswith("search:"))
-    if arm == "tools" and calls and not kinds["search:ok"]:
-        problems.append("V7 검색을 불렀는데 결과가 있는 검색이 없다")
-    if arm == "tools" and calls and kinds["search:rejected"] / calls > 0.5:
-        problems.append("V7 검색의 절반 넘게 검색 엔진이 거절했다")
-    if arm == "tools" and sum(n for k, n in kinds.items() if k.startswith("browse:")) >= 3 and not kinds["browse:ok"]:
-        problems.append("V7 browse 를 3 회 이상 불렀는데 본문을 얻은 것이 없다")
+    if arm == "tools":  # 본 실행과 같은 검사, 행이 적어 문턱만 느슨하게 (거절 50% · 응답 50% · browse 3 회)
+        problems += ["V7 " + p for p in search_liveness_problems(complete, min_browses=3, max_rejected=0.5, min_answered=0.5)]
     if complete and not ends["message"]:
         problems.append("끝까지 답한 행이 하나도 없다 (생성 상한 · 스텝 상한 · 사고를 닫지 않음)")
     print(f"smoke-check {arm}: 행 {len(rows)} · 보상 합 {sum(r.get('reward', 0) for r in rows)} · 끝 상태 {dict(ends)} · 도구 결과 {dict(kinds)} · "
@@ -349,24 +382,31 @@ def sign(ci):
 
 
 def verdict(m):
-    """판정 규칙 (모듈 설명) 을 수치 dict 에 적용한다."""
-    if not m["usage_tools"]["rollouts_with_successful_search"]:
+    """판정 규칙 (모듈 설명) 을 수치 dict 에 적용한다. 유효성 FAIL 이면 부르지 않는다."""
+    use = m["usage_tools"]["rollouts_with_successful_search"]
+    if not use:
         return "도구 미사용 — 판정 불가"
-    conditions = {"끝까지 답한 롤아웃만": m["primary_completed_only"], "누출 롤아웃 제외": m["leak"]["primary_without_leaked"],
-                  "도구 없음 대비": m["tools_minus_notools"]}
     primary = sign(m["primary_tools_minus_placebo"])
     if primary is None:
         return "판정 보류 (주 대조를 낼 수 없다)"
     redrawn = [f"{arm} {share:.1%}" for arm, share in m["redrawn_share"].items() if arm in TOOL_ARMS and share > INFRA_TOLERANCE]
     if redrawn:
         return f"판정 보류 (실패 뒤 다시 뽑힌 롤아웃이 많다: {', '.join(redrawn)})"
+    if m["leak"]["leaked_share"] > LEAK_TOLERANCE:
+        return f"판정 보류 (누출: tools 롤아웃의 {m['leak']['leaked_share']:.1%} 에서 질문 원문 · 제외 도메인이 도구 결과에 나왔다)"
     if primary == 1:
+        conditions = {"끝까지 답한 롤아웃만": m["primary_completed_only"], "장애 롤아웃을 0 점으로": m["primary_failed_as_zero"],
+                      "도구 없음 대비": m["tools_minus_notools"]}
         holds = [name for name, ci in conditions.items() if sign(ci) != 1]
         if m["placebo_minus_notools"]["hi"] is not None and m["placebo_minus_notools"]["hi"] < 0:
             holds.append("placebo 가 도구 없음보다 낮다 — 빈 결과가 모델을 망가뜨렸다")
         return "검색이 기여한다" if not holds else f"판정 보류 (주 대조는 양이나: {' · '.join(holds)})"
     if primary == -1:
-        return "검색이 깎는다" if sign(m["primary_completed_only"]) == -1 else "판정 보류 (주 대조는 음이나 끝까지 답한 롤아웃만으로는 아니다)"
+        conditions = {"끝까지 답한 롤아웃만": m["primary_completed_only"], "도구 없음 대비": m["tools_minus_notools"]}
+        holds = [name for name, ci in conditions.items() if sign(ci) != -1]
+        return "검색이 깎는다" if not holds else f"판정 보류 (주 대조는 음이나: {' · '.join(holds)})"
+    if use < MIN_SEARCH_USE:
+        return f"판정 불가 (도구 사용 부족 — 결과가 있는 검색을 한 롤아웃 {use:.1%} < {MIN_SEARCH_USE:.0%}, 차이가 안 보이는 것을 근거로 쓰지 않는다)"
     return "구분 안 됨"
 
 
@@ -389,11 +429,15 @@ def metrics(sample, arms, repeats, redrawn=None):
         half = repeats // 2  # 반복 번호 앞 절반 대 뒤 절반 — 같은 갈래 안의 잡음 크기
         out[f"noise_aa_{arm}"] = paired_ci([v[:half] for v in reward[arm]], [v[half:] for v in reward[arm]])
     out["primary_tools_minus_placebo"] = paired_ci(reward["tools"], reward["placebo"])
+    # 뺀 (백엔드 장애) tools 롤아웃을 0 점으로 넣은 것 — 장애가 어려운 문항에 몰렸다면 빼는 것이 효과를 부풀린다
+    out["primary_failed_as_zero"] = paired_ci(by_task(arms["tools"], lambda r: r["reward"] if usable(r) else 0.0, n), reward["placebo"])
     out["primary_completed_only"] = paired_ci(done["tools"], done["placebo"])
     out["tools_minus_notools"] = paired_ci(reward["tools"], reward["notools"])
     out["placebo_minus_notools"] = paired_ci(reward["placebo"], reward["notools"])
-    leaked = {(r["_ng_task_index"], r["_ng_rollout_index"]) for r in arms["tools"] if question_leaked(r)}
-    out["leak"] = {"rollouts_with_question_text_in_results": len(leaked) / len(arms["tools"]),
+    leaked = {(r["_ng_task_index"], r["_ng_rollout_index"]) for r in arms["tools"] if question_leaked(r) or from_excluded_domain(r)}
+    out["leak"] = {"leaked_share": len(leaked) / len(arms["tools"]),
+                   "question_text_in_results": statistics.mean(question_leaked(r) for r in arms["tools"]),
+                   "results_from_excluded_domains": statistics.mean(from_excluded_domain(r) for r in arms["tools"]),
                    "primary_without_leaked": paired_ci(
                        by_task(arms["tools"], lambda r: r["reward"], n,
                                keep=lambda r: usable(r) and (r["_ng_task_index"], r["_ng_rollout_index"]) not in leaked),
@@ -421,6 +465,7 @@ def metrics(sample, arms, repeats, redrawn=None):
             "rollouts_without_any_tool_call": statistics.mean(not ev for ev in events),
             "event_kinds": dict(sorted(kinds.items())),
             "search_rejected_share": kinds["search:rejected"] / max(1, sum(searches)),
+            "search_model_error_share": kinds["search:model_error"] / max(1, sum(searches)),  # 빈 · 400 자 초과 질의 (질문을 통째로 붙여넣음)
             "reward_when_search_used": statistics.mean(r["reward"] for r, u in zip(rows, used) if u) if any(used) else None,
             "reward_when_search_not_used": statistics.mean(r["reward"] for r, u in zip(rows, used) if not u) if not all(used) else None,
         }
@@ -441,7 +486,6 @@ def metrics(sample, arms, repeats, redrawn=None):
             "output_tokens_sum_mean": statistics.mean(u["output_tokens"] for u in have) if have else None,
             "output_tokens_sum_max": max(u["output_tokens"] for u in have) if have else None,
         }
-    out["verdict"] = verdict(out)
     return out
 
 
@@ -461,16 +505,20 @@ def analyze(out_dir, paths, repeats, search_cost, json_path):
     result = {"valid": valid, "checks": [{"name": n, "pass": ok, "detail": d} for n, ok, d in checks]}
     if all(ok for name, ok, _ in checks if name[:2] in ("V1", "V6")):  # 행이 온전하면 수치는 보여 준다 — 유효성 FAIL 이면 결론으로 쓰지 않는다
         m = metrics(sample, arms, repeats, redrawn)
+        m["verdict"] = verdict(m) if valid else None  # 유효성 FAIL 이면 판정을 내지 않는다
         result["metrics"] = m
         print(f"\n뺀 롤아웃 (백엔드 장애): {m['excluded_backend_failed']} · 실패 뒤 다시 뽑힌 롤아웃: {redrawn}")
         print("보상  " + " · ".join(f"{arm} {m[f'reward_{arm}']['mean']:.3f} ± {m[f'reward_{arm}']['se']:.3f}" for arm in ARMS) +
               f" · 무작위 {m['chance_floor']:.3f}  (문항 {m['n_tasks']} × 반복 {repeats}, ± 는 문항 단위 표준오차)")
         print(f"① 주 대조  tools − placebo = {fmt_ci(m['primary_tools_minus_placebo'])}")
         print(f"② 끝까지 답한 롤아웃만 = {fmt_ci(m['primary_completed_only'])}")
-        print(f"③ 질문 원문이 결과에 나온 롤아웃 ({m['leak']['rollouts_with_question_text_in_results']:.1%}) 을 뺀 것 = {fmt_ci(m['leak']['primary_without_leaked'])}")
+        print(f"③ 장애로 뺀 tools 롤아웃을 0 점으로 = {fmt_ci(m['primary_failed_as_zero'])}")
         print(f"④ tools − notools = {fmt_ci(m['tools_minus_notools'])}  (지시문 · 턴 수 · 총 생성량이 함께 다르다 — 단독으로는 검색의 기여가 아니다)")
         print(f"   placebo − notools = {fmt_ci(m['placebo_minus_notools'])}  (상한 < 0 이면 빈 결과가 모델을 망가뜨린 것)")
-        print(f"  → 판정: {m['verdict']}")
+        k = m["leak"]
+        print(f"   누출: tools 롤아웃의 {k['leaked_share']:.1%} (질문 원문이 결과에 {k['question_text_in_results']:.1%} · 제외 도메인 결과 {k['results_from_excluded_domains']:.1%})"
+              f" — 허용 {LEAK_TOLERANCE:.0%}. 그 롤아웃을 뺀 대조 (서술용) = {fmt_ci(k['primary_without_leaked'])}")
+        print(f"  → 판정: {m['verdict'] if valid else '내지 않는다 (유효성 FAIL)'}")
         print("잡음 (같은 갈래의 반복 앞 절반 − 뒤 절반): " + " · ".join(f"{arm} {fmt_ci(m[f'noise_aa_{arm}'])}" for arm in ARMS))
         print("난이도 표지별: " + " · ".join(f"{k}: " + " / ".join("값 없음" if v[arm] is None else f"{v[arm]:.3f}" for arm in ARMS)
                                          for k, v in m["by_difficulty"].items()) +
@@ -481,7 +529,8 @@ def analyze(out_dir, paths, repeats, search_cost, json_path):
                   f" · 최대 {u['searches_per_rollout']['max']} | browse 평균 {u['browses_per_rollout']['mean']:.2f} · 최대 {u['browses_per_rollout']['max']}"
                   f" | 크레딧/롤아웃 {u['credits_per_rollout']:.2f} (합 {u['credits_total']}) · 재시도 {u['retries_total']}")
             print(f"[{arm}] 결과가 있는 검색을 한 롤아웃 {u['rollouts_with_successful_search']:.1%} · 도구 호출 0 인 롤아웃 {u['rollouts_without_any_tool_call']:.1%}"
-                  f" · 검색 거절 비율 {u['search_rejected_share']:.1%} · 도구 결과 종류 {u['event_kinds']}")
+                  f" · 검색 거절 비율 {u['search_rejected_share']:.1%} · 모델 탓 질의 (빈 · 400 자 초과) {u['search_model_error_share']:.1%}"
+                  f" · 도구 결과 종류 {u['event_kinds']}")
         u = m["usage_tools"]
         print(f"[tools] 검색을 쓴 롤아웃의 보상 {u['reward_when_search_used']} · 안 쓴 롤아웃 {u['reward_when_search_not_used']} (서술용 — 쓴 쪽이 어려운 문항일 수 있다)")
         print(f"1 에폭 ({EPOCH_ROLLOUTS:,} 롤아웃) 검색 비용 추정: basic ${m['epoch_cost_usd']['basic']:,.0f} · advanced ${m['epoch_cost_usd']['advanced']:,.0f}"
@@ -589,7 +638,50 @@ def self_test():
         sample, arms = _synthetic(n_tasks=12, repeats=4)
         mutate(sample, arms)
         bad = {name[:2] for name, ok, _ in validity(sample, arms, 4) if not ok}
-        return bad, metrics(sample, arms, 4, redrawn)
+        m = metrics(sample, arms, 4, redrawn)
+        m["verdict"] = verdict(m) if not bad else None  # analyze 와 같은 순서
+        return bad, m
+
+    SEARCH_OK = {"search_results": "Search Results\n==============\n[1] T (a.org)\n    URL: https://a.org\n    Summary: s\n\n"}
+
+    def leak_within_questions(s, a):  # 모델이 아는 롤아웃은 누출 없이 맞히고, 모르는 롤아웃은 질문을 붙여넣어 답안지 페이지를 찾는다 (문항 안에서 섞임)
+        for arm in ARMS:
+            for r in a[arm]:
+                knows = r["_ng_rollout_index"] < 2
+                set_reward(r, knows or arm == "tools")
+                if arm == "tools" and not knows:
+                    stem = r["responses_create_params"]["input"].split("\n")[0]
+                    r["response"]["output"][1]["output"] = json.dumps({"search_results": SEARCH_OK["search_results"].replace("Summary: s", f"Summary: {stem} Answer: A")})
+
+    def excluded_domain_result(s, a):
+        for r in a["tools"][:8]:
+            r["response"]["output"][1]["output"] = json.dumps({"search_results": SEARCH_OK["search_results"].replace("https://a.org", "https://cdn.huggingface.co/x")})
+
+    def odd_tool_name(s, a):  # Gym 은 `/{이름}` 으로 보내 `search? …` 도 /search 핸들러가 받는다 — 서버 통계와 어긋난 것으로 세면 안 된다
+        a["tools"][0]["response"]["output"][0]["name"] = "search? Actually, let me search"
+        a["placebo"][0]["response"]["output"][0]["name"] = "search#x"
+
+    def long_queries(s, a):  # 롤아웃의 절반이 400 자 넘는 질의를 먼저 보낸다 — 모델 탓이지 검색 경로 장애가 아니다
+        for r in a["tools"][::2]:
+            r["response"]["output"][:0] = _call("c0", "search", {"query": "x" * 500}, {"search_results": "Query is too long"})
+            r["num_search_calls"] += 1
+
+    def low_use_no_difference(s, a):  # tools 의 8/48 롤아웃만 검색하고 나머지는 도구 없이 답한다. 세 갈래 보상은 같다
+        for arm in ARMS:
+            for r in a[arm]:
+                set_reward(r, r["_ng_task_index"] % 2 == 0)
+        for r in a["tools"][8:]:
+            r["response"]["output"] = r["response"]["output"][-1:]
+            r.update(num_search_calls=0, num_browse_calls=0, num_search_credits=0)
+
+    def tools_all_wrong(s, a):
+        for r in a["tools"]:
+            set_reward(r, False)
+
+    def mixed_infra(s, a):  # 장애 1 행 + usage 누락 2 행 = 3/48 — 범주마다는 5% 아래지만 합치면 넘는다
+        backend_failed_rows(1)(s, a)
+        for r in a["tools"][5:7]:
+            r["num_search_usage_missing"] = 1
 
     def set_reward(r, correct):
         letter = r["expected_answer"] if correct else "ABCD"[("ABCD".index(r["expected_answer"]) + 1) % 4]
@@ -632,12 +724,13 @@ def self_test():
         return mutate
 
     def overflow_and_cap(s, a):
+        empty = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]}
         a["tools"][0]["response"].update(incomplete_details={"reason": "max_output_tokens"})
-        a["tools"][0]["response"]["output"].pop()                     # 마지막이 도구 결과 = 모델이 아무것도 못 냄
+        a["tools"][0]["response"]["output"][-1] = empty                 # Gym 의 문맥 초과 = 도구 결과 뒤에 빈 메시지
         a["tools"][0]["reward"] = 0.0
         a["tools"][1]["response"].update(incomplete_details={"reason": "max_output_tokens"})
-        a["tools"][1]["response"]["output"][-1] = {"type": "reasoning", "summary": []}
-        a["tools"][1]["reward"] = 0.0
+        a["tools"][1]["response"]["output"][-1:] = [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking…"}]}, empty]
+        a["tools"][1]["reward"] = 0.0                                   # 생성 상한 = 사고를 내다가 잘림
 
     def no_tool_use(s, a):  # tools 갈래가 도구를 한 번도 안 불렀는데 보상만 높다
         for r in a["tools"]:
@@ -674,8 +767,19 @@ def self_test():
         "판정: 검색 갈래가 뚜렷이 높음": (judged(clear_win), lambda bad, m: not bad and m["verdict"] == "검색이 기여한다"),
         "판정: placebo 만 망가짐 (tools = notools)": (judged(placebo_damaged), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")
                                              and sign(m["primary_tools_minus_placebo"]) == 1),
-        "판정: 누출된 문항에서만 효과": (judged(leak_only), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")
+        "판정: 누출된 문항에서만 효과": (judged(leak_only), lambda bad, m: not bad and m["verdict"].startswith("판정 보류 (누출")
                                and sign(m["primary_tools_minus_placebo"]) == 1),
+        "판정: 문항 안에서 모르는 롤아웃만 누출": (judged(leak_within_questions), lambda bad, m: not bad and m["verdict"].startswith("판정 보류 (누출")
+                                    and sign(m["leak"]["primary_without_leaked"]) is not None),
+        "판정: 제외 도메인 결과도 누출로 센다": (judged(excluded_domain_result), lambda bad, m: abs(m["leak"]["results_from_excluded_domains"] - 8 / 48) < 1e-9
+                                   and m["verdict"].startswith("판정 보류 (누출")),
+        "판정: 도구를 거의 안 썼고 차이 없음": (judged(low_use_no_difference), lambda bad, m: not bad and m["verdict"].startswith("판정 불가 (도구 사용 부족")),
+        "판정: 검색 갈래가 뚜렷이 낮음": (judged(tools_all_wrong), lambda bad, m: not bad and m["verdict"] == "검색이 깎는다"),
+        "판정: 장애 롤아웃을 0 점으로 넣은 구간": (judged(backend_failed_rows(2)), lambda bad, m: not bad
+                                    and m["primary_failed_as_zero"]["diff"] <= m["primary_tools_minus_placebo"]["diff"]),
+        "유효성: 이상한 도구 이름도 닿은 핸들러로 센다": (judged(odd_tool_name), lambda bad, m: not bad),
+        "유효성: 긴 질의 (모델 탓) 는 검색 장애가 아니다": (judged(long_queries), lambda bad, m: not bad and m["usage_tools"]["search_model_error_share"] > 0.3),
+        "유효성: 인프라 탓 행은 합쳐서 센다": (judged(mixed_infra), lambda bad, m: {"V4", "V7"} <= bad and m["verdict"] is None),
         "판정: 다시 뽑힌 롤아웃이 많음": (judged(clear_win, redrawn={"tools": 6}), lambda bad, m: not bad and m["verdict"].startswith("판정 보류")),
         "유효성: 검색이 거의 다 거절": (judged(search_mostly_rejected), lambda bad, m: "V7" in bad),
         "유효성: browse 가 전부 실패": (judged(browse_dead), lambda bad, m: "V7" in bad),
@@ -685,8 +789,8 @@ def self_test():
                                     and abs(m["answers_tools"]["end_states"]["generation_cap"] - 1 / 48) < 1e-9),
         "잡음 추정이 파일 순서와 무관": (judged(shuffled), lambda bad, m: not bad and m["noise_aa_tools"] == base["noise_aa_tools"]
                                 and m["primary_tools_minus_placebo"] == base["primary_tools_minus_placebo"]),
-        "질문 원문 누출 표시": (judged(leak), lambda bad, m: m["leak"]["rollouts_with_question_text_in_results"] == 1.0),
-        "깨끗한 결과에는 누출 0 · 끝 상태 전부 답함": ((bad, base), lambda bad, m: not bad and m["leak"]["rollouts_with_question_text_in_results"] == 0
+        "질문 원문 누출 표시": (judged(leak), lambda bad, m: m["leak"]["leaked_share"] == 1.0 and m["leak"]["question_text_in_results"] == 1.0),
+        "깨끗한 결과에는 누출 0 · 끝 상태 전부 답함": ((bad, base), lambda bad, m: not bad and m["leak"]["leaked_share"] == 0
                                        and m["answers_tools"]["end_states"]["message"] == 1.0 and m["usage_tools"]["credits_per_rollout"] == 1
                                        and abs(m["chance_floor"] - 0.25) < 1e-9),
     }
