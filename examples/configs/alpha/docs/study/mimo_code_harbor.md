@@ -201,6 +201,10 @@ README 가 "token ID 를 돌려주지 않을 수 있어 학습은 지원하지 �
 
 **요청 사양 (확정 후보)**: ① seccomp — 에이전트가 넘기는 JSON 에 `{"names":["setns","mount","umount2","pivot_root"],"action":"SCMP_ACT_ALLOW"}` 와 `{"names":["unshare","clone"],"action":"SCMP_ACT_ALLOW","args":[{"index":0,"value":1073741824,"valueTwo":0,"op":"SCMP_CMP_MASKED_EQ"}]}` 추가 ② AppArmor `docker-apptainer` ③ `/dev/fuse` (cgroup `rwm`). 수용 시험 `accept/acceptance.sh` — 지금의 막힌 세션에서 5 단계 FAIL 을 보고함 (음성 대조).
 
+**인프라 쪽 작업 지점** (Backend.AI 공개 코드 main 기준, 배포 버전 미확인 · 적용 미시험, 안내문 `accept/infra_worksheet.md`):
+seccomp 는 `<site-packages>/ai/backend/runner/default-seccomp.json` 의 `syscalls` 배열에 규칙 둘을 추가 — 에이전트가 컨테이너 생성 때마다 읽고, 노드의 모든 세션에 적용되며, 업그레이드 때 덮어써진다. 플러그인의 `get_additional_allowed_syscalls()` 는 이름만 받아 인자 조건을 못 담는다.
+AppArmor 는 호스트 `/etc/apparmor.d/docker-apptainer` 적재 + `HostConfig.SecurityOpt` 에 `apparmor=docker-apptainer`, `/dev/fuse` 는 `HostConfig.Devices`. 이 둘을 넣는 설정 항목은 `agent.toml` 에 없다 (저장소에 apparmor 문자열 없음) — compute 플러그인의 `generate_docker_args()` (그 슬롯을 받은 세션만) 또는 `agent/docker/agent.py` 수정 (`/dev/infiniband` 블록이 선례, 노드 전체).
+
 **열린 항목**: 사용자 결정 (`CLONE_NEWNET` 차단 여부 · 노드 전체 적용 수용 여부 · PID 방식) · 인프라 요청 발송 · 시험 세션에서만 닫히는 것 (AppArmor 집행 · NVIDIA 덮임 · 커널 6.5 · cgroup v2 · Backend.AI 의 적용 방법).
 
 ## 7. 착수 때 다시 확인할 것
