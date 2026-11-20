@@ -174,7 +174,34 @@ README 가 "token ID 를 돌려주지 않을 수 있어 학습은 지원하지 �
 (M) 수용 시험은 `ls /dev/fuse` 가 아니라 open 으로, 하네스의 `swe_real` PASS 조건에 hosts_write 가 없고 결과 파일이 재사용된다.
 정정: 커널 6.5 에서도 FUSE 하위 계층이면 fuse-overlayfs 를 쓴다.
 
-**열린 항목**: 2차 리허설 (Backend.AI 방식 프로파일 그대로 · `CLONE_NEWNET` 제외 변형 · PID 격리 선택지 비교 · 하네스 수정) · AppArmor 집행 · NVIDIA 덮임 · 커널 6.5 는 인프라 시험 세션에서만 확인 가능 · Backend.AI 의 세션 단위 적용 방법.
+**2차 리허설** (같은 장소, 하네스 수정: 결과 파일을 실행마다 새로 · PASS 조건에 `/etc/hosts` 쓰기 포함, 로그 `round2/run_{A..F}.log`)
+
+| 항목 | 결과 |
+|---|---|
+| Backend.AI 기본 프로파일 그대로 (음성 대조) | FAIL — 세션과 같은 증상 |
+| 이름 6개를 조건 없이 추가 (에이전트의 "추가 허용" 방식) | 전부 PASS, 새 netns 도 만들어짐 |
+| `unshare` · `clone` 을 `CLONE_NEWNET` 없을 때만 허용 + `setns` `mount` `umount2` `pivot_root` | 전부 PASS, `unshare -Urn` 과 `clone(NEWUSER\|NEWNET)` 은 EPERM |
+| PID: `allow pid ns = no` | 샌드박스 안의 `kill` 이 세션 프로세스를 **죽임**, 트리 kill 뒤 고아 데몬이 **남음** |
+| PID: namespace 유지 + `mount proc = no` | 신호 격리 · 정리됨. `<(…)` · `/dev/stdout` · `ps` 가 **안 됨** |
+| PID: namespace 유지 + `mount proc = no` + `APPTAINER_BIND=/proc` | 신호 격리 · 정리됨, `<(…)` 됨. `/proc` 의 pid 가 바깥 번호라 `pgrep` · `pkill` · `ps -p` 가 자기 프로세스를 **못 잡음** |
+| PID: 별도 uid 로 실행 | 세션 프로세스는 안전하나 학습 쪽 트리 kill 이 **실패** (killpg 실패 2 · 잔류 1) |
+| 바깥 `/proc` 를 통한 접근 (PID 방식과 무관) | 세션 프로세스의 `oom_score_adj` 를 0 → 1000 으로 **쓸 수 있음**. environ · cwd · mem 은 거부 |
+| 후보 구성 (`CLONE_NEWNET` 제외 + `/dev/fuse` + namespace 유지 + 바깥 `/proc` bind) | 실제 SWE 이미지 uid 1100 · root-mapped 둘 다 PASS, `--fakeroot --containall --pid` PASS, `instance start --fakeroot` 뒤 `exec` (fakeroot 없이) id 0 PASS |
+| `newuidmap` · `newgidmap` 을 file capability 로 (`cap_setuid=ep` · `cap_setgid=ep`) | 다중 uid fakeroot PASS — CAP_SYS_ADMIN 불필요 |
+| AppArmor 프로파일 `round2/apparmor/docker-apptainer` | `apparmor_parser 4.0.1 -Q` 문법 통과, 깨뜨린 대조는 거부. 집행은 미측정 |
+
+시험 도구 사고: `strace -f` 가 FUSE 데몬을 멈춘 채 FUSE 위의 메모리를 읽다가 교착 (프로세스 6개 · 약 11분). fusectl 로 해당 연결 하나를 abort 해 정리. FUSE 를 쓰는 실행을 `strace -f` 로 통째로 추적하지 않는다.
+
+**재판정** (같은 검증자): **확인** — 필수 보완을 반영한 문안 기준. 반론 요지:
+(H1) seccomp-bpf 방식 census 는 다른 필터가 ERRNO 로 막은 호출에서 멈추지 않으므로 "막힌 syscall 을 시도하지 않는다" 는 결론은 철회한다 (실제 세션의 기능 시험이 판정).
+(H2) 위 `oom_score_adj` 쓰기 — 실측으로 확인.
+(H3) `CLONE_NEWNET` 을 막으면 `--net --network none` 격리도 못 쓰고, 샌드박스는 세션 netns 를 공유한다 (Ray · vLLM 포트).
+(M) AppArmor 프로파일의 부팅 적재 · `apparmor=` 를 넣는 경로 · seccomp JSON 의 업그레이드 유지 · 이름 목록 방식 금지를 문안에 넣는다. `APPTAINER_BIND` 가 Gym 의 subprocess 환경으로 전달되는지는 미시험.
+설계대로의 새 procfs 는 커널 6.5 에서 `/proc` 마스킹을 풀지 않고는 얻을 수 없다.
+
+**요청 사양 (확정 후보)**: ① seccomp — 에이전트가 넘기는 JSON 에 `{"names":["setns","mount","umount2","pivot_root"],"action":"SCMP_ACT_ALLOW"}` 와 `{"names":["unshare","clone"],"action":"SCMP_ACT_ALLOW","args":[{"index":0,"value":1073741824,"valueTwo":0,"op":"SCMP_CMP_MASKED_EQ"}]}` 추가 ② AppArmor `docker-apptainer` ③ `/dev/fuse` (cgroup `rwm`). 수용 시험 `accept/acceptance.sh` — 지금의 막힌 세션에서 5 단계 FAIL 을 보고함 (음성 대조).
+
+**열린 항목**: 사용자 결정 (`CLONE_NEWNET` 차단 여부 · 노드 전체 적용 수용 여부 · PID 방식) · 인프라 요청 발송 · 시험 세션에서만 닫히는 것 (AppArmor 집행 · NVIDIA 덮임 · 커널 6.5 · cgroup v2 · Backend.AI 의 적용 방법).
 
 ## 7. 착수 때 다시 확인할 것
 
