@@ -12,6 +12,7 @@ alpha_web_search_mcqa_resources_server:
       max_result_chars: 2000
       exclude_domains: []        # NVIDIA 의 제외 목록은 내부 파일이라 없다
       search_max_tries: 3
+      search_max_per_minute: null   # Tavily 분당 한도: 개발 키 100 · 운영 키 1,000 (유료 요금제 또는 종량제). 키에 맞춰 준다
       mask_on_search_error: true
       num_workers: 1             # 세션 통계가 프로세스 메모리에 있다
       domain: agent

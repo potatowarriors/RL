@@ -16,7 +16,10 @@ Gym `google_search` 와 다른 점:
    `instance_config.mask_sample` 로 표시해 NeMo-RL 이 손실에서 뺀다 (`rollouts._extract_mask_sample_flags`, 지표
    `num_mask_sample_filtered`). 원본은 실패를 `Error: …` 도구 결과로만 돌려 할당량이 바닥나도 보상만 떨어진 채 런이 계속된다.
 
-세션 통계는 프로세스 메모리에 있다 — 이 서버는 워커 1개로만 띄운다 (`num_workers` > 1 이면 기동을 거부한다).
+5. Tavily 의 분당 한도 (개발 키 100 · 운영 키 1,000 회) 를 서버가 지킨다. `search_max_per_minute` 를 주면 검색을 고르게 띄워 보내고,
+   그래도 429 가 오면 `search_rate_limit_max_wait_s` 까지 기다렸다 다시 부른다. 롤아웃 수백 개가 한꺼번에 검색해도 장애로 세지 않는다.
+
+세션 통계 · 속도 제한은 프로세스 메모리에 있다 — 이 서버는 워커 1개로만 띄운다 (`num_workers` > 1 이면 기동을 거부한다).
 """
 
 import asyncio
@@ -33,7 +36,7 @@ import trafilatura
 from fastapi import Request
 from pydantic import Field, PrivateAttr
 from tavily import AsyncTavilyClient
-from tavily.errors import BadRequestError, ForbiddenError, InvalidAPIKeyError
+from tavily.errors import BadRequestError, ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError
 
 from nemo_gym.server_utils import SESSION_ID_KEY
 from resources_servers.google_search.app import (
@@ -66,9 +69,11 @@ class AlphaWebSearchMcqaResourcesServerConfig(GoogleSearchResourcesServerConfig)
     max_results: int = 10
     max_result_chars: int = 2000
     exclude_domains: list[str] = Field(default_factory=list)
-    search_max_tries: int = 3
+    search_max_tries: int = 3  # 5xx · 시간 초과 · 연결 오류에 대한 시도 수
     search_retry_backoff_s: float = 0.5
     search_timeout_s: float = 30.0
+    search_max_per_minute: Optional[float] = None  # 서버 전체의 검색 호출 속도 상한 (없으면 제한하지 않는다)
+    search_rate_limit_max_wait_s: float = 120.0  # 429 를 받은 검색 하나가 다시 부르며 기다리는 최대 시간
     browse_max_concurrency: int = 32
     mask_on_search_error: bool = True
 
@@ -80,10 +85,27 @@ class AlphaWebSearchMcqaVerifyResponse(GoogleSearchVerifyResponse):
     answer_found: bool
     num_search_calls: int
     num_search_errors: int
+    num_search_retries: int
     num_search_credits: int
     num_browse_calls: int
     num_browse_errors: int
     instance_config: Optional[dict[str, Any]] = None
+
+
+class RateLimiter:
+    """호출을 60 / per_minute 초 간격으로 고르게 띄운다 (몰아서 보내면 분당 한도 안이어도 429 가 온다)."""
+
+    def __init__(self, per_minute: float):
+        self._interval = 60.0 / per_minute
+        self._next = 0.0
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            slot = max(self._next, loop.time())
+            self._next = slot + self._interval
+        await asyncio.sleep(max(0.0, slot - loop.time()))
 
 
 class SearchBackendError(Exception):
@@ -177,6 +199,7 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
     _num_search_requests: int = PrivateAttr(default=0)
     _session_stats: dict[str, Counter] = PrivateAttr(default_factory=dict)
     _browse_pool: Optional[ThreadPoolExecutor] = PrivateAttr(default=None)
+    _limiter: Optional[RateLimiter] = PrivateAttr(default=None)
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
@@ -185,14 +208,22 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
         keys = load_tavily_keys(self.config.tavily_api_key, self.config.tavily_api_key_file)
         self._tavily_clients = [AsyncTavilyClient(api_key=k) for k in keys]
         self._browse_pool = ThreadPoolExecutor(max_workers=self.config.browse_max_concurrency, thread_name_prefix="browse")
-        print(f"alpha_web_search_mcqa: Tavily 키 {len(keys)} 개 · search_depth={self.config.search_depth} · max_results={self.config.max_results}")
+        if self.config.search_max_per_minute:
+            self._limiter = RateLimiter(self.config.search_max_per_minute)
+        print(
+            f"alpha_web_search_mcqa: Tavily 키 {len(keys)} 개 · search_depth={self.config.search_depth} · max_results={self.config.max_results}"
+            f" · search_max_per_minute={self.config.search_max_per_minute}"
+        )
 
     def _stats(self, request: Request) -> Counter:
         return self._session_stats.setdefault(request.session[SESSION_ID_KEY], Counter())
 
-    async def _tavily_search(self, query: str) -> dict:
-        failure = None
-        for attempt in range(self.config.search_max_tries):
+    async def _tavily_search(self, query: str, stats: Counter) -> dict:
+        loop = asyncio.get_running_loop()
+        failures, rate_hits, rate_deadline = 0, 0, None
+        while True:
+            if self._limiter is not None:
+                await self._limiter.wait()
             client = self._tavily_clients[self._num_search_requests % len(self._tavily_clients)]
             self._num_search_requests += 1
             try:
@@ -211,11 +242,19 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
                 raise SearchBackendError("invalid_api_key", e) from e
             except ForbiddenError as e:  # 403 · 432 (요금제 한도) · 433 (종량제 한도) — 다시 불러도 같다
                 raise SearchBackendError("usage_limit", e) from e
-            except Exception as e:  # 429 · 5xx · 시간 초과 · 연결 오류
-                failure = e
-            if attempt + 1 < self.config.search_max_tries:
-                await asyncio.sleep(self.config.search_retry_backoff_s * 2**attempt)
-        raise SearchBackendError("unavailable", failure) from failure
+            except UsageLimitExceededError as e:  # 429 분당 한도 — 기다리면 풀린다
+                rate_deadline = rate_deadline or loop.time() + self.config.search_rate_limit_max_wait_s
+                if loop.time() >= rate_deadline:
+                    raise SearchBackendError("rate_limited", e) from e
+                delay = min(self.config.search_retry_backoff_s * 2 ** min(rate_hits, 6), 30.0)
+                rate_hits += 1
+            except Exception as e:  # 5xx · 시간 초과 · 연결 오류
+                failures += 1
+                if failures >= self.config.search_max_tries:
+                    raise SearchBackendError("unavailable", e) from e
+                delay = self.config.search_retry_backoff_s * 2 ** (failures - 1)
+            stats["search_retries"] += 1
+            await asyncio.sleep(delay)
 
     async def search(self, request: Request, body: BaseSearchQueryRequest) -> BaseGetSearchQueryResponse:
         stats = self._stats(request)
@@ -225,7 +264,7 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
         if len(body.query) > MAX_QUERY_CHARS:
             return BaseGetSearchQueryResponse(search_results="Query is too long")
         try:
-            results = await self._tavily_search(body.query)
+            results = await self._tavily_search(body.query, stats)
         except BadRequestError:
             return BaseGetSearchQueryResponse(search_results="Error: the search engine rejected this query")
         except SearchBackendError as e:
@@ -262,6 +301,7 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
             answer_found=parsed_option is not None,
             num_search_calls=stats["search_calls"],
             num_search_errors=stats["search_errors"],
+            num_search_retries=stats["search_retries"],
             num_search_credits=stats["search_credits"],
             num_browse_calls=stats["browse_calls"],
             num_browse_errors=stats["browse_errors"],

@@ -268,6 +268,40 @@ def test_transient_failures_are_retried():
     assert vr.num_search_errors == 1 and vr.instance_config == {"mask_sample": True}
 
 
+def test_rate_limit_429_waits_and_recovers_then_gives_up_after_the_deadline():
+    ok = {"results": [HIT], "usage": {"credits": 1}}
+    recovering = FakeTavily(*[UsageLimitExceededError("429")] * 6, ok)  # search_max_tries (3) 보다 많이 와도 기다린다
+    server = make_server(recovering)
+    assert run(server.search(session(), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
+    vr = run(server.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message("x")))))
+    assert (len(recovering.calls), vr.num_search_retries, vr.num_search_errors, vr.instance_config) == (7, 6, 0, None)
+
+    stuck = FakeTavily(UsageLimitExceededError("429 " + SECRET))
+    server2 = make_server(stuck, search_rate_limit_max_wait_s=0.05)
+    out = run(server2.search(session(), BaseSearchQueryRequest(query="q")))
+    assert out.search_results == "Error: search is unavailable (rate_limited)"
+    vr2 = run(server2.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message("x")))))
+    assert vr2.num_search_errors == 1 and vr2.num_search_retries >= 1 and vr2.instance_config == {"mask_sample": True}
+
+
+def test_search_rate_limiter_spaces_calls_across_sessions():
+    class Timed(FakeTavily):
+        async def search(self, query, **kwargs):
+            self.times = getattr(self, "times", []) + [time.perf_counter()]
+            return await super().search(query, **kwargs)
+
+    async def burst(server, n):
+        await asyncio.gather(*(server.search(session(f"s{i}"), BaseSearchQueryRequest(query="q")) for i in range(n)))
+
+    limited = Timed()
+    run(burst(make_server(limited, search_max_per_minute=600), 5))  # 0.1 초 간격
+    gaps = [b - a for a, b in zip(limited.times, limited.times[1:])]
+    assert len(limited.times) == 5 and min(gaps) > 0.07 and limited.times[-1] - limited.times[0] > 0.35
+    free = Timed()
+    run(burst(make_server(free), 5))
+    assert free.times[-1] - free.times[0] < 0.05
+
+
 def test_rejected_query_is_model_visible_not_a_backend_failure():
     fake = FakeTavily(BadRequestError("invalid query"))
     server = make_server(fake)
