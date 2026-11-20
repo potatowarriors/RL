@@ -9,7 +9,8 @@ Gym `google_search` 와 다른 점:
    요청하지도 돌려주지도 않는다 — 객관식에서는 정답을 그대로 알려 줄 수 있다.
 2. `browse` 는 같은 trafilatura 추출 · 같은 자르기지만 스레드 풀에서 돈다. 원본은 async 핸들러 안의 동기 호출이라 페이지 하나가 서버
    전체 (다른 롤아웃의 도구 호출 · 채점) 를 세운다. http(s) 가 아니거나 내부 주소인 URL 은 가져오지 않는다 — 롤아웃 노드에는 인증 없는
-   내부 서비스가 떠 있다. 이름이 내부 주소로 풀리는 경우와 리다이렉트는 막지 못한다.
+   내부 서비스가 떠 있다. 이름은 풀어서 본다 (`127.1` 같은 숫자 표기 포함). 리다이렉트 뒤의 주소는 막지 못한다. `exclude_domains` 는
+   검색과 browse 양쪽에 적용한다.
 3. `verify` 는 `\boxed{…}` 가 없는 답을 보상 0 으로 돌린다. 원본은 `parsed_option=None` 을 str 필드에 넣어 500 을 내고, NeMo-RL 은 롤아웃
    예외를 그대로 올린다. 채점 규칙 (마지막 assistant 메시지의 첫 `\boxed{…}` 가 정답과 완전히 같으면 1) 은 원본과 같다.
 4. 세션별 도구 호출 · 실패 수 · Tavily 크레딧을 verify 응답에 싣는다. 검색 백엔드 장애 (한도 · 인증 · 재시도 뒤에도 실패) 가 있던 롤아웃은
@@ -19,13 +20,19 @@ Gym `google_search` 와 다른 점:
 5. Tavily 의 분당 한도 (개발 키 100 · 운영 키 1,000 회) 를 서버가 지킨다. `search_max_per_minute` 를 주면 검색을 고르게 띄워 보내고,
    그래도 429 가 오면 `search_rate_limit_max_wait_s` 까지 기다렸다 다시 부른다. 롤아웃 수백 개가 한꺼번에 검색해도 장애로 세지 않는다.
 
-세션 통계 · 속도 제한은 프로세스 메모리에 있다 — 이 서버는 워커 1개로만 띄운다 (`num_workers` > 1 이면 기동을 거부한다).
+6. `search_credit_budget` 를 주면 서버가 쓴 크레딧이 그 값을 넘기 전에 검색을 멈춘다 (넘친 검색은 장애 `budget_exhausted` 로 세고 마스크).
+   Tavily 응답에 `usage` 가 없으면 깊이의 정가 (basic 1 · advanced 2) 로 세고 `num_search_usage_missing` 에 남긴다 — 0 으로 읽지 않는다.
+7. `search_backend: none` 은 대조용이다. 도구 · 지시문 · 턴 구조는 그대로 두고 `search` 는 결과 0 건, `browse` 는 본문 없음을 돌려준다
+   (Tavily 를 부르지 않고 페이지도 가져오지 않는다). 검색이 준 정보의 몫을 가르는 데 쓴다.
+
+세션 통계 · 속도 제한 · 크레딧 장부는 프로세스 메모리에 있다 — 이 서버는 워커 1개로만 띄운다 (`num_workers` > 1 이면 기동을 거부한다).
 """
 
 import asyncio
 import ipaddress
 import os
 import re
+import socket
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -65,7 +72,9 @@ class AlphaWebSearchMcqaResourcesServerConfig(GoogleSearchResourcesServerConfig)
     # 레시피에는 파일 경로를 쓴다 — 값을 쓰면 설정 덤프와 W&B 에 남는다.
     tavily_api_key: Optional[str | list[str]] = None
     tavily_api_key_file: Optional[str] = None
+    search_backend: Literal["tavily", "none"] = "tavily"  # none = 대조용 (검색 결과 0 건 · browse 본문 없음, 외부 호출 없음)
     search_depth: Literal["basic", "advanced"] = "basic"  # 검색당 1 · 2 크레딧. Gym tavily_search 는 advanced
+    search_credit_budget: Optional[int] = None  # 이 서버가 쓸 크레딧 상한 (없으면 제한하지 않는다)
     max_results: int = 10
     max_result_chars: int = 2000
     exclude_domains: list[str] = Field(default_factory=list)
@@ -87,6 +96,7 @@ class AlphaWebSearchMcqaVerifyResponse(GoogleSearchVerifyResponse):
     num_search_errors: int
     num_search_retries: int
     num_search_credits: int
+    num_search_usage_missing: int
     num_browse_calls: int
     num_browse_errors: int
     instance_config: Optional[dict[str, Any]] = None
@@ -151,8 +161,16 @@ def format_search_results(results: dict, max_result_chars: int) -> str:
     return "".join(out)
 
 
-def blocked_url_reason(url: str) -> Optional[str]:
-    """가져오면 안 되는 URL 이면 모델에게 보일 사유를 돌려준다."""
+def resolve_addresses(host: str) -> list[str]:
+    """호스트가 풀리는 주소들 (숫자 표기 `127.1` · `0x7f.1` 도 여기서 풀린다). 풀리지 않으면 빈 목록."""
+    try:
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+    except (socket.gaierror, UnicodeError):
+        return []
+
+
+def blocked_url_reason(url: str, exclude_domains: tuple[str, ...] = ()) -> Optional[str]:
+    """가져오면 안 되는 URL 이면 모델에게 보일 사유를 돌려준다. 이름을 푸느라 막힐 수 있다 — 이벤트 루프 밖에서 부른다."""
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
@@ -160,11 +178,13 @@ def blocked_url_reason(url: str) -> Optional[str]:
         return "invalid URL"
     if parsed.scheme not in ("http", "https") or not host:
         return "only http(s) URLs can be browsed"
-    try:
-        internal = not ipaddress.ip_address(host).is_global
-    except ValueError:  # 이름: 점이 없거나 내부 전용 접미사면 내부 주소로 본다
-        internal = "." not in host or host.endswith((".localhost", ".local", ".internal"))
-    return "internal addresses cannot be browsed" if internal else None
+    if any(host == d or host.endswith("." + d) for d in exclude_domains):
+        return "URL is in excluded domains"
+    if "." not in host and ":" not in host or host.endswith((".localhost", ".local", ".internal")):
+        return "internal addresses cannot be browsed"  # 점 없는 이름 · 내부 전용 접미사
+    if any(not ipaddress.ip_address(a.split("%")[0]).is_global for a in resolve_addresses(host)):
+        return "internal addresses cannot be browsed"
+    return None
 
 
 def fetch_page_text(url: str) -> tuple[bool, str]:
@@ -200,19 +220,21 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
     _session_stats: dict[str, Counter] = PrivateAttr(default_factory=dict)
     _browse_pool: Optional[ThreadPoolExecutor] = PrivateAttr(default=None)
     _limiter: Optional[RateLimiter] = PrivateAttr(default=None)
+    _credits_committed: int = PrivateAttr(default=0)  # 쓴 크레딧 + 응답을 기다리는 검색의 정가
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
         if (self.config.num_workers or 1) > 1:
             raise ValueError("alpha_web_search_mcqa: 세션 통계가 프로세스 메모리에 있다 — num_workers 는 1 이어야 한다")
-        keys = load_tavily_keys(self.config.tavily_api_key, self.config.tavily_api_key_file)
+        keys = [] if self.config.search_backend == "none" else load_tavily_keys(self.config.tavily_api_key, self.config.tavily_api_key_file)
         self._tavily_clients = [AsyncTavilyClient(api_key=k) for k in keys]
         self._browse_pool = ThreadPoolExecutor(max_workers=self.config.browse_max_concurrency, thread_name_prefix="browse")
         if self.config.search_max_per_minute:
             self._limiter = RateLimiter(self.config.search_max_per_minute)
         print(
-            f"alpha_web_search_mcqa: Tavily 키 {len(keys)} 개 · search_depth={self.config.search_depth} · max_results={self.config.max_results}"
-            f" · search_max_per_minute={self.config.search_max_per_minute}"
+            f"alpha_web_search_mcqa: search_backend={self.config.search_backend} · Tavily 키 {len(keys)} 개 · search_depth={self.config.search_depth}"
+            f" · max_results={self.config.max_results} · search_max_per_minute={self.config.search_max_per_minute}"
+            f" · search_credit_budget={self.config.search_credit_budget} · exclude_domains={self.config.exclude_domains}"
         )
 
     def _stats(self, request: Request) -> Counter:
@@ -263,26 +285,45 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
             return BaseGetSearchQueryResponse(search_results="Query is empty")
         if len(body.query) > MAX_QUERY_CHARS:
             return BaseGetSearchQueryResponse(search_results="Query is too long")
+        if self.config.search_backend == "none":
+            return BaseGetSearchQueryResponse(search_results=format_search_results({}, self.config.max_result_chars))
+        cost = 2 if self.config.search_depth == "advanced" else 1
         try:
-            results = await self._tavily_search(body.query, stats)
+            if self.config.search_credit_budget is not None and self._credits_committed + cost > self.config.search_credit_budget:
+                raise SearchBackendError("budget_exhausted", RuntimeError(f"{self._credits_committed} + {cost} > {self.config.search_credit_budget}"))
+            self._credits_committed += cost  # 응답 전에 잡아 둔다 — 동시에 들어온 검색이 상한을 함께 넘지 않게
+            try:
+                results = await self._tavily_search(body.query, stats)
+            except BaseException:
+                self._credits_committed -= cost  # 실패한 요청은 크레딧을 쓰지 않는다
+                raise
         except BadRequestError:
             return BaseGetSearchQueryResponse(search_results="Error: the search engine rejected this query")
         except SearchBackendError as e:
             stats["search_errors"] += 1
             print(f"alpha_web_search_mcqa: 검색 백엔드 실패 — {e}")
             return BaseGetSearchQueryResponse(search_results=f"Error: search is unavailable ({e.kind})")
-        stats["search_credits"] += int((results.get("usage") or {}).get("credits") or 0)
+        reported = (results.get("usage") or {}).get("credits")
+        if reported is None:
+            stats["search_usage_missing"] += 1
+            reported = cost
+        self._credits_committed += int(reported) - cost
+        stats["search_credits"] += int(reported)
         return BaseGetSearchQueryResponse(search_results=format_search_results(results, self.config.max_result_chars))
+
+    def _browse_sync(self, url: str) -> tuple[bool, str]:
+        reason = blocked_url_reason(url, tuple(self.config.exclude_domains))
+        if reason:
+            return False, f"Error: {reason}"
+        if self.config.search_backend == "none":
+            return False, "No HTML found"
+        return fetch_page_text(url)
 
     async def browse(self, request: Request, body: BaseGetPageContentRequest) -> BaseGetPageContentResponse:
         stats = self._stats(request)
         stats["browse_calls"] += 1
-        reason = blocked_url_reason(body.url)
-        if reason:
-            stats["browse_errors"] += 1
-            return BaseGetPageContentResponse(page_content=f"Error: {reason}")
         try:
-            ok, text = await asyncio.get_running_loop().run_in_executor(self._browse_pool, fetch_page_text, body.url)
+            ok, text = await asyncio.get_running_loop().run_in_executor(self._browse_pool, self._browse_sync, body.url)
         except Exception as e:
             ok, text = False, f"Error: Unexpected error = {type(e).__name__}"
         if not ok:
@@ -303,6 +344,7 @@ class AlphaWebSearchMcqaResourcesServer(GoogleSearchResourcesServer):
             num_search_errors=stats["search_errors"],
             num_search_retries=stats["search_retries"],
             num_search_credits=stats["search_credits"],
+            num_search_usage_missing=stats["search_usage_missing"],
             num_browse_calls=stats["browse_calls"],
             num_browse_errors=stats["browse_errors"],
             failure_reason="search_backend_error" if backend_failed else None,

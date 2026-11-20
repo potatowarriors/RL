@@ -10,7 +10,10 @@ alpha_web_search_mcqa_resources_server:
       search_depth: basic        # 검색당 1 크레딧 (advanced 는 2 — Gym tavily_search 의 값). 본 학습 값은 측정 뒤 결정
       max_results: 10
       max_result_chars: 2000
-      exclude_domains: []        # NVIDIA 의 제외 목록은 내부 파일이라 없다
+      search_backend: tavily     # none = 대조용 (검색 결과 0 건 · browse 본문 없음)
+      # 이 데이터셋이 공개된 곳 — 질문을 그대로 검색하면 정답이 실린 행이 걸릴 수 있다. NVIDIA 의 제외 목록은 내부 파일이라 없다.
+      exclude_domains: [huggingface.co, hf.co]
+      search_credit_budget: null # 서버가 쓸 크레딧 상한
       search_max_tries: 3
       search_max_per_minute: null   # Tavily 분당 한도: 개발 키 100 · 운영 키 1,000 (유료 요금제 또는 종량제). 키에 맞춰 준다
       mask_on_search_error: true

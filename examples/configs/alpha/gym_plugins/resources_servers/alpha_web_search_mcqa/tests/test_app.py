@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import socket
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,6 +42,26 @@ from tavily.errors import BadRequestError, ForbiddenError, InvalidAPIKeyError, U
 
 SECRET = "tvly-UNIT-TEST-SECRET"  # pragma: allowlist secret
 HIT = {"title": "Chronic allograft vasculopathy", "url": "https://en.wikipedia.org/wiki/CAV", "content": "CAV is a ..."}
+
+
+PRIVATE_NAMES = {"intranet.example.com": ["10.0.0.5"], "dual.example.com": ["93.184.216.34", "192.168.1.7"]}
+
+
+@pytest.fixture(autouse=True)
+def no_dns(monkeypatch):
+    """이름 풀이를 가짜로 바꾼다 (네트워크 없음). 숫자 표기는 실제 getaddrinfo 가 푼다 — DNS 를 타지 않는다."""
+
+    def fake(host):
+        if host in PRIVATE_NAMES:
+            return PRIVATE_NAMES[host]
+        try:
+            socket.inet_aton(host)
+        except OSError:
+            if ":" not in host:
+                return ["93.184.216.34"]
+        return sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
+
+    monkeypatch.setattr(plugin, "resolve_addresses", fake)
 
 
 class FakeTavily:
@@ -144,10 +165,23 @@ def test_load_tavily_keys_sources_and_precedence(tmp_path, monkeypatch):
         ("http://sub1:8000/", True),          # 점 없는 내부 호스트 이름
         ("http://ray-head.internal/", True),
         ("http://[bad", True),
+        ("http://127.1/", True),                 # 숫자 표기 — libc 는 127.0.0.1 로 푼다
+        ("http://0x7f.0.0.1/", True),
+        ("http://2130706433/", True),
+        ("http://intranet.example.com/", True),  # 이름이 사설 주소로 풀린다
+        ("http://dual.example.com/", True),      # 주소 하나라도 내부면 막는다
     ],
 )
 def test_blocked_url_reason(url, blocked):
     assert (blocked_url_reason(url) is not None) is blocked
+
+
+def test_excluded_domains_apply_to_browse_urls():
+    excluded = ("huggingface.co", "hf.co")
+    assert blocked_url_reason("https://huggingface.co/datasets/nvidia/x", excluded) == "URL is in excluded domains"
+    assert blocked_url_reason("https://cdn-lfs.hf.co/x", excluded) == "URL is in excluded domains"
+    assert blocked_url_reason("https://nothuggingface.co/x", excluded) is None
+    assert blocked_url_reason("https://en.wikipedia.org/wiki/X", excluded) is None
 
 
 def test_fetch_page_text_mirrors_upstream_truncation(monkeypatch):
@@ -302,6 +336,55 @@ def test_search_rate_limiter_spaces_calls_across_sessions():
     assert free.times[-1] - free.times[0] < 0.05
 
 
+def test_placebo_backend_returns_nothing_and_calls_nothing(monkeypatch):
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setattr(plugin, "fetch_page_text", lambda url: pytest.fail("placebo 가 페이지를 가져왔다"))
+    config = AlphaWebSearchMcqaResourcesServerConfig(host="127.0.0.1", port=1, entrypoint="app.py", name="alpha_web_search_mcqa",
+                                                     search_backend="none")  # 키 없이 뜬다
+    server = AlphaWebSearchMcqaResourcesServer(config=config, server_client=MagicMock(spec=ServerClient))
+    assert server._tavily_clients == []
+    out = run(server.search(session(), BaseSearchQueryRequest(query="cav predictor")))
+    assert out.search_results == "Search Results\n==============\nNo results found.\n"
+    assert run(server.browse(session(), BaseGetPageContentRequest(url="https://en.wikipedia.org/wiki/CAV"))).page_content == "No HTML found"
+    vr = run(server.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message(r"\boxed{C}")))))
+    assert (vr.reward, vr.num_search_calls, vr.num_search_errors, vr.num_search_credits, vr.num_browse_calls, vr.instance_config) == (1.0, 1, 0, 0, 1, None)
+
+
+def test_credit_budget_stops_searches_before_overspending_even_when_concurrent():
+    fake = FakeTavily({"results": [HIT], "usage": {"credits": 1}})
+    server = make_server(fake, search_credit_budget=3)
+
+    async def burst():
+        return await asyncio.gather(*(server.search(session(f"s{i}"), BaseSearchQueryRequest(query="q")) for i in range(5)))
+
+    outs = [o.search_results for o in run(burst())]
+    assert len(fake.calls) == 3 and server._credits_committed == 3
+    assert sum(o.startswith("Search Results") for o in outs) == 3
+    assert sum(o == "Error: search is unavailable (budget_exhausted)" for o in outs) == 2
+    masked = [run(server.verify(session(f"s{i}"), GoogleSearchVerifyRequest.model_validate(verify_body(message("x"))))) for i in range(5)]
+    assert sum(v.instance_config == {"mask_sample": True} for v in masked) == 2 and sum(v.num_search_credits for v in masked) == 3
+
+    advanced = FakeTavily({"results": [HIT], "usage": {"credits": 2}})
+    server2 = make_server(advanced, search_depth="advanced", search_credit_budget=3)
+    run(server2.search(session(), BaseSearchQueryRequest(query="q")))
+    assert run(server2.search(session(), BaseSearchQueryRequest(query="q"))).search_results.endswith("(budget_exhausted)") and len(advanced.calls) == 1
+
+
+def test_failed_search_does_not_consume_budget():
+    fake = FakeTavily(ForbiddenError("limit"), {"results": [HIT], "usage": {"credits": 1}})
+    server = make_server(fake, search_credit_budget=1)
+    run(server.search(session("a"), BaseSearchQueryRequest(query="q")))
+    assert server._credits_committed == 0
+    assert run(server.search(session("b"), BaseSearchQueryRequest(query="q"))).search_results.startswith("Search Results")
+
+
+def test_missing_usage_is_counted_at_list_price_not_zero():
+    server = make_server(FakeTavily({"results": [HIT]}), search_depth="advanced")
+    run(server.search(session(), BaseSearchQueryRequest(query="q")))
+    vr = run(server.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message("x")))))
+    assert (vr.num_search_credits, vr.num_search_usage_missing, vr.instance_config) == (2, 1, None)
+
+
 def test_rejected_query_is_model_visible_not_a_backend_failure():
     fake = FakeTavily(BadRequestError("invalid query"))
     server = make_server(fake)
@@ -330,9 +413,11 @@ def test_more_than_one_worker_is_refused():
 
 def test_browse_blocks_internal_urls_without_fetching(monkeypatch):
     monkeypatch.setattr(plugin, "fetch_page_text", lambda url: pytest.fail("fetched a blocked URL"))
-    server = make_server()
+    server = make_server(exclude_domains=["huggingface.co"])
     out = run(server.browse(session(), BaseGetPageContentRequest(url="http://127.0.0.1:8000/v1/models")))
     assert out.page_content == "Error: internal addresses cannot be browsed"
+    assert run(server.browse(session("x"), BaseGetPageContentRequest(url="http://intranet.example.com/"))).page_content.startswith("Error: internal")
+    assert run(server.browse(session("x"), BaseGetPageContentRequest(url="https://huggingface.co/datasets/x"))).page_content == "Error: URL is in excluded domains"
     vr = run(server.verify(session(), GoogleSearchVerifyRequest.model_validate(verify_body(message("x")))))
     assert (vr.num_browse_calls, vr.num_browse_errors, vr.instance_config) == (1, 1, None)  # browse 실패는 마스크하지 않는다
 
