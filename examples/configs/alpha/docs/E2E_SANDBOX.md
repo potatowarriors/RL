@@ -182,6 +182,7 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 | 항목 | 확인한 사실 |
 |---|---|
 | 기존 gpu06 경로 | mini-swe-agent 2.4.6 + swebench 5.0.2, SWE-bench Verified 전용. swebench 5.x 는 신 스키마 · 사전 빌드 이미지 데이터셋만 읽는다 (Pai `EVAL_DOCKER_NODE.md` §6.5) — R2E-Gym 1,172 개는 형식이 다르고 SWE-Gym 272 개는 구 스키마다 (실행 시험은 안 함) |
+| R2E-Gym 행의 형식 (`swe2` 1,172 행 전수) | `FAIL_TO_PASS` · `PASS_TO_PASS` 가 전부 빈 목록이고 `patch` · `test_patch` 가 없다 (0 행). 정답은 `expected_output_json` — 테스트별 기대 결과 표 (행당 중앙 55 개, 579 행은 PASSED 아닌 기대값 포함) — 이고, 테스트는 이미지 안에 들어 있다 (`/r2e_tests/test_1.py` · `/testbed/run_tests.sh`, `.sif` 목록 실측). 이미지는 `docker_image` 필드 (`namanjain12/<repo>_final:<commit>`). 원 커밋의 변경은 `parsed_commit_content` 에 파일 내용으로 들어 있다. swebench 5.0.2 가 인스턴스에서 읽는 `image` · `eval_script` · `log_parser` · `test_patch` 가 하나도 없다. SWE-Gym 행은 `FAIL_TO_PASS` · `PASS_TO_PASS` · `test_patch` · `patch` 가 있고 `image` · `eval_script` · `log_parser` 만 없다 |
 | 제공되는 경로 | Gym `swe_agents` 서버 + `.sif` + `gym eval run --no-serve --agent swe_agents` (README "Batch evaluation"). 인스턴스마다 Apptainer 컨테이너 둘 (에이전트 · 채점) 을 띄운다 → Apptainer 실행이 필요하다 |
 | 채점기 | R2E-Gym = `r2egym…run_local_evaluation` (`setup_scripts/r2e_gym.sh`) · SWE-Gym = 기본 처리기의 SWE-bench fork (`swebench.sh`) · 에이전트 런타임 = OpenHands (`openhands.sh`, miniforge). 셋업 스크립트는 내려받기 · venv 뿐이라 Apptainer 없이 돈다 (미실행) |
 | 정답 패치 검증 | `verify_golden_patch=true` 는 SWE-bench 계열 · SWE-rebench 만 지원한다. R2E-Gym 은 목록에 없다 |
