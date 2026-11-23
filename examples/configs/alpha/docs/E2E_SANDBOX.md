@@ -175,6 +175,22 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 | 7 | 과제 선별 | Cascade 2 는 전부 통과 · 전부 실패 과제를 걸렀다 | 학생 통과율 사전 측정 (결정 40 의 5) 이 선별 근거가 된다 |
 | 8 | 판정 벤치 | SWE-V | 기존 경로 (gpu06 docker) 그대로 |
 
+### 7.5 학생 통과율 사전 측정 — 경로 확인 (2026-11-23, 읽기 전용 · GPU 미사용)
+
+§9 의 3 번이 "gpu06 docker 평가 경로로 지금 잴 수 있다" 고 적었으나 **그 경로로는 `swe2` 과제를 채점할 수 없다** (2026-11-20 작성 때 확인하지 않은 문장이었다).
+
+| 항목 | 확인한 사실 |
+|---|---|
+| 기존 gpu06 경로 | mini-swe-agent 2.4.6 + swebench 5.0.2, SWE-bench Verified 전용. swebench 5.x 는 신 스키마 · 사전 빌드 이미지 데이터셋만 읽는다 (Pai `EVAL_DOCKER_NODE.md` §6.5) — R2E-Gym 1,172 개는 형식이 다르고 SWE-Gym 272 개는 구 스키마다 (실행 시험은 안 함) |
+| 제공되는 경로 | Gym `swe_agents` 서버 + `.sif` + `gym eval run --no-serve --agent swe_agents` (README "Batch evaluation"). 인스턴스마다 Apptainer 컨테이너 둘 (에이전트 · 채점) 을 띄운다 → Apptainer 실행이 필요하다 |
+| 채점기 | R2E-Gym = `r2egym…run_local_evaluation` (`setup_scripts/r2e_gym.sh`) · SWE-Gym = 기본 처리기의 SWE-bench fork (`swebench.sh`) · 에이전트 런타임 = OpenHands (`openhands.sh`, miniforge). 셋업 스크립트는 내려받기 · venv 뿐이라 Apptainer 없이 돈다 (미실행) |
+| 정답 패치 검증 | `verify_golden_patch=true` 는 SWE-bench 계열 · SWE-rebench 만 지원한다. R2E-Gym 은 목록에 없다 |
+| gpu06 `alpha-eval` | Apptainer 실행 조건은 충족 (user namespace 생성됨 · `/dev/fuse` 있음). Apptainer · Gym 은 설치돼 있지 않다. 64 코어 (공용, 부하 약 5) · RAM 가용 267 GB · 디스크 여유 3.3 TB · GitHub · PyPI 접속됨 |
+| 전송 | main1 → gpu06 약 116 MiB/s (300 MiB 2.6 s) — `.sif` 100 개 (약 100 GiB) 에 약 15 분 |
+| 학습 세션 | main1 · sub1 모두 여전히 Apptainer 실행 불가 (2026-11-23 13:56 재확인) |
+
+그래서 "지금" 가능한 것은 gpu06 에 Gym `swe_agents` 환경을 새로 만들어 표본 (예: 100 과제 × 4) 을 재는 것이고, 과제 선별에 쓸 전수 측정 (1,444 × 4) 은 gpu06 의 공용 64 코어로는 수십 시간이라 학습 세션 (인프라 적용 뒤) 의 몫이다. 선택은 사용자 결정 (§9 의 3).
+
 ## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
 조사 에이전트의 보고 (파일 경로 근거) 를 옮긴 것이다. 실패 마스킹을 읽는 위치 · `harbor_agent` 의 실패 처리 · 로컬 데이터 존재는 주 세션이 다시 확인했다.
@@ -211,7 +227,7 @@ alpha 에 걸리는 제약:
 |---|---|---|---|
 | 1 | 태스크 이미지 변환 범위 | **`swe2` 1,444 개 완료 (2026-11-21, §7.2)**. 남은 결정: Ultra `swe` 7,790 개를 더 받을지와 풀 상한 — 80/시간 유지면 약 49 시간, 1,444 개를 받는 동안 한도는 한 번도 소모 · 거부되지 않았다 | 레시피의 데이터 결정과 함께 |
 | 2 | SWE 데이터 | 이미지는 `swe2` 부터 받는다 (결정 1). 학습 데이터로의 확정과 Ultra `swe` 확대는 `swe2` 변환 뒤 | 레시피 전 |
-| 3 | 학생 통과율 사전 측정 (결정 40 의 5) | gpu06 docker 평가 경로로 지금 잴 수 있다. 과제 선별의 근거가 된다 | 지금 (GPU 승인) |
+| 3 | 학생 통과율 사전 측정 (결정 40 의 5) | **정정 (2026-11-23, §7.5)**: 기존 gpu06 경로로는 못 잰다. ① gpu06 에 Gym `swe_agents` + Apptainer 환경을 만들어 표본 측정 (학습과 같은 하니스, 셋업 필요 · main1 GPU 8장) ② 인프라 적용 뒤 학습 세션에서 전수 측정 (그사이 CPU 로 하니스 셋업 · 레시피 초안) ③ 둘 다 — 사용자 결정 대기 | 지금 |
 | 4 | `--pid` 처리 방식 | PID namespace 유지 + 바깥 `/proc` bind (§5) | 시험 세션 |
 | 5 | 레시피 값 (문맥 · 턴 · 배치 · lr · 동시 실행 · 메모리 상한) | Qwen3 가이드를 기준안으로, 스모크 실측으로 조정 — 별도 보고 | 스모크 전 |
 | 6 | 빈 롤아웃 처리 | upstream 수정 여부 확인 → 없으면 본체 패치 (별도 커밋 · 독립 검토) | 스모크 전 |
