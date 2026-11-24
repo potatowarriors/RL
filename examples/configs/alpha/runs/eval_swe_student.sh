@@ -5,13 +5,14 @@
 #   모델은 Pai fleet (main1 GPU 8, 벤치와 같은 서빙) 이다 — 학습 때의 NeMo-RL vLLM 워커가 아니다. 토큰 ID · logprob · refit 은 이 측정이 보지 않는다.
 #   eval_swe_student.sh <tag> <hf_ckpt> <input.jsonl> [concurrency=128] [repeats=1]
 #   환경변수: TURNS (200) · AGENT_TIMEOUT (1800) · MEM_MB (32768) · MAXLEN (131072) · MEM_STOP_GIB (1400, 노드 메모리가 넘으면 중단)
+#            OH_LOG=1 — OpenHands 디버그 로그를 켠다 (진단용, 기본은 Gym 과 같이 CRITICAL)
 #            DRY=1 — GPU 없이 기동 경로만 돌린다: fleet 를 띄우지 않고 모델 주소를 죽은 포트로 둔다. Gym 서버 주소 · 두 노드의 컨테이너 기동 ·
 #                    클라이언트 접속 · 컨테이너 정리를 CPU 로 확인하는 용도다 (롤아웃은 모델 호출에서 실패한다). 승인 없이 돌릴 수 있다.
 # 결과: $NRL_ROOT/p0_measure/swe/<tag>/{rollouts.jsonl,rollouts_failures.jsonl,node_samples.tsv,run.log}. GPU 를 잡는다 — 승인 뒤에만 띄운다.
 # main1 에서 띄운다. 정답 패치 검증 (run_swe_golden.sh) 과 같은 Gym 서버 디렉토리를 쓰므로 동시에 못 돈다. 실행 중에 편집하지 않는다.
 set -u
 TAG=$1; CK=$(readlink -f "$2"); INPUT=$(readlink -f "$3"); CONC=${4:-128}; REPEATS=${5:-1}
-TURNS=${TURNS:-200}; AGENT_TIMEOUT=${AGENT_TIMEOUT:-1800}; MEM_MB=${MEM_MB:-32768}; MAXLEN=${MAXLEN:-131072}; MEM_STOP_GIB=${MEM_STOP_GIB:-1400}; DRY=${DRY:-0}
+TURNS=${TURNS:-200}; AGENT_TIMEOUT=${AGENT_TIMEOUT:-1800}; MEM_MB=${MEM_MB:-32768}; MAXLEN=${MAXLEN:-131072}; MEM_STOP_GIB=${MEM_STOP_GIB:-1400}; DRY=${DRY:-0}; OH_LOG=${OH_LOG:-0}
 NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}; P=$NRL/p0_measure; D=$P/swe/$TAG; GYM=/home/work/vidsearch/tools/Gym; SIF=$NRL/sif/swe
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alpha/runs
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
@@ -54,6 +55,8 @@ kill_containers() {  # 이 실행의 컨테이너를 두 노드에서 내린다 
   [ -s $D/results_roots.txt ] || { log "컨테이너 정리: 결과 루트를 로그에서 찾지 못했다"; return 0; }
   local c="python3 -I $HERE/swe_kill_containers.py $D/results_roots.txt kill"
   log "컨테이너 정리: main1 $(bash -c "$c" | tail -1) · sub1 $(on_sub1 "$c")"
+  # 강제로 죽은 컨테이너가 남긴 FUSE 데몬 — 이 실행 전에 없던 것만 내린다
+  log "FUSE 고아 정리: main1 $(python3 -I $HERE/swe_kill_containers.py orphans-kill $D/fuse_before.main1 | tail -1) · sub1 $(on_sub1 "python3 -I $HERE/swe_kill_containers.py orphans-kill $D/fuse_before.sub1")"
 }
 DONE=0
 cleanup() {
@@ -84,6 +87,8 @@ ra=$(ray_py "$HERE/gpu_check.py" | awk '/NRL_RUN_ACTORS/{print $2}')
 busy=$(ray_py "$HERE/gpu_check.py" | awk '/BUSY_GPUS/{print $2}')
 [ "$busy" = "0" ] || { log "ABORT: BUSY_GPUS=${busy:-?}"; exit 1; }
 MAIN_IP=$(getent hosts main1 | awk '{print $1}')
+python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.main1; on_sub1 "python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.sub1; echo ok" > /dev/null
+[ -e $D/fuse_before.sub1 ] || { log "ABORT: sub1 의 FUSE 고아 목록을 적지 못했다 (ssh)"; exit 1; }
 ROWS=$(wc -l < $INPUT); FUSE0=$(fuse_orphans)
 log "armed: tag=$TAG ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
 
@@ -126,6 +131,7 @@ swe_agents_train:
       concurrency: $CONC
       swebench_agent_timeout: $AGENT_TIMEOUT
       apptainer_memory_limit_mb: $MEM_MB
+      openhands_should_log: $([ "$OH_LOG" = 1 ] && echo true || echo false)
       dataset_path: $INPUT
       container_formatter:
         - $SIF/r2egym_{instance_id}.sif
@@ -138,6 +144,7 @@ swe_agents_val:
       concurrency: $CONC
       swebench_agent_timeout: $AGENT_TIMEOUT
       apptainer_memory_limit_mb: $MEM_MB
+      openhands_should_log: $([ "$OH_LOG" = 1 ] && echo true || echo false)
       dataset_path: $INPUT
       container_formatter:
         - $SIF/r2egym_{instance_id}.sif

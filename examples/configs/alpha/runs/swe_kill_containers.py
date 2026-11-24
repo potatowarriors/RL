@@ -9,7 +9,28 @@ roots_file: 그 실행의 결과 루트 경로가 한 줄씩 (env_start.log 의 
 Gym 서버나 실행기를 내려도 컨테이너는 남는다 (채점 컨테이너는 에이전트 출력 파일을 기다리며 끝없이 돈다) — 그래서 실행기가 끝날 때 부른다.
 출력: SWE_CONTAINERS sessions=<처음 찾은 컨테이너 세션 수> left=<끝난 뒤 남은 세션 수>"""
 import os, signal, sys, time
+def orphans():
+    out = []
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            if open(f"/proc/{pid}/comm").read().strip() in ("squashfuse_ll", "fuse-overlayfs") \
+               and int(open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()[1]) == 1:
+                out.append(int(pid))
+        except (OSError, IndexError, ValueError): pass
+    return sorted(out)
+if sys.argv[1] == "orphans":
+    print(" ".join(map(str, orphans()))); sys.exit(0)
+if sys.argv[1] == "orphans-kill":
+    try: before = {int(x) for x in open(sys.argv[2]).read().split()}
+    except (OSError, ValueError): print("FUSE_ORPHANS new=? left=? (no pidfile - nothing killed)"); sys.exit(0)
+    new = [p for p in orphans() if p not in before]
+    for p in new:
+        try: os.kill(p, signal.SIGTERM)
+        except OSError: pass
+    time.sleep(3)
+    print(f"FUSE_ORPHANS new={len(new)} left={len([p for p in orphans() if p not in before])}"); sys.exit(0)
 names = [os.path.basename(l.strip().rstrip("/")) for l in open(sys.argv[1]) if l.strip()]
+names = [n for n in names if n.startswith("swebench_results_")]   # 빈 이름 · 엉뚱한 이름이 모든 프로세스에 맞는 일을 막는다
 KILL = len(sys.argv) > 2 and sys.argv[2] == "kill"
 MY_SID = os.getsid(0)
 def stat(pid):   # (pgid, sid)
