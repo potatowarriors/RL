@@ -15,7 +15,7 @@
 | 인프라 요청 | **적용 완료 (2026-11-24)** — 인프라가 세 설정을 넣었고 12:47 에 세션을 다시 만들었다 (§6.1). 요청서는 `tools/apptainer/infra_worksheet.md` (11-24 개정) |
 | 요청 사양 검증 | 별도 Docker 호스트 리허설 2회 + 독립 검증 2회, 재판정 = 확인 (§4) |
 | 수용 시험 | **PASS (2026-11-24, 두 노드)** — 0 ~ 8 단계 실패 0. 같은 스크립트가 재생성 전 세션에서는 5 단계 FAIL 이었다 (§6.1) |
-| 우리 쪽 Apptainer 설정 | Apptainer 1.4.5 를 두 노드에 기본 설정으로 설치 (11-24). `--pid` 처리 방식 (bindproc) 은 실제 세션에서도 동작을 확인했고, 시스템 설정에 넣는 것은 승인 대기 (§5 · §6.1) |
+| 우리 쪽 Apptainer 설정 | Apptainer 1.4.5 + `--pid-mode bindproc` 를 두 노드에 적용 (사용자 승인 2026-11-24, §6.1). 실행 쪽이 `APPTAINER_BIND=/proc` 를 넘겨야 한다 |
 | 태스크 이미지 → `.sif` | **Super `swe2` 1,444 개 변환 완료 (2026-11-21)** — 1.36 TiB, 내용 확인 1,444/1,444. 실행 검증은 시험 세션 몫. Ultra `swe` 는 결정 대기 (§7.2 · §9) |
 | SWE E2E 레시피 | 제공 경로 · 프론티어 조사 완료, 설정 결정 대기 (§7) |
 | Terminal E2E | 제공 경로 조사 완료 — 환경은 `harbor_agent` 하나, 레시피 · 이미지 · 실패 마스킹은 만들어야 함 (§8) |
@@ -135,6 +135,8 @@ fakeroot instance 는 `instance start --fakeroot` 뒤 `exec` 를 `--fakeroot` �
 - 이것으로 §4 의 "시험 세션에서만 닫히는 것" 가운데 AppArmor 집행 · 커널 6.5 · NVIDIA `/proc` 덮임 · Backend.AI 의 실제 적용 경로가 닫혔다. 남은 것: Gym `swe_agents` 가 띄우는 경로에서 `APPTAINER_BIND` 가 전달되는지, 동시에 여러 샌드박스가 돌 때, `--writable-tmpfs` 64 MB 한도 — 스모크에서 본다.
 - 위 대조는 과제 한 개다. R2E-Gym 전체에 대한 채점기 대조는 Gym 의 채점 코드 (`gold` · `empty` 입력) 로 따로 한다.
 - 로그: `$NRL_ROOT/apptainer_test/session_20261124/{setup,accept}_{main1,sub1}.log`.
+- **bindproc 을 시스템 설정에 적용했다** (사용자 승인 11-24, `setup_session.sh --pid-mode bindproc`, 두 노드). 시스템 설정 + `APPTAINER_BIND=/proc` 로 같은 결과 (무작업 불일치 · 정답 5/5 일치). `APPTAINER_BIND` 가 빠지면 컨테이너 안 `/proc` 가 비어 있다 — Gym 경로에서 이 값이 전달되는지는 스모크 항목.
+- 세션을 한 번 더 재생성했다 (14:03, Pai 셋업 사고 때문 — `RESTORE_AFTER_REBOOT.md` §7.11). **세 설정은 재생성 뒤에도 유지됐다** (수용 시험 두 노드 18 PASS · 0 FAIL). 로그 `…/session_20261124b/`.
 
 ## 7. SWE E2E 준비 상태
 
