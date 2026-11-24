@@ -12,10 +12,10 @@
 | 단계 | 상태 |
 |---|---|
 | 원인 파악 | 완료 — 세션 컨테이너의 seccomp · AppArmor · `/dev/fuse` 세 층 (§2) |
-| 인프라 요청 | **전달됨 (사용자 2026-11-20), 적용 대기** (§3). 2026-11-24 요청서 개정 — 엔지니어가 "Apptainer 설치" 부분을 이해하기 어렵다고 해 역할 구분 (인프라 = 세 설정, Apptainer 설치 = 요청자가 세션 안에서) · 배경 · 예상 출력을 보탰다 (`tools/apptainer/infra_worksheet.md`) |
+| 인프라 요청 | **적용 완료 (2026-11-24)** — 인프라가 세 설정을 넣었고 12:47 에 세션을 다시 만들었다 (§6.1). 요청서는 `tools/apptainer/infra_worksheet.md` (11-24 개정) |
 | 요청 사양 검증 | 별도 Docker 호스트 리허설 2회 + 독립 검증 2회, 재판정 = 확인 (§4) |
-| 시험 세션 수용 시험 | 대기 — `tools/apptainer/acceptance.sh` (지금의 막힌 세션에서 5 단계 FAIL 을 보고함) |
-| 우리 쪽 Apptainer 설정 | 후보 측정 완료, 선택은 승인 대기 (§5) |
+| 수용 시험 | **PASS (2026-11-24, 두 노드)** — 0 ~ 8 단계 실패 0. 같은 스크립트가 재생성 전 세션에서는 5 단계 FAIL 이었다 (§6.1) |
+| 우리 쪽 Apptainer 설정 | Apptainer 1.4.5 를 두 노드에 기본 설정으로 설치 (11-24). `--pid` 처리 방식 (bindproc) 은 실제 세션에서도 동작을 확인했고, 시스템 설정에 넣는 것은 승인 대기 (§5 · §6.1) |
 | 태스크 이미지 → `.sif` | **Super `swe2` 1,444 개 변환 완료 (2026-11-21)** — 1.36 TiB, 내용 확인 1,444/1,444. 실행 검증은 시험 세션 몫. Ultra `swe` 는 결정 대기 (§7.2 · §9) |
 | SWE E2E 레시피 | 제공 경로 · 프론티어 조사 완료, 설정 결정 대기 (§7) |
 | Terminal E2E | 제공 경로 조사 완료 — 환경은 `harbor_agent` 하나, 레시피 · 이미지 · 실패 마스킹은 만들어야 함 (§8) |
@@ -115,6 +115,26 @@ fakeroot instance 는 `instance start --fakeroot` 뒤 `exec` 를 `--fakeroot` �
 | 5 | 무작업 에이전트로 소수 과제 0 점 확인 · 정답 패치 채점 (지원 데이터셋만) | 채점기가 항상 통과 · 항상 실패하는 결함 | 분~수십 분 | GPU 없이 가능한 범위만 |
 | 6 | 스모크 3 step (작은 배치, W&B 끔) | 다중 턴 logprob 정합 (GATES G3 형태) · 빈 롤아웃 · `APPTAINER_BIND` 전달 · 잔류 프로세스 · 롤아웃당 CPU · RAM · 시간 | 수십 분 | GPU |
 | 7 | 본 런의 첫 step 들을 게이트로 판정하고 통과하면 그대로 학습 | 처리량 · 정체 | 런 길이 | GPU |
+
+### 6.1 적용 결과 (2026-11-24, 새 세션 — GPU 미사용)
+
+세션 재생성 12:47 (이미지 동일 NGC 25.05 · 커널 6.5.0-15). **역할 이름과 호스트가 뒤바뀌었다** — 새 main1 의 GPU UUID 8/8 이 이전 sub1 과, 새 sub1 이 이전 main1 과 일치한다. 주소도 바뀌었다 (main1 `10.0.41.2` · sub1 `10.0.41.4`, 이전 `10.0.37.4` · `10.0.37.2`). 기록 `project_s/reboot_restore/logs/gpu_identity_{main1,sub1}_20261124.txt`.
+
+| 확인 | main1 | sub1 |
+|---|---|---|
+| 수용 시험 0 ~ 6 (세 설정) | 실패 0 — seccomp 활성 · capability 그대로 · AppArmor `docker-apptainer (enforce)` · user namespace 생성 · 그 안의 tmpfs mount · `pivot_root` · `/dev/fuse` 읽기쓰기 | 같음 |
+| 과다 부여가 없는지 | 새 network namespace 거부 (`unshare -Urn` · `clone(NEWUSER\|NEWNET)` EPERM) · `keyctl` · `io_uring_setup` EPERM · `clone3` ENOSYS | 같음 |
+| Apptainer 설치 (`setup_session.sh`, 기본 설정) | 1.4.5 · apt 신규 4 · 업그레이드 0 | 같음 |
+| 수용 시험 7 ~ 8 (`alpine_145.sif`) | `apptainer exec` (FUSE 로 SIF 마운트) · `--writable-tmpfs` PASS | 같음 |
+| 수용 시험 9 (`--pid`, 기본 설정) | 예상대로 실패 — `can't mount proc filesystem to /proc` | 같음 |
+| 실제 과제 이미지 (`r2egym_datalad_final_71d543ec….sif`), `swe_agents` 플래그 (`--writable-tmpfs --cleanenv --pid --no-mount home,tmp,bind-paths`) + bindproc | 실행 rc 0 · 컨테이너 안 uid 1100 · 바깥 세션 프로세스에 `kill` 이 닿지 않음 · 프로세스 치환 동작 | 같음 |
+| 채점 음성 대조 — 저장소를 고치지 않고 `run_tests.sh` | 3 failed · 1 passed · 1 error (데이터의 "수정 전" 기록과 같음, 기대 결과 표와 불일치 → 보상 0) | 같음 |
+| 채점 양성 대조 — 정답 한 줄 (`kwargs = kwargs.copy()`) 을 넣고 `run_tests.sh` | 2 failed · 2 passed · 1 error — **`expected_output_json` 과 다섯 테스트 전부 일치** (→ 보상 1) | 같음 |
+
+- bindproc 시험은 시스템 설정을 바꾸지 않고 했다: `/etc/apptainer/apptainer.conf` 의 사본에서 `mount proc = no` 로 바꿔 `apptainer --config <사본>` 과 `APPTAINER_BIND=/proc` 로 실행 (사본 `$NRL_ROOT/apptainer_test/session_20261124/bindproc.conf`, 스크립트 `inside2.sh`). 시스템 설정은 기본값 그대로다.
+- 이것으로 §4 의 "시험 세션에서만 닫히는 것" 가운데 AppArmor 집행 · 커널 6.5 · NVIDIA `/proc` 덮임 · Backend.AI 의 실제 적용 경로가 닫혔다. 남은 것: Gym `swe_agents` 가 띄우는 경로에서 `APPTAINER_BIND` 가 전달되는지, 동시에 여러 샌드박스가 돌 때, `--writable-tmpfs` 64 MB 한도 — 스모크에서 본다.
+- 위 대조는 과제 한 개다. R2E-Gym 전체에 대한 채점기 대조는 Gym 의 채점 코드 (`gold` · `empty` 입력) 로 따로 한다.
+- 로그: `$NRL_ROOT/apptainer_test/session_20261124/{setup,accept}_{main1,sub1}.log`.
 
 ## 7. SWE E2E 준비 상태
 
