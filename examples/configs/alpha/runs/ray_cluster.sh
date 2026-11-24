@@ -19,6 +19,10 @@ OBJECT_STORE=${OBJECT_STORE:-68719476736}
 CPUS=${CPUS:-220}
 GPUS=${GPUS:-8}
 RAY="$NRL/clean_run.sh $NRL/venv-driver/bin/ray"
+# raylet 의 환경은 그 노드의 모든 Ray 워커가 물려받는다. Gym `swe_agents` 는 Ray 워커에서 `apptainer exec --pid` 를 부르는데,
+# 이 세션에서는 `--pid` 가 `APPTAINER_BIND=/proc` 없이는 /proc 없는 컨테이너를 만든다 (E2E_SANDBOX.md §5 · §6.1, bindproc).
+# 드라이버 쪽 환경변수는 raylet 이 띄우는 워커에 닿지 않으므로 여기서 준다.
+RAY_START="$NRL/clean_run.sh /usr/bin/env APPTAINER_BIND=/proc $NRL/venv-driver/bin/ray"
 MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 SUB_IP=$(getent hosts sub1 | awk '{print $1}')
 [ -n "$MAIN_IP" ] && [ -n "$SUB_IP" ] || { echo "main1 · sub1 주소를 풀지 못했다" >&2; exit 1; }
@@ -40,9 +44,9 @@ start)
         || { echo "sub1 에 compat 595 가 없다 — restore_bench_env.sh 먼저" >&2; exit 1; }
     mkdir -p "$NRL/ray_spill/main1" "$NRL/ray_spill/sub1"
     # shellcheck disable=SC2046
-    $RAY start --head --port=$PORT $(node_flags main1 "$MAIN_IP") </dev/null
+    $RAY_START start --head --port=$PORT $(node_flags main1 "$MAIN_IP") </dev/null
     # shellcheck disable=SC2029
-    ssh -o BatchMode=yes sub1 "$RAY start --address=main1:$PORT $(node_flags sub1 "$SUB_IP") </dev/null"
+    ssh -o BatchMode=yes sub1 "$RAY_START start --address=main1:$PORT $(node_flags sub1 "$SUB_IP") </dev/null"
     # 준비 대기. 기동 직후에는 노드마다 미리 띄우는 워커 (CPU 수 = 220) 가 등록 중이다. 그 사이 (기동 18 초 뒤) 에 낸 태스크가
     # 응답 없이 멈춘 적이 있다 — raylet "workers ... have not registered within the timeout" (2026-11-24). 두 노드에서 태스크가
     # 실제로 돌아올 때까지 기다린 뒤에 돌려준다. 한 번의 시도는 60 초로 끊는다.

@@ -216,6 +216,22 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 
 그래서 "지금" 가능한 것은 gpu06 에 Gym `swe_agents` 환경을 새로 만들어 표본 (예: 100 과제 × 4) 을 재는 것이고, 과제 선별에 쓸 전수 측정 (1,444 × 4) 은 gpu06 의 공용 64 코어로는 수십 시간이라 학습 세션 (인프라 적용 뒤) 의 몫이다. 선택은 사용자 결정 (§9 의 3).
 
+### 7.6 Gym 하니스 셋업 · 정답 패치 검증 (2026-11-24, GPU 미사용)
+
+실행기 `$NRL_ROOT/p0_measure/swe/run_swe_golden.sh` — 측정용 Gym (`tools/Gym`, v0.6.0) 으로 `swe_agents` 서버를 `verify_golden_patch=true` 로 띄우고 `gym eval run` 으로 표본을 채점한다. Ray 는 alpha 클러스터 (`main1:6379`) 를 쓴다.
+
+| 확인 | 결과 |
+|---|---|
+| 하니스 셋업 | 첫 기동 726 s 에 다섯 트리가 `$NRL_ROOT/gym_cache/swe_agents/` 에 설치됐다 (OpenHands · R2E-Gym · SWE-bench · SWE-bench Multilingual · SWE-rebench, 합 8.2 GB). `cache_dir` 를 이 경로로 주면 측정용 · 학습용 Gym 이 함께 쓴다. 두 번째 기동은 14 s |
+| Ray 경로 | 채점 컨테이너가 Ray 워커에서 뜬다 (sub1 워커 확인). raylet 환경의 `APPTAINER_BIND=/proc` 로 `--pid` 가 동작 — `runs/ray_cluster.sh` 가 `ray start` 에 넣는다 (드라이버 환경은 워커에 닿지 않는다) |
+| **정답 패치 검증의 지원 범위** | 코드 (`_run_golden_patch_verification`) 는 데이터셋 이름에 `SWE-bench` · `SWE-rebench` 가 들어 있거나 `swe-bench-ext` · `deepswe` · `denovoswe` 일 때만 받는다. **Ultra `swe.jsonl` 의 SWE-rebench-V2 7,610 행 (97.4%) 은 지원, SWE-Gym 206 행은 미지원. Super `swe2.jsonl` 은 R2E-Gym 1,172 · SWE-Gym 272 모두 미지원** — `swe2` 표본 10 개는 전부 `NotImplementedError` |
+| SWE-rebench 표본 5 개 (python · go · php · rust · java, `rebench_sample.jsonl`) | 38 s 에 5 개 채점: **4 개 보상 1.0**, rust `sharkdp__bat-3206` 만 0 |
+| rust 실패의 원인 | **Apptainer `--writable-tmpfs` 의 쓰기 공간이 64 MB** (`apptainer.conf` `sessiondir max size = 64` 기본값). `cargo build` 가 `/bat/target` 에 쓰다 `No space left on device` 로 링크 실패. 같은 이미지에서 직접 확인: 기본 설정이면 덧씌움 64M 가 100% 차고 빌드 실패, 설정 사본에서 16,384 로 올리면 31.96 s 에 빌드 완료 (덧씌움 사용 460 MB) |
+
+- `sessiondir max size` 를 올리는 것은 우리 쪽 Apptainer 설정이라 승인 대상이다 (§5). 이 한도는 `swe2` 에도 걸린다 — 에이전트나 테스트가 컨테이너 안에 64 MB 넘게 쓰면 같은 실패가 난다.
+- `swe2` 의 채점기 대조는 Gym 의 정답 패치 검증으로는 할 수 없다. R2E-Gym 은 채점 코드의 `gold` · `empty` 입력을 직접 불러야 한다 (미실시; 과제 한 개의 손 대조는 §6.1).
+- SWE-rebench 표본 이미지 5 개는 `$NRL_ROOT/sif/swe/swerebench/` 에 있다 (1.4.5 로 변환, 합 3.6 GB).
+
 ## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
 조사 에이전트의 보고 (파일 경로 근거) 를 옮긴 것이다. 실패 마스킹을 읽는 위치 · `harbor_agent` 의 실패 처리 · 로컬 데이터 존재는 주 세션이 다시 확인했다.
