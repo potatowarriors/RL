@@ -12,7 +12,7 @@
 | 단계 | 상태 |
 |---|---|
 | 원인 파악 | 완료 — 세션 컨테이너의 seccomp · AppArmor · `/dev/fuse` 세 층 (§2) |
-| 인프라 요청 | **전달됨 (사용자 2026-11-20), 적용 대기** (§3) |
+| 인프라 요청 | **전달됨 (사용자 2026-11-20), 적용 대기** (§3). 2026-11-24 요청서 개정 — 엔지니어가 "Apptainer 설치" 부분을 이해하기 어렵다고 해 역할 구분 (인프라 = 세 설정, Apptainer 설치 = 요청자가 세션 안에서) · 배경 · 예상 출력을 보탰다 (`tools/apptainer/infra_worksheet.md`) |
 | 요청 사양 검증 | 별도 Docker 호스트 리허설 2회 + 독립 검증 2회, 재판정 = 확인 (§4) |
 | 시험 세션 수용 시험 | 대기 — `tools/apptainer/acceptance.sh` (지금의 막힌 세션에서 5 단계 FAIL 을 보고함) |
 | 우리 쪽 Apptainer 설정 | 후보 측정 완료, 선택은 승인 대기 (§5) |
@@ -44,7 +44,9 @@
 
 요청하지 않은 것: `--privileged` · capability 추가 · docker.sock · `/proc` 마스킹 해제 · cgroup 위임 · seccomp/AppArmor `unconfined` · `sandbox-type=jail`.
 
-**적용 지점** (Backend.AI 공개 코드 main 기준, 배포 버전 미확인 · 적용 미시험 — 안내문 `tools/apptainer/infra_worksheet.md`):
+**역할 구분**: 인프라가 할 일은 위 세 건뿐이다. 호스트에 Apptainer 를 설치할 필요는 없다 — 설치는 요청자가 세션 안에서 한다 (`setup_session.sh`, 세션에서 `sudo` 가능 2026-11-24 확인). 세 건은 컨테이너 생성 때 정해져 세션 안에서는 root 로도 못 바꾼다.
+
+**적용 지점** (Backend.AI 공개 코드 main 기준, 배포 버전 미확인 · 적용 미시험 — 요청서 (2026-11-24 개정) `tools/apptainer/infra_worksheet.md`):
 - seccomp 는 `<site-packages>/ai/backend/runner/default-seccomp.json` 이다. 에이전트가 컨테이너를 만들 때마다 읽는다. 노드의 모든 세션에 적용되고 에이전트 업그레이드 때 덮어써진다. dockerd `daemon.json` 을 바꾸면 효과가 없다. 플러그인의 "추가 허용 syscall" 은 이름만 받아 인자 조건을 못 담는다.
 - AppArmor 와 장치를 넣는 설정 항목은 `agent.toml` 에 없다. compute 플러그인의 `generate_docker_args()` (그 슬롯을 받은 세션만) 또는 `agent/docker/agent.py` 수정 (`/dev/infiniband` 블록이 선례, 노드 전체) 이다.
 
