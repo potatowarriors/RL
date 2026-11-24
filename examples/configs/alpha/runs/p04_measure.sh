@@ -17,9 +17,12 @@ REPEATS=${REPEATS:-8}
 LOG=$P/p04_measure.log
 MAXLEN=40960
 MODEL_CFG=$HERE/alpha_vllm_model_p0_32k.yaml
-HOSTS="10.0.37.4 10.0.37.2"
+# 세션을 다시 만들면 노드 주소가 바뀐다 (2026-11-24 재생성에서 실제로 바뀜) — 역할 이름에서 푼다
+MAIN_IP=$(getent hosts main1 | awk '{print $1}'); SUB_IP=$(getent hosts sub1 | awk '{print $1}')
+[ -n "$MAIN_IP" ] && [ -n "$SUB_IP" ] || { echo "main1 · sub1 주소를 풀지 못했다" >&2; exit 1; }
+HOSTS="$MAIN_IP $SUB_IP"
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
-ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
+ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=main1:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
 abort() { log "ABORT: $*"; exit 1; }
 [ -f "$CK/model.safetensors.index.json" ] || abort "HF ckpt missing: $CK"
 log "armed: ckpt=$CK repeats=$REPEATS phases: A blend $(wc -l < $BLEND) · B code_rest $(wc -l < $POOL/p04_code_rest.jsonl) · C math_rest $(wc -l < $POOL/p04_math_rest.jsonl)"
@@ -38,8 +41,8 @@ log "both nodes idle (BUSY_GPUS=0)"
 export TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 VLLM_ENFORCE_STRICT_TOOL_CALLING=0 PREFIX_CACHE=0
 log "starting main1 fleet: serve_fleet.sh $CK $MAXLEN 8 8100"
 GPUS=0,1,2,3,4,5,6,7 bash "$PAI/eval_sft/serve_fleet.sh" "$CK" "$MAXLEN" 8 8100 >> "$LOG" 2>&1
-log "starting sub1 servers via Ray: ray_serve_alpha.py start 10.0.37.2 $CK $MAXLEN"
-ray_py "$P/ray_serve_alpha.py" start 10.0.37.2 "$CK" "$MAXLEN" >> "$LOG" 2>&1 || abort "ray_serve_alpha.py start failed"
+log "starting sub1 servers via Ray: ray_serve_alpha.py start $SUB_IP $CK $MAXLEN"
+ray_py "$P/ray_serve_alpha.py" start $SUB_IP "$CK" "$MAXLEN" >> "$LOG" 2>&1 || abort "ray_serve_alpha.py start failed"
 ready=0
 for i in $(seq 1 120); do
     ready=0
@@ -65,5 +68,5 @@ run_phase p04_math8 "$POOL/p04_math_rest.jsonl"
 
 # 4) fleet 정지
 bash "$PAI/eval_sft/stop_fleet.sh" 0,1,2,3,4,5,6,7 >> "$LOG" 2>&1
-ray_py "$P/ray_serve_alpha.py" stop 10.0.37.2 >> "$LOG" 2>&1
+ray_py "$P/ray_serve_alpha.py" stop $SUB_IP >> "$LOG" 2>&1
 log "DONE — results: $P/p04_blend8/rollouts.jsonl · $P/p04_code8/rollouts.jsonl · $P/p04_math8/rollouts.jsonl"

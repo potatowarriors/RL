@@ -9,7 +9,7 @@ nvidia-smi pid 는 컨테이너 밖 pid 라 Ray 액터 pid 와 맞지 않는다 
 --actors-out 를 주면 teacher 액터 (이름 teacher_<alias>-…, pid, 노드 IP) 를 JSON 으로 남긴다 — analyze_mopd_smoke.py --teacher-actors 가
 드라이버 로그의 `successfully loaded checkpoint from …` 줄과 (노드, pid) 로 맞춰 teacher 신원을 본다 (MS2 ②, 검토 3차).
 
-  $NRL_ROOT/clean_run.sh /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 $NRL_ROOT/venv-driver/bin/python -I \
+  $NRL_ROOT/clean_run.sh /usr/bin/env RAY_ADDRESS=main1:6379 $NRL_ROOT/venv-driver/bin/python -I \
       examples/configs/alpha/runs/check_placement.py [--gen-gpus 4] [--teachers 4] [--actors-out <file.json>] </dev/null
 종료 코드 0 = PASS.
 """

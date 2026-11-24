@@ -23,7 +23,7 @@ VAL=${VAL:-$DATA}
 CKPT=${CKPT:-$OUT/ckpt}
 mkdir -p $OUT/$tag
 cd $REPO
-ray_py() { $NRL/clean_run.sh /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 $NRL/venv-driver/bin/python -I "$@" </dev/null 2>/dev/null; }
+ray_py() { $NRL/clean_run.sh /usr/bin/env RAY_ADDRESS=main1:6379 $NRL/venv-driver/bin/python -I "$@" </dev/null 2>/dev/null; }
 # 순서: 살아 있는 런 액터가 없을 때만 남은 Gym 서버를 정리하고, 그 뒤 GPU 점유를 본다. Gym judge(local_vllm_model)는 Gym 서버가 띄운
 # Ray 액터라 런이 끝나도 GPU 를 잡고 남는다 — 정리 전에 GPU 를 보면 기동이 막힌다 (KNOWN_ISSUES 2026-10-10).
 run_actors=$(ray_py $HERE/gpu_check.py | awk '/NRL_RUN_ACTORS/{print $2}')
@@ -48,7 +48,7 @@ fi
 echo "[$(date '+%F %T')] host=$(hostname) commit=$(git rev-parse --short HEAD) case=$tag recipe=$(basename $RECIPE) data=$(basename $DATA) ckpt=$CKPT r3_trace=${R3_TRACE:-1} wandb=${WANDB:-1} extra_env=${EXTRA_ENV:-} overrides=$*" | tee -a $OUT/runs.log
 env -u CUDA_VISIBLE_DEVICES $NRL/clean_run.sh /usr/bin/env -u NVIDIA_VISIBLE_DEVICES -u HOSTNAME \
   $(env | grep -o '^BACKENDAI_[A-Z_]*' | sed 's/^/-u /' | tr '\n' ' ') \
-  RAY_ADDRESS=10.0.37.4:6379 NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0 TP_SOCKET_IFNAME=eth0 \
+  RAY_ADDRESS=main1:6379 NCCL_IB_DISABLE=1 NCCL_SOCKET_IFNAME=eth0 GLOO_SOCKET_IFNAME=eth0 TP_SOCKET_IFNAME=eth0 \
   NEMO_GYM_EXTRA_ROOTS=$REPO/examples/configs/alpha/gym_plugins NRL_ROUTER_REPLAY_VALIDATE=1 $TRACE_ENV ${EXTRA_ENV:-} \
   $NRL/bin/uv run --locked python examples/nemo_gym/run_grpo_nemo_gym.py \
   --config $RECIPE \

@@ -195,7 +195,7 @@ env:
     ns_tools:
       resources_servers:
         ns_tools:
-          sandbox_host: 10.0.37.4       # main1 터널 → gpu06 alpha-eval NeMo-Skills sandbox (STEM 레시피와 같다). 생성 중 python 도구 실행에 필요
+          sandbox_host: main1           # main1 터널 → gpu06 alpha-eval NeMo-Skills sandbox (STEM 레시피와 같다). 생성 중 python 도구 실행에 필요
           sandbox_port: "6000"
           verifiers:
             equivalence_llm_judge:

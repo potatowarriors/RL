@@ -4,7 +4,7 @@
 액터 이름은 Ray 상태 API(list_actors: pid · node · class_name · name)로 pid 와 맞춘다 — teacher 워커는 이름이 `teacher_<alias>` 로 시작한다
 (teacher_worker_group.py RayWorkerGroup name_prefix).
 
-  $NRL_ROOT/clean_run.sh /usr/bin/env RAY_ADDRESS=10.0.37.4:6379 $NRL_ROOT/venv-driver/bin/python -I \
+  $NRL_ROOT/clean_run.sh /usr/bin/env RAY_ADDRESS=main1:6379 $NRL_ROOT/venv-driver/bin/python -I \
       examples/configs/alpha/runs/sample_gpu_layout.py --out <file.jsonl> [--interval 10] [--count 0] </dev/null
 """
 
