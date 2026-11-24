@@ -5,11 +5,13 @@
 #   모델은 Pai fleet (main1 GPU 8, 벤치와 같은 서빙) 이다 — 학습 때의 NeMo-RL vLLM 워커가 아니다. 토큰 ID · logprob · refit 은 이 측정이 보지 않는다.
 #   eval_swe_student.sh <tag> <hf_ckpt> <input.jsonl> [concurrency=128] [repeats=1]
 #   환경변수: TURNS (200) · AGENT_TIMEOUT (1800) · MEM_MB (32768) · MAXLEN (131072) · MEM_STOP_GIB (1400, 노드 메모리가 넘으면 중단)
+#            DRY=1 — GPU 없이 기동 경로만 돌린다: fleet 를 띄우지 않고 모델 주소를 죽은 포트로 둔다. Gym 서버 주소 · 두 노드의 컨테이너 기동 ·
+#                    클라이언트 접속 · 컨테이너 정리를 CPU 로 확인하는 용도다 (롤아웃은 모델 호출에서 실패한다). 승인 없이 돌릴 수 있다.
 # 결과: $NRL_ROOT/p0_measure/swe/<tag>/{rollouts.jsonl,rollouts_failures.jsonl,node_samples.tsv,run.log}. GPU 를 잡는다 — 승인 뒤에만 띄운다.
 # main1 에서 띄운다. 정답 패치 검증 (run_swe_golden.sh) 과 같은 Gym 서버 디렉토리를 쓰므로 동시에 못 돈다. 실행 중에 편집하지 않는다.
 set -u
 TAG=$1; CK=$(readlink -f "$2"); INPUT=$(readlink -f "$3"); CONC=${4:-128}; REPEATS=${5:-1}
-TURNS=${TURNS:-200}; AGENT_TIMEOUT=${AGENT_TIMEOUT:-1800}; MEM_MB=${MEM_MB:-32768}; MAXLEN=${MAXLEN:-131072}; MEM_STOP_GIB=${MEM_STOP_GIB:-1400}
+TURNS=${TURNS:-200}; AGENT_TIMEOUT=${AGENT_TIMEOUT:-1800}; MEM_MB=${MEM_MB:-32768}; MAXLEN=${MAXLEN:-131072}; MEM_STOP_GIB=${MEM_STOP_GIB:-1400}; DRY=${DRY:-0}
 NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}; P=$NRL/p0_measure; D=$P/swe/$TAG; GYM=/home/work/vidsearch/tools/Gym; SIF=$NRL/sif/swe
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alpha/runs
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
@@ -18,7 +20,7 @@ PORTS="8000 8001 8002 8003 8004 8005 8006 8007"
 mkdir -p $D; LOG=$D/run.log
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=main1:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
-on_sub1() { ssh -o BatchMode=yes -o ConnectTimeout=10 sub1 "$1" 2>/dev/null | tail -1; }
+on_sub1() { timeout 25 ssh -o BatchMode=yes -o ConnectTimeout=10 sub1 "$1" 2>/dev/null | tail -1; }
 SERVER_DIRS="$GYM/responses_api_agents/swe_agents $GYM/responses_api_models/vllm_model"
 gym_server_pids() {  # Gym 자식 서버 (`python app.py`) 는 명령줄로 구분되지 않는다 — cwd 로 찾는다
   local pid cwd d
@@ -47,12 +49,18 @@ FUSE_CNT='ps -eo ppid,comm | awk "\$1==1 && (\$2==\"squashfuse_ll\" || \$2==\"fu
 fuse_orphans() {  # 강제 종료된 컨테이너가 남기는 FUSE 데몬 (부모 1) 수 — "main1+sub1". sub1 을 못 읽으면 ? 로 적는다
   local a b; a=$(bash -c "$FUSE_CNT"); b=$(on_sub1 "$FUSE_CNT"); echo "${a:-?}+${b:-?}"
 }
+kill_containers() {  # 이 실행의 컨테이너를 두 노드에서 내린다 — 서버를 내려도 컨테이너는 자기 세션으로 남는다 (swe_kill_containers.py)
+  grep -o "SWE agents results root for this run: [^ ]*" $D/env_start.log 2>/dev/null | awk '{print $NF}' | sort -u > $D/results_roots.txt
+  [ -s $D/results_roots.txt ] || { log "컨테이너 정리: 결과 루트를 로그에서 찾지 못했다"; return 0; }
+  local c="python3 -I $HERE/swe_kill_containers.py $D/results_roots.txt kill"
+  log "컨테이너 정리: main1 $(bash -c "$c" | tail -1) · sub1 $(on_sub1 "$c")"
+}
 DONE=0
 cleanup() {
   [ "$DONE" = 1 ] && return 0; DONE=1
   [ -n "${EVAL_PID:-}" ] && kill $EVAL_PID 2>/dev/null
   [ -n "${SAMPLER:-}" ] && kill $SAMPLER 2>/dev/null
-  stop_env; stop_fleet
+  stop_env; kill_containers; stop_fleet
 }
 abort() { log "ABORT: $*"; cleanup; exit 1; }
 trap 'log "signal — 정리"; cleanup; exit 130' INT TERM
@@ -79,6 +87,10 @@ MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 ROWS=$(wc -l < $INPUT); FUSE0=$(fuse_orphans)
 log "armed: tag=$TAG ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
 
+if [ "$DRY" = 1 ]; then
+  MODEL_URL=http://127.0.0.1:9/v1; log "DRY=1 — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL, 롤아웃은 모델 호출에서 실패한다)"
+else
+MODEL_URL=http://127.0.0.1:8100/v1
 # 1. fleet — eval_lcb.sh 와 같은 플래그 (도구 파서 · 사고 파서 · 제약 디코딩 끔 · prefix cache 끔)
 export TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 VLLM_ENFORCE_STRICT_TOOL_CALLING=0 PREFIX_CACHE=0
 FLEET_UP=1
@@ -98,12 +110,14 @@ ident=0; for p in $PORTS; do curl -s -m 5 "http://127.0.0.1:$p/v1/models" | grep
 pident=0; for i in $(seq 1 16); do curl -s -m 5 "http://127.0.0.1:8100/v1/models" | grep -qF "$CK" && pident=$((pident+1)); done
 [ "$pident" -eq 16 ] || abort "프록시 :8100 응답의 모델 경로가 체크포인트와 다르다 ($pident/16 일치)"
 log "fleet ready: 8/8 · 모델 경로 일치 백엔드 8/8 · 프록시 16/16"
+fi
 
 # 2. Gym 서버. use_absolute_ip: 에이전트 컨테이너는 두 노드에 뜨고 (Ray SPREAD) 컨테이너 안에서 Gym 모델 서버를 부른다 —
 #    기본값 (127.0.0.1) 이면 sub1 의 컨테이너가 모델에 닿지 못한다. 학습 레시피도 true 다.
 cat > $D/overrides.yaml <<YAML
 cache_dir: $NRL/gym_cache
 use_absolute_ip: true
+$([ "$DRY" = 1 ] && echo "model_endpoint_readiness_timeout_seconds: 0")
 ray_head_node_address: main1:6379
 swe_agents_train:
   responses_api_agents:
@@ -133,19 +147,34 @@ YAML
 export PATH=/home/work/vidsearch/tools/bin:$PATH UV_CACHE_DIR=/home/work/vidsearch/tools/uv_cache \
        UV_PYTHON_INSTALL_DIR=/home/work/vidsearch/tools/uv_python RAY_TMPDIR=/tmp
 cd $GYM && source .venv/bin/activate
+export RAY_DEDUP_LOGS=0   # 워커 로그 줄이 합쳐지면 (repeated Nx across cluster) 어느 노드 · 어느 과제의 줄인지 잃는다
 setsid gym env start --config responses_api_agents/swe_agents/configs/swebench_openhands_training.yaml \
   --config $MODEL_CFG --config $D/overrides.yaml \
-  ++policy_base_url=http://127.0.0.1:8100/v1 ++policy_api_key=EMPTY ++policy_model_name=alpha \
+  ++policy_base_url=$MODEL_URL ++policy_api_key=EMPTY ++policy_model_name=alpha \
   > $D/env_start.log 2>&1 < /dev/null &
 ENV_PID=$!; ENV_PGID=$ENV_PID
-./scripts/wait_for_servers.sh $ENV_PID 11000 2400 >> "$LOG" 2>&1 || abort "gym servers failed ($D/env_start.log)"
-grep -q "'host': '127.0.0.1'" $D/env_start.log && abort "Gym 서버가 127.0.0.1 에 묶였다 — use_absolute_ip 가 먹지 않았다"
-log "gym servers ready (주소 $(grep -o "'host': '[0-9.]*'" $D/env_start.log | sort -u | tr '\n' ' '))"
+# Gym 의 scripts/wait_for_servers.sh 는 127.0.0.1 만 본다 — use_absolute_ip 면 head 서버가 노드 주소에만 묶이므로 직접 기다린다.
+HEAD=http://$MAIN_IP:11000; gready=0
+for i in $(seq 1 480); do
+  kill -0 $ENV_PID 2>/dev/null || abort "gym env start 가 죽었다 ($D/env_start.log)"
+  urls=$(curl -s -m 5 "$HEAD/server_instances" 2>/dev/null | python3 -I -c "import json,sys
+try: print(' '.join(x['url'] for x in json.load(sys.stdin) if x.get('url')))
+except Exception: pass" 2>/dev/null)
+  if [ -n "$urls" ]; then
+    n=0; okc=0; for u in $urls; do n=$((n+1)); curl -sf -m 5 "$u/docs" > /dev/null 2>&1 && okc=$((okc+1)); done
+    [ "$okc" -eq "$n" ] && [ "$n" -ge 3 ] && { gready=1; break; }
+  fi
+  sleep 5
+done
+[ "$gready" = 1 ] || abort "gym 서버가 40분 안에 준비되지 않았다 ($D/env_start.log)"
+hosts=$(grep -o "'host': '[0-9.]*'" $D/env_start.log | sort -u | tr '\n' ' ')
+[ "$hosts" = "'host': '$MAIN_IP' " ] || abort "Gym 서버가 노드 주소 ($MAIN_IP) 가 아닌 곳에 묶였다: $hosts"
+log "gym servers ready ($n 개, 주소 $MAIN_IP)"
 
 # 3. 롤아웃. 클라이언트가 멈추면 (/aggregate_metrics 재시도, 2026-11-24 golden_ultra_b2) GPU 를 쥔 채 남으므로 시간 한도를 건다.
 WAVES=$(( (ROWS * REPEATS + CONC - 1) / CONC )); BUDGET=$(( WAVES * (AGENT_TIMEOUT + 1800) + 900 ))
 t0=$(date +%s)
-timeout $BUDGET gym eval run --no-serve --input $INPUT --output $D/rollouts.jsonl --num-repeats $REPEATS --concurrency $CONC > $D/eval_run.log 2>&1 < /dev/null &
+timeout $BUDGET gym eval run --no-serve --input $INPUT --output $D/rollouts.jsonl --num-repeats $REPEATS --concurrency $CONC ++use_absolute_ip=true > $D/eval_run.log 2>&1 < /dev/null &
 EVAL_PID=$!
 
 # 4. 노드 표본 (15 초): 세션 cgroup 의 shmem (컨테이너 쓰기 공간은 tmpfs 라 여기에 잡힌다) · 전체 (GiB) · load. 전체가 한도를 넘으면 롤아웃을 내린다.
@@ -165,7 +194,9 @@ n_ok=$(wc -l < $D/rollouts.jsonl 2>/dev/null || echo 0); n_fail=$(wc -l < $D/rol
 log "eval rc=$rc (124 = 시간 한도 $BUDGET s) rollouts=$n_ok failures=$n_fail expected=$((ROWS * REPEATS)) seconds=$(( $(date +%s) - t0 ))$([ -e $D/MEM_STOP ] && echo " MEM_STOP: $(cat $D/MEM_STOP)")"
 kill $SAMPLER 2>/dev/null; SAMPLER=
 stop_env
+kill_containers
 stop_fleet
-log "fuse_orphans before=$FUSE0 after=$(fuse_orphans) · gym_servers_left=$(gym_server_pids | wc -l) · busy_gpus=$(ray_py "$HERE/gpu_check.py" | awk '/BUSY_GPUS/{print $2}')"
+cc="python3 -I $HERE/swe_kill_containers.py $D/results_roots.txt"
+log "잔재: containers main1 [$(bash -c "$cc" | tail -1)] sub1 [$(on_sub1 "$cc")] · fuse_orphans before=$FUSE0 after=$(fuse_orphans) · gym_servers_left=$(gym_server_pids | wc -l) · busy_gpus=$(ray_py "$HERE/gpu_check.py" | awk '/BUSY_GPUS/{print $2}')"
 DONE=1
 log "DONE"
