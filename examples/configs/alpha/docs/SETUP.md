@@ -117,6 +117,26 @@ cd /home/work/vidsearch/repos/project_s/NeMo-RL/examples/configs/alpha/tools/app
 ./acceptance.sh                         # 7 단계 이후: Apptainer 실행
 ```
 
+### 5.1 재생성 전 점검 기록 (2026-11-24) — RL 쪽 복원 순서와 문서에 없던 것
+
+세션은 2026-10-01 00:21 에 만들어졌고 (NGC 25.05), 인프라가 Apptainer 용 세 설정을 적용해 다시 만든다. 재생성 전에 복원 코드를 읽고 지금 세션에서 확인한 내용이다.
+호스트 식별 · 주소 기록: `project_s/reboot_restore/logs/gpu_identity_{main1,sub1}_20261124_pre.txt` · `session_addresses_20261124_pre.txt`.
+
+| # | 단계 (노드마다) | 근거 · 주의 |
+|---|---|---|
+| 1 | Pai 공통 복원 — `RESTORE_AFTER_REBOOT.md` §7.3 (기동 형태는 §7.9-21) | 28 ~ 45 분/노드. 세션에서 `sudo -n` 가능 (11-24 확인) |
+| 2 | **`Pai …/eval_sft/restore_bench_env.sh` 를 두 노드 모두** | RL 런타임이 여기에 의존한다 — `$NRL_ROOT/env.sh` 의 `LD_LIBRARY_PATH` 가 `/usr/local/cuda/compat/lib.real` 을 쓰고, 그 디렉토리의 `libcuda.so.1 → 595.91.07` 은 이 스크립트가 sudo 로 넣는다 (이미지 기본은 575, 호스트 드라이버 535.230.02). 위 "전부 NFS 라 재설치가 필요 없다" 는 이 한 가지를 빼고 맞다. 빠졌을 때의 증상은 시험하지 않았다 |
+| 3 | 호스트 확인 — GPU UUID 를 위 기록과 대조, `getent hosts main1 sub1` | 이름과 물리 호스트가 바뀔 수 있다 (`RESTORE` §7.10-25). **인프라 설정은 호스트 단위라, 다른 호스트에 놓이면 세 설정이 없을 수 있다** — 4 의 수용 시험이 가려 준다 |
+| 4 | Apptainer — `tools/apptainer/acceptance.sh $NRL_ROOT/apptainer_test/alpine_145.sif` → `setup_session.sh` → 같은 수용 시험 | 기본 시험 이미지 `alpine.sif` 는 1.5.5 로 만든 것이라 7 단계 실패의 원인이 섞인다 → 1.4.5 로 만든 `alpine_145.sif` 를 인자로 준다. `--pid-mode bindproc` 는 승인 뒤에 (`E2E_SANDBOX.md` §9 의 4) |
+| 5 | Ray 2노드 클러스터 재기동 | **기동 명령이 어디에도 기록돼 있지 않다.** 10-07 18:37 에 띄운 클러스터의 실측값: head `main1:6379` · 노드마다 CPU 220 · GPU 8 · object store 64 GiB (`68719476736`) · plasma `/dev/shm` · temp `/tmp/ray` · spill 은 `/tmp/ray/session_*` (루트 디스크) · worker 포트 10002 ~ 19999. spill 을 NFS (`$NRL_ROOT/ray_spill`) 로 옮기는 근본 대책 (`KNOWN_ISSUES.md` 10-13 · 10-20) 을 이때 넣을지는 결정 대기 |
+| 6 | head 주소 확인 | `runs/launch.sh` 를 포함한 실행기와 레시피 둘 (`teacher_stem_alpha.yaml` · `mopd1_alpha.yaml`), `$NRL_ROOT/p0_measure` 의 실행기들이 `10.0.37.4` 를 박아 두었다 (지금 main1 = 10.0.37.4 · sub1 = 10.0.37.2). 재생성 뒤 주소가 다르면 기동 전에 고친다 |
+| 7 | git 인증 (사용자 터미널) | `~/.git-credentials` · `~/.config/gh` 는 HOME 이라 사라진다 → `RESTORE` §7.6-4. 그 전에는 push 가 안 된다 |
+| 8 | gpu06 역터널 (필요할 때) | `tools/start_swe_tunnel.sh`. 지금 main1 의 터널 (pid 2233680) 은 세션과 함께 사라진다 |
+
+Apptainer 설치기 사전 확인 (설치는 하지 않음): deb sha256 일치 · 릴리스 URL 200 · 이 이미지에 없는 의존성은 `libfuse3-3` · `uidmap` (+ `libsubid4`) 이고 apt 모의 실행에서 "신규 4 · 업그레이드 0 · 제거 0" · `apptainer.conf` 에 `allow pid ns = yes` · `mount proc = yes` 줄이 있어 `--pid-mode bindproc` 의 치환이 맞는다 · `/etc/localtime` 있음.
+수용 시험 음성 대조: 지금 (미적용) 세션에서 5 단계 FAIL · 종료 코드 1, 원인 문구가 층마다 맞게 나온다.
+남은 틈: 실제 SWE 이미지 시험 (`E2E_SANDBOX.md` §6 의 2) 은 세션용 스크립트가 없다 — 리허설의 `rehearsal_20261120/round2/scripts/t2.sh` 가 `/work/…` 경로에 묶여 있어 옮겨야 한다. `--writable-tmpfs` 의 크기는 `sessiondir max size = 64` (MB) 기본값 그대로다 (upstream 이미지도 같다, 영향은 스모크에서 본다).
+
 §4 경로(RL 전용 세션)가 재생성된 경우:
 
 - 유지: `NeMo-RL/` 클론·서브모듈·`venvs/`·설치 스크립트 (모두 NFS)
