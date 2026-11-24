@@ -113,7 +113,7 @@ source nemo_rl_env.sh
 ```bash
 cd /home/work/vidsearch/repos/project_s/NeMo-RL/examples/configs/alpha/tools/apptainer
 ./acceptance.sh                         # 0~6 단계: 세션에 설정이 들어왔는지 (Apptainer 없이도 돈다)
-./setup_session.sh --pid-mode bindproc  # 설치 + 우리 쪽 설정. --pid-mode 는 승인된 방식으로
+./setup_session.sh --pid-mode bindproc --sessiondir-mb 16384   # 설치 + 우리 쪽 설정 (RL_PLAN 결정 75)
 ./acceptance.sh                         # 7 단계 이후: Apptainer 실행
 ```
 
