@@ -105,7 +105,8 @@ apparmor_parser -r /etc/apparmor.d/docker-apptainer
 grep docker-apptainer /sys/kernel/security/apparmor/profiles     # 예상: docker-apptainer (enforce)
 ```
 
-- 이 프로파일은 Docker 의 `docker-default` 와 세 군데만 다릅니다: 이름, `deny mount,` 삭제, `mount,` · `pivot_root,` 추가.
+- 이 프로파일은 Docker 의 `docker-default` 템플릿 (moby `profiles/apparmor/template.go`) 에서 네 군데만 바꾼 것입니다: 이름, `deny mount,` 삭제, `mount,` · `pivot_root,` 추가, dockerd 신호 줄 삭제 (아래 셋째 항목). `/proc` · `/sys` 쓰기 금지 같은 나머지 규칙은 그대로입니다.
+- 프로파일을 적재하는 것만으로는 어떤 컨테이너도 바뀌지 않습니다. 6.2 에서 지정한 컨테이너에만 쓰입니다.
 - 4-마 의 `apparmor_parser` 가 4.x 이상이고 user namespace 를 중재하면, `pivot_root,` 다음 줄에 `userns,` 를 한 줄 더합니다.
 - 4-마 의 dockerd 라벨이 `unconfined` 가 아니면, `signal (receive) peer=<그 라벨>,` 을 한 줄 더합니다.
 - `/etc/apparmor.d/` 에 두면 부팅 때 apparmor 서비스가 다시 적재합니다.
