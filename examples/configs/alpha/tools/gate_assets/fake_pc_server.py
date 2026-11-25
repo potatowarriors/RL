@@ -22,6 +22,7 @@ Faults, each a way the real engine could be broken or the gate could be fooled:
     nondet          every request gets its own noise (two cold computations differ)
     no_salt         `cache_salt` is ignored (a "cold" reference would silently be a hit)
     short_hit       the newest state boundary is never hit
+    routes_drop_tail       a hit returns three routed-expert rows too few (the "missing routes" defect)
     routes_restore_shift   every hit damages the stored routed experts of the cached block that ends at its hit
                            position (this hit and later ones return them wrong; log-probs are right)
 `restore_*` and `routes_restore_*` print the marker line the real fault injector prints, so the judge can count them.
@@ -141,6 +142,8 @@ def run(ids, salt, n):
             d = SHIFT.get((salt, e, k), 0)
             if d:
                 rows[e - BLOCK : e] = [bytes([(r[0] + d) % 192, r[1]]) for r in rows[e - BLOCK : e]]
+        if FAULT == "routes_drop_tail" and hit:
+            rows = rows[:-3]
         choice["routed_experts"] = npy_b64(rows)
     return {"choices": [choice], "usage": {"prompt_tokens": total}}
 

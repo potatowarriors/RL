@@ -237,12 +237,17 @@ class Run:
         r = self.eng.gen(ids, salt, n)
         self.model.commit(salt, ids, r["tokens"])
         ok = r["cached"] == hit and r["d_prompt"] == len(ids) == r["usage_prompt"] and len(r["tokens"]) == n
+        # routed experts: one row per forwarded token — every prompt token and every generated token but the last.
+        # A short or long array is the "missing routes" defect of prefix caching with chunked prefill (NeMo-RL utils.py).
+        rows, want_rows = (r["routes"]["rows"] if r["routes"] else None), len(ids) + n - 1
+        ok = ok and (rows is None or rows == want_rows)
         self.log.append({"what": what, "len": len(ids), "n": n, "got": len(r["tokens"]), "expect": hit, "cached": r["cached"],
                          "d_prompt": r["d_prompt"], "usage_prompt": r["usage_prompt"], "common": common, "ok": bool(ok),
-                         "secs": r["secs"]})  # fmt: skip
+                         "route_rows": rows, "route_rows_expected": want_rows if rows is not None else None, "secs": r["secs"]})  # fmt: skip
         r["ok"], r["why"] = ok, "" if ok else (
             f"{what}: engine reports {r['cached']} cached tokens (predicted {hit}), prompt tokens counted "
             f"{r['d_prompt']} / usage {r['usage_prompt']} (sent {len(ids)}), {len(r['tokens'])} tokens returned (asked {n})"
+            + (f", routed-expert rows {rows} (expected {want_rows})" if rows is not None else "")
         )  # fmt: skip
         return r, hit, prov, common
 
@@ -635,7 +640,8 @@ def judge_run(d: dict, role: str) -> dict:
     for q in reqs:
         if not q["ok"]:
             fails.append(f"request invalid — {q['what']}: cached {q['cached']} (predicted {q['expect']}), prompt tokens "
-                         f"{q['d_prompt']}/{q['usage_prompt']} (sent {q['len']}), tokens {q['got']}/{q['n']}")  # fmt: skip
+                         f"{q['d_prompt']}/{q['usage_prompt']} (sent {q['len']}), tokens {q['got']}/{q['n']}"
+                         + (f", routed-expert rows {q['route_rows']}/{q['route_rows_expected']}" if q.get("route_rows") is not None else ""))  # fmt: skip
     hits = sorted(int(q["expect"]) for q in reqs if q["expect"] > 0)
     present = [rows[r] for r in want if r in rows]
     for r in present:

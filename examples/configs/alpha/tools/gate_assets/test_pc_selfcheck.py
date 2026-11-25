@@ -119,6 +119,8 @@ def main() -> int:
     cases.append(("routes engine at budget 16384: correct, state fault and routes fault detected", [t_prod, t_1056], t_ncs, True, ""))
     bad_routes = serve("t_bad_routes", next(port), 16384, "routes_restore_shift", routes=True)
     cases.append(("routes engine broken: a hit returns wrong routes (log-probs right)", [run(bad_routes, "prod", extra=rt), t_1056], t_ncs, False, "routes different"))
+    short_routes = serve("t_short_routes", next(port), 16384, "routes_drop_tail", routes=True)
+    cases.append(("routes engine broken: a hit returns too few routed-expert rows", [run(short_routes, "prod", extra=rt), t_1056], t_ncs, False, "routed-expert rows"))
     no_routes = serve("t_no_routes", next(port), 16384)
     cases.append(("routes expected but the engine returns none", [run(no_routes, "prod", extra=rt), t_1056], t_ncs, False, "routed experts absent"))
     cases.append(("backend named in the log differs from the expected one", [run(serve("t_backend", next(port), 16384, routes=True), "prod", extra=("--routes", "--backend", "Triton/FLA")), t_1056], t_ncs, False, "GDN prefill backend"))
