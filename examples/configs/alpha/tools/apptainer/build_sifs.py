@@ -180,6 +180,21 @@ class PullBudget:
             time.sleep(min(wait, 60))
 
 
+def hub_names(image: str) -> list[str]:
+    """레지스트리에서 시도할 이름들. 블렌드의 `image_name` 을 먼저, 저장소 이름에 밑줄이 있으면 하이픈으로 바꾼 이름을 다음에.
+
+    SWE-rebench-V2 의 79 개 (30 저장소) 는 블렌드에 `…/owner-very_good_cli:tag` 로 적혀 있지만 Docker Hub 에는
+    `…/owner-very-good-cli:tag` 로 올라가 있다 (2026-11-24: 적힌 이름은 UNAUTHORIZED, 하이픈 이름은 태그 200).
+    받은 파일은 내용 확인 (저장소 디렉토리 존재) 을 통과해야 하므로 엉뚱한 이미지가 제 이름을 얻지는 못한다.
+    """
+    repo, sep, tag = image.rpartition(":")
+    if not sep:
+        repo, tag = image, ""
+    org, slash, name = repo.rpartition("/")
+    alt = f"{org}{slash}{name.replace('_', '-')}{sep}{tag}"
+    return [image] if alt == image else [image, alt]
+
+
 def build_one(args, budget: PullBudget, task) -> dict:
     iid, ds, image, rel, repo_dir = task
     dst = os.path.join(args.out, rel)
@@ -198,27 +213,39 @@ def build_one(args, budget: PullBudget, task) -> dict:
     os.makedirs(env["APPTAINER_TMPDIR"])
     t0 = time.time()
     try:
-        for attempt in range(1, args.retries + 1):
-            budget.acquire(args.pull_cost)
-            p = subprocess.run(
-                [args.apptainer, "build", "--force", tmp_sif, f"docker://{image}"],
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            if p.returncode == 0:
+        names = hub_names(image)
+        for which, name in enumerate(names):
+            built = False
+            for attempt in range(1, args.retries + 1):
+                budget.acquire(args.pull_cost)
+                p = subprocess.run(
+                    [args.apptainer, "build", "--force", tmp_sif, f"docker://{name}"],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                if p.returncode == 0:
+                    built = True
+                    break
+                err = (p.stderr or "")[-400:]
+                limited = "toomanyrequests" in err.lower() or "429" in err
+                if attempt == args.retries or not (
+                    limited or "timeout" in err.lower() or "TLS" in err
+                ):
+                    break
+                time.sleep(600 if limited else 30)
+            if built:
+                if name != image:
+                    rec = rec | {"image_used": name}
                 break
-            err = (p.stderr or "")[-400:]
-            limited = "toomanyrequests" in err.lower() or "429" in err
-            if attempt == args.retries or not (
-                limited or "timeout" in err.lower() or "TLS" in err
-            ):
+            # 이 이름이 레지스트리에 없을 때만 다음 이름으로 간다 — 속도 제한 · 네트워크 실패를 이름 탓으로 돌리지 않는다
+            missing = any(s in err for s in ("UNAUTHORIZED", "MANIFEST_UNKNOWN", "manifest unknown", "NAME_UNKNOWN", "not found"))
+            if which == len(names) - 1 or not missing:
                 return rec | {
                     "status": "failed",
                     "seconds": round(time.time() - t0),
                     "error": err.strip().splitlines()[-1][:300] if err.strip() else "",
                 }
-            time.sleep(600 if limited else 30)
         problem = check_sif(args.apptainer, args.unsquashfs, tmp_sif, repo_dir)
         if problem:
             return rec | {
