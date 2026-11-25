@@ -1,0 +1,24 @@
+From: alpha_v2 RL (NeMo-RL fork examples/configs/alpha)
+Date: 2026-11-25
+Subject: [PATCH] swe_agents: do not mount the launch directory into task containers
+
+Apptainer binds the current working directory of the launching process into the container.
+Ray workers inherit the raylet working directory, so with `--no-mount home,tmp,bind-paths` a task
+container still saw the host home (raylet started from $HOME) or the repository (raylet started
+from the checkout) read-write. Add `cwd` to the list.
+
+Not an upstream commit (upstream main still has `home,tmp,bind-paths`).
+---
+diff --git a/responses_api_agents/swe_agents/app.py b/responses_api_agents/swe_agents/app.py
+index 61c2971b..9fa5de22 100644
+--- a/responses_api_agents/swe_agents/app.py
++++ b/responses_api_agents/swe_agents/app.py
+@@ -3591,7 +3591,7 @@ class SWEBenchWrapper(SimpleResponsesAPIAgent):
+ 
+         # Launch Apptainer container and execute the script file
+         apptainer_cmd = (
+-            f"apptainer exec --writable-tmpfs --cleanenv --pid --no-mount home,tmp,bind-paths "
++            f"apptainer exec --writable-tmpfs --cleanenv --pid --no-mount home,tmp,bind-paths,cwd "
+             f"{env_args}"
+             f"{mount_str} "
+             f" {params.container} bash {container_script_path}"

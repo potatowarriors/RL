@@ -27,10 +27,18 @@ RAY="$NRL/clean_run.sh $NRL/venv-driver/bin/ray"
 # `APPTAINERENV_<이름>` 은 `--cleanenv` 를 거쳐도 컨테이너 안에 들어간다 — 에이전트 · 채점 컨테이너 둘 다에 USER 가 생긴다.
 RUN_USER=$(id -un)
 RAY_START="$NRL/clean_run.sh /usr/bin/env APPTAINER_BIND=/proc APPTAINERENV_USER=$RUN_USER $NRL/venv-driver/bin/ray"
+# raylet 의 현재 디렉토리는 그 노드의 모든 Ray 워커가 물려받고, Apptainer 는 실행 위치를 컨테이너에 붙인다 (Gym 의 옵션에 `cwd` 가 없으면).
+# 홈이나 리포에서 띄우면 과제 컨테이너가 호스트 홈 · 리포를 쓰기 가능하게 본다 — sub1 홈 볼륨이 과제 캐시로 가득 찬 사고 (KNOWN_ISSUES 2026-11-25).
+# 기동마다 새 빈 디렉토리를 만들어 거기서 띄운다 (노드 로컬 /tmp, 이름에 시각).
+RAY_CWD=/tmp/ray_cwd_$(date +%Y%m%d_%H%M%S)
 MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 SUB_IP=$(getent hosts sub1 | awk '{print $1}')
 [ -n "$MAIN_IP" ] && [ -n "$SUB_IP" ] || { echo "main1 · sub1 주소를 풀지 못했다" >&2; exit 1; }
 
+raylet_cwd() {  # $1 = 노드 이름 → 그 노드 raylet 의 현재 디렉토리 (없으면 빈 줄)
+    local q='p=$(pgrep -x raylet | head -1); [ -n "$p" ] && readlink /proc/$p/cwd'
+    if [ "$1" = "$(hostname)" ]; then bash -c "$q"; else ssh -o BatchMode=yes "$1" "$q" 2>/dev/null; fi
+}
 compat_ok() { [ "$(readlink /usr/local/cuda/compat/lib.real/libcuda.so.1 2>/dev/null)" = "libcuda.so.595.91.07" ]; }
 node_flags() {  # $1 = 노드 이름, $2 = IP
     echo "--node-ip-address=$2 --object-store-memory=$OBJECT_STORE --object-spilling-directory=$NRL/ray_spill/$1 \
@@ -48,9 +56,13 @@ start)
         || { echo "sub1 에 compat 595 가 없다 — restore_bench_env.sh 먼저" >&2; exit 1; }
     mkdir -p "$NRL/ray_spill/main1" "$NRL/ray_spill/sub1"
     # shellcheck disable=SC2046
-    $RAY_START start --head --port=$PORT $(node_flags main1 "$MAIN_IP") </dev/null
+    (mkdir "$RAY_CWD" && cd "$RAY_CWD" && $RAY_START start --head --port=$PORT $(node_flags main1 "$MAIN_IP") </dev/null)
     # shellcheck disable=SC2029
-    ssh -o BatchMode=yes sub1 "$RAY_START start --address=main1:$PORT $(node_flags sub1 "$SUB_IP") </dev/null"
+    ssh -o BatchMode=yes sub1 "mkdir '$RAY_CWD' && cd '$RAY_CWD' && $RAY_START start --address=main1:$PORT $(node_flags sub1 "$SUB_IP") </dev/null"
+    for n in main1 sub1; do
+        c=$(raylet_cwd $n)
+        [ "$c" = "$RAY_CWD" ] || { echo "$n 의 raylet 현재 디렉토리가 $RAY_CWD 가 아니다 ($c)" >&2; exit 1; }
+    done
     # 준비 대기. 기동 직후에는 노드마다 미리 띄우는 워커 (CPU 수 = 220) 가 등록 중이다. 그 사이 (기동 18 초 뒤) 에 낸 태스크가
     # 응답 없이 멈춘 적이 있다 — raylet "workers ... have not registered within the timeout" (2026-11-24). 두 노드에서 태스크가
     # 실제로 돌아올 때까지 기다린 뒤에 돌려준다. 한 번의 시도는 60 초로 끊는다.
@@ -64,13 +76,13 @@ start)
         sleep 10
     done
     [ "$ready" = 1 ] || { echo "클러스터가 떴으나 태스크가 돌아오지 않는다 — raylet 로그 /tmp/ray/session_latest/logs/raylet.err" >&2; exit 1; }
-    echo "[$(date '+%F %T')] ray_cluster start: head main1($MAIN_IP):$PORT worker sub1($SUB_IP) object_store=$OBJECT_STORE spill=$NRL/ray_spill/<node> (태스크 응답 확인)" \
+    echo "[$(date '+%F %T')] ray_cluster start: head main1($MAIN_IP):$PORT worker sub1($SUB_IP) cwd=$RAY_CWD object_store=$OBJECT_STORE spill=$NRL/ray_spill/<node> (태스크 응답 확인)" \
         | tee -a "$NRL/logs/ray_cluster.log"
     ;;
 status)
     $RAY status --address=main1:$PORT </dev/null
     for n in main1 sub1; do
-        echo "spill $n: $(find "$NRL/ray_spill/$n" -type f 2>/dev/null | wc -l) files, $(du -sh "$NRL/ray_spill/$n" 2>/dev/null | cut -f1)"
+        echo "spill $n: $(find "$NRL/ray_spill/$n" -type f 2>/dev/null | wc -l) files, $(du -sh "$NRL/ray_spill/$n" 2>/dev/null | cut -f1) · raylet cwd: $(raylet_cwd $n)"
     done
     ;;
 stop)

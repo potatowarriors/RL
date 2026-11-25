@@ -1,11 +1,12 @@
 # Gym 패치 — 고정한 Gym (v0.6.0 `3045a793`) 위에 얹는 upstream 수정
 
 Gym 서브모듈은 v0.6.0 에 고정한다 (`.claude/rules/alpha-submodules.md`). 그 버전에 없고 우리 경로에 필요한 upstream 수정은
-**upstream 커밋을 그대로** 여기에 패치 파일로 두고 두 체크아웃에 적용한다 (`RL_PLAN.md` 결정 79, 사용자 2026-11-25).
+**upstream 커밋을 그대로** 여기에 패치 파일로 두고 두 체크아웃에 적용한다 (upstream 에 없는 우리 수정은 표에 "없음" 으로 적는다) (`RL_PLAN.md` 결정 79, 사용자 2026-11-25).
 
 | 패치 | upstream 커밋 | 왜 필요한가 |
 |---|---|---|
 | `0001-…normalize-response-tools-for-replay-3190.patch` | `7bfccecc1` (2026-09-09, #3190) | `swe_agents` 가 롤아웃 결과를 조립할 때 모델 응답에서 되돌려 쓴 도구 정의에 `defer_loading: None` 이 들어가 `SWEBenchVerifyResponse` 검증이 실패한다 (`/run` 500, `KNOWN_ISSUES.md` 2026-11-25) |
+| `0002-swe-agents-do-not-mount-the-launch-directory.patch` | 없음 (우리 수정, 2026-11-25) | `swe_agents` 의 컨테이너 옵션 `--no-mount home,tmp,bind-paths` 에 `cwd` 를 더한다. Apptainer 는 실행 위치를 컨테이너에 붙이고 Ray 워커는 raylet 의 현재 디렉토리를 물려받아, 과제 컨테이너가 호스트 홈 (sub1) · 리포 (main1) 를 쓰기 가능하게 봤다 — sub1 홈 볼륨이 과제 캐시로 가득 참 (`KNOWN_ISSUES.md` 2026-11-25). upstream `main` 에도 없는 옵션이라 fork 를 올려도 남긴다 |
 
 - 적용 · 확인: `examples/configs/alpha/tools/apply_gym_patches.sh` (인자 없이 = 적용, `check` = 확인만). 대상은 NeMo-RL 서브모듈
   `3rdparty/Gym-workspace/Gym` (학습) 과 측정용 체크아웃 `/home/work/vidsearch/tools/Gym`. 두 곳 모두 NFS 라 세션을 다시 만들어도 남는다 — 새로 클론했을 때만 다시 적용한다.

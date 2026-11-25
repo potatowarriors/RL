@@ -88,6 +88,18 @@ trap cleanup EXIT
 [ -n "$(gym_server_pids)" ] && { log "ABORT: 같은 서버 디렉토리에서 도는 Gym 서버가 이미 있다 (정답 패치 검증이 도는 중인가)"; exit 1; }
 SESS='grep -c "^sessiondir max size = 16384" /etc/apptainer/apptainer.conf'
 [ "$(bash -c "$SESS")" = 1 ] && [ "$(on_sub1 "$SESS")" = 1 ] || { log "ABORT: 쓰기 공간 16384 MB 설정이 두 노드에 없다 (setup_session.sh --sessiondir-mb 16384)"; exit 1; }
+# 컨테이너가 호스트 홈 · 리포를 보지 않는가 (KNOWN_ISSUES 2026-11-25): Apptainer 는 실행 위치를 붙이고 Ray 워커는 raylet 의 현재 디렉토리를 물려받는다.
+# raylet 은 전용 빈 디렉토리에서 떠 있어야 하고 (runs/ray_cluster.sh), 두 노드의 홈 볼륨에 여유가 있어야 한다 (가득 차면 그 노드의 롤아웃이 전멸한다).
+if [ "$RAY_HEAD" != local ]; then
+  RCWD='p=$(pgrep -x raylet | head -1); [ -n "$p" ] && readlink /proc/$p/cwd'
+  c1=$(bash -c "$RCWD"); c2=$(on_sub1 "$RCWD")
+  for c in "$c1" "$c2"; do
+    case "$c" in /tmp/ray_cwd_*) ;; *) log "ABORT: raylet 의 현재 디렉토리가 전용 디렉토리가 아니다 (main1 [$c1] sub1 [$c2]) — runs/ray_cluster.sh 로 다시 띄운다"; exit 1 ;; esac
+  done
+fi
+HFREE='df -BG --output=avail /home/work | tail -1 | tr -dc 0-9'
+h1=$(bash -c "$HFREE"); h2=$(on_sub1 "$HFREE")
+[ "${h1:-0}" -ge 10 ] && [ "${h2:-0}" -ge 10 ] || { log "ABORT: 홈 볼륨 여유가 10 GB 미만이다 (main1 ${h1:-?} GB · sub1 ${h2:-?} GB)"; exit 1; }
 BINDCHK='p=$(pgrep -x raylet | head -1); tr "\0" "\n" < /proc/$p/environ 2>/dev/null | grep -c "^APPTAINER_BIND=/proc$"'
 if [ "$RAY_HEAD" = local ]; then
   export APPTAINER_BIND=/proc APPTAINERENV_USER=$(id -un)   # Gym 이 띄우는 로컬 Ray 의 워커가 이 환경을 물려받는다
