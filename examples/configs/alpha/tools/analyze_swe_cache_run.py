@@ -6,12 +6,18 @@
   1. 엔진: 적중률 = Δprompt_tokens_cached / Δprompt_tokens (요청당 한 번 세는 누계). 계산한 prefill 토큰 = Δprompt − Δcached.
      - 수집 구간이 런 (Gym 서버 준비 ~ eval 종료) 을 덮지 않으면 엔진 수치 전체가 무효다 (수집기가 도중에 끝나면 앞부분만 남는다).
      - 정지 = 대기 · 실행 요청이 있는데 생성 · 프롬프트 누계가 120 초 넘게 그대로, 또는 /metrics 무응답 구간에 누계가 평소 속도의 1/4 도
-       늘지 않음, 또는 그 포트의 표본이 먼저 끊김. 정지 · 재기동 · 사라진 엔진이 있으면 속도 수치는 무효이고 종료 코드는 2 다.
+       늘지 않음, 또는 그 포트의 표본이 먼저 끊김. 여기에 **만부하 구간** (런 시작 ~ 마지막 롤아웃이 시작한 시각: 동시 수만큼 롤아웃이 늘
+       돌고 있어 모든 엔진에 세션이 있다) 에서는 게이지와 무관하게 본다 — 한 엔진의 누계가 300 초 넘게 그대로이거나 (유휴 직후 멈추면
+       게이지가 0 으로 굳는다), 생성 속도가 엔진 중앙값의 1/4 미만으로 600 초 넘게 이어지면 정지 · 느린 엔진이다.
+       정지 · 느린 엔진 · 재기동 · 사라진 엔진이 있으면 속도 수치는 무효이고 종료 코드는 2 다.
      - 세션 고정 · 접두사 성질은 직접 볼 수 없다. **그 런 자신의 롤아웃 기록으로 낸 예측 적중률** 과 견준다: 턴별 (프롬프트, 생성) 토큰에서
        P_lo = 직전 프롬프트의 마지막 블록 경계까지 재사용 · P_hi = 직전 생성까지 재사용 (블록 1,056, 적중은 블록 경계에서 끝나고 1 토큰 이상
-       남긴다, 롤아웃의 첫 호출은 차갑다고 본다). 측정 H ≥ P_lo − 0.01 이면 통과, H < 0.92 면 깨짐 (호출마다 엔진이 바뀌면 0.84 ~ 0.89,
-       시스템 프롬프트 안에서 어긋나면 0.10 근처 — 검토자의 s2b 기록 시뮬레이션), 그 사이는 진단. 예측은 턴 기록이 있는 롤아웃만 덮는다 —
-       덮은 비율이 0.8 미만이면 판정 대신 참고로 낸다. 틀을 섞은 런의 적중률은 큰 고장만 잡는다 (한 틀만 0.87 이어도 섞이면 0.94).
+       남긴다, 롤아웃의 첫 호출은 차갑다고 본다). 틀별 소량 런 (11-25) 에서 실측 H 는 세 틀 모두 P_hi 와 0.0002 안에서 같았다 — 그래서
+       **통과는 P_hi − 0.002 ≤ H ≤ P_hi + 0.005** 다 (롤아웃마다 엔진이 한 번만 바뀌어도 H 는 P_hi − 0.006 쯤으로 내려가 걸린다. 상한의 여유는
+       첫 호출이 시스템 프롬프트를 공유해 생기는 초과분이다). H < 0.92 면 깨짐 (호출마다 엔진이 바뀌면 0.84 ~ 0.91, 시스템 프롬프트 안에서
+       어긋나면 0.10 근처), 그 사이는 진단 — 부족분을 토큰 수와 평균 프롬프트 개수로 함께 낸다 (축출과 엔진 바뀜은 여기서 가를 수 없다).
+       예측은 턴 기록이 있는 롤아웃만 덮는다 (시간 초과 롤아웃에는 기록이 없다) — 덮은 비율이 0.8 미만이면 판정 대신 참고로 낸다.
+       틀을 섞은 런의 적중률은 큰 고장만 잡는다 (한 틀만 0.87 이어도 섞이면 0.94).
        엔진별 적중률로는 판정하지 않는다 (롤아웃 하나는 정상이어도 0.875 까지 내려간다, 세션 해시로 엔진마다 부하가 다르다).
   2. 롤아웃: 모델 턴 수는 response.output 의 assistant 출력만 센다. 시간 초과는 물결별 (첫 물결 = 가장 이른 시작에서 120 초 안) · 틀별.
   3. 행동 불변량 (감시용 — 통과율로 정확도를 판단하지 않는다): 도구 호출이 있는 턴 · 메시지만 있는 턴 · 추론 길이 · 도구 표기가 글에 남은 턴 ·
@@ -318,10 +324,41 @@ def engine_block(tag, rows, info):
             tot_p += dp
             tot_c += dc
             tot_g += dg
+    # 만부하 구간: 런 시작 ~ 마지막 롤아웃이 시작한 시각. 이 구간에는 모든 엔진에 세션이 있어야 하므로 게이지를 믿지 않고 누계만 본다.
+    starts = [r["start"] for r in rows if isinstance(r["start"], (int, float))]
+    w0, w1 = (info["t0"] if info["t0"] is not None else first_all), (max(starts) if starts else None)
+    if w1 is not None and w1 - w0 > 600:
+        grid = [ts for ts in all_ts if w0 <= ts <= w1]
+        val = {port: (dict(S[port].get("vllm:generation_tokens_total") or []), dict(S[port].get("vllm:prompt_tokens_total") or [])) for port in S}
+        flat_run, slow_run = collections.Counter(), collections.Counter()
+        flat_cur, slow_cur = collections.Counter(), collections.Counter()
+        for ta, tb in zip(grid, grid[1:]):
+            rate = {}
+            for port, (g, pr) in val.items():
+                if ta in g and tb in g and tb > ta:
+                    rate[port] = ((g[tb] - g[ta]) / (tb - ta), pr.get(tb, 0) - pr.get(ta, 0))
+            med = sorted(v[0] for v in rate.values())[len(rate) // 2] if rate else 0.0
+            for port in val:
+                if port not in rate:        # 표본이 없는 구간은 위의 무응답 규칙이 본다
+                    flat_cur[port] = slow_cur[port] = 0
+                    continue
+                gr, dpr = rate[port]
+                flat_cur[port] = flat_cur[port] + (tb - ta) if (gr == 0 and dpr == 0 and med > 0) else 0
+                slow_cur[port] = slow_cur[port] + (tb - ta) if (med > 0 and gr < 0.25 * med) else 0
+                flat_run[port], slow_run[port] = max(flat_run[port], flat_cur[port]), max(slow_run[port], slow_cur[port])
+        for port in sorted(val):
+            if flat_run[port] > 300:
+                problems.append(f"{port}: 정지 의심 — 만부하 구간에서 누계가 {flat_run[port]}s 동안 그대로다 (다른 엔진은 진행)")
+            elif slow_run[port] > 600:
+                problems.append(f"{port}: 느린 엔진 — 만부하 구간에서 생성 속도가 엔진 중앙값의 1/4 미만으로 {slow_run[port]}s 이어졌다")
+        print(f"  만부하 구간 {w1 - w0:.0f}s (런 시작 ~ 마지막 롤아웃 시작) 에서 엔진별 누계 진행을 확인했다")
+    else:
+        print("  만부하 구간이 600s 미만이다 (롤아웃이 한꺼번에 시작한 소량 런) — 게이지에 기대지 않는 정지 · 느린 엔진 검사는 하지 않았다")
     H = tot_c / tot_p if tot_p else float("nan")
     dur = max(last_all - first_all, 1)
+    span = info["seconds"] or dur        # 처리량의 분모는 eval 구간이다 (수집은 그보다 조금 넓다 — 그 바깥에는 요청이 없다)
     print(f"  fleet 적중률 {H:.4f} · 계산한 prefill 토큰 {(tot_p - tot_c) / 1e6:.2f}M / 프롬프트 {tot_p / 1e6:.2f}M · 엔진 {len(S)} 개" + (f" (요청을 받지 않은 엔진 {idle})" if idle else ""))
-    print(f"  fleet 처리량 (수집 구간 {dur}s 전체, 정상 상태 구간을 따로 잡지 않는다): 생성 {tot_g / dur:,.0f} tok/s · 계산한 prefill {(tot_p - tot_c) / dur:,.0f} tok/s · 프롬프트 {tot_p / dur:,.0f} tok/s"
+    print(f"  fleet 처리량 (eval 구간 {span}s 전체 · 수집 구간 {dur}s, 정상 상태 구간을 따로 잡지 않는다): 생성 {tot_g / span:,.0f} tok/s · 계산한 prefill {(tot_p - tot_c) / span:,.0f} tok/s · 프롬프트 {tot_p / span:,.0f} tok/s"
           + (f" · 롤아웃 {60 * len(rows) / info['seconds']:.2f} 개/분 (eval {info['seconds']}s)" if info["seconds"] else ""))
     for n_ in notes:
         print(f"  참고: {n_}")
@@ -340,16 +377,19 @@ def engine_block(tag, rows, info):
     elif tot_c == 0:
         verdict = "실패 — 캐시 켬 런인데 캐시분이 0 이다"
     elif not (lo == lo) or cover < 0.8 or cover > 1.02:
-        verdict = (f"참고만 — 예측이 프롬프트 토큰의 {100 * cover:.0f}% 를 덮는다 (0.8 ~ 1.02 밖). H {H:.4f} · P_lo {lo:.4f}"
+        verdict = (f"참고만 — 예측이 프롬프트 토큰의 {100 * cover:.0f}% 를 덮는다 (0.8 ~ 1.02 밖). H {H:.4f} · P_hi {hi:.4f}"
                    + (" · H < 0.92 (깨짐 수준)" if H < 0.92 else ""))
     elif H < 0.92:
         verdict = f"깨짐 — H {H:.4f} < 0.92 (세션 고정 또는 접두사 성질)"
-    elif H < lo - 0.01:
-        verdict = f"진단 필요 — H {H:.4f} < P_lo − 0.01 = {lo - 0.01:.4f}"
+    elif H < hi - 0.002:
+        n_calls = sum(len(r["tu"]) for r in rows)
+        short = (hi - H) * tot_p
+        verdict = (f"진단 필요 — H {H:.4f} < P_hi − 0.002 = {hi - 0.002:.4f} · 부족분 {short / 1e6:.2f}M 토큰 = 평균 프롬프트 {short / (covered / max(n_calls, 1)):.0f} 개 분량 "
+                   f"(롤아웃 {len(rows)} 개 · 엔진 바뀜 또는 축출)")
     elif H > hi + 0.005:
         verdict = f"진단 필요 — H {H:.4f} > P_hi + 0.005 = {hi + 0.005:.4f} (예측 또는 계수가 틀렸다)"
     else:
-        verdict = f"통과 — P_lo − 0.01 = {lo - 0.01:.4f} ≤ H {H:.4f} ≤ P_hi + 0.005 = {hi + 0.005:.4f}"
+        verdict = f"통과 — P_hi − 0.002 = {hi - 0.002:.4f} ≤ H {H:.4f} ≤ P_hi + 0.005 = {hi + 0.005:.4f} (P_hi − H = {(hi - H) * tot_p / 1e3:+.0f}K 토큰)"
     mixed = len({r["cls"] for r in rows}) > 1
     print(f"  적중률 판정 (세션 고정 · 접두사 성질): {verdict}" + (" — 틀이 섞인 런이라 큰 고장만 잡는다" if mixed and cache_on else ""))
     return not problems, verdict
@@ -380,11 +420,13 @@ def compare_block(new, base, tag, btag):
                      ("추론 길이 (턴 평균, 자)", lambda r: sum(t["reason"] for t in r["turns"]) / len(r["turns"]) if r["turns"] else None)):
         (va, na), (vb, nb) = per_task(a, fn), per_task(b, fn)
         print(f"  {name:<24} {tag} {va:9.3f} (과제 {na}) · {btag} {vb:9.3f} (과제 {nb})")
-    print("  호출당 응답 시간 (턴 기록이 있는 롤아웃만 — 시간 초과 롤아웃은 빠진다, 턴 번호 구간별 과제 평균의 평균):")
+    print("  호출당 응답 시간 (턴 기록이 있는 롤아웃만 — 시간 초과 롤아웃은 빠진다: 시간 초과율이 다른 두 런의 '끝까지 간 롤아웃' 끼리의 비교다. 턴 번호 구간별 과제 평균의 평균):")
+    in_task = lambda rs: [r for r in rs if r["iid"] in set(tasks)]
     for lo_, hi_ in BANDS:
         fn = lambda r, lo_=lo_, hi_=hi_: (sum(r["lat"][lo_ - 1:hi_]) / len(r["lat"][lo_ - 1:hi_])) if len(r["lat"]) >= lo_ else None
         (va, na), (vb, nb) = per_task(a, fn), per_task(b, fn)
-        print(f"    턴 {lo_:>3} ~ {hi_:<3} {tag} {va:6.2f}s (과제 {na}) · {btag} {vb:6.2f}s (과제 {nb})")
+        ra, rb = sum(len(r["lat"]) >= lo_ for r in in_task(a)), sum(len(r["lat"]) >= lo_ for r in in_task(b))
+        print(f"    턴 {lo_:>3} ~ {hi_:<3} {tag} {va:6.2f}s (과제 {na} · 롤아웃 {ra}/{len(in_task(a))}) · {btag} {vb:6.2f}s (과제 {nb} · 롤아웃 {rb}/{len(in_task(b))})")
     print("  읽는 법: 두 런은 캐시 · 엔진 배정 방식 · 동시 수 · 틀 구성이 함께 다르다. 차이를 캐시 하나의 효과로 읽지 않는다.")
 
 

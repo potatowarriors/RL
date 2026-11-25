@@ -23,8 +23,12 @@ NAMES = ["vllm:num_requests_running", "vllm:num_requests_waiting", "vllm:kv_cach
          "vllm:e2e_request_latency_seconds_count", "vllm:e2e_request_latency_seconds_sum"]
 
 
-def rollouts(n=8, records=8):
-    """n rollouts of 60 calls whose prompt grows by 400 tokens a call; only the first `records` keep per-turn records."""
+def rollouts(n=8, records=8, late=0):
+    """n rollouts of 60 calls whose prompt grows by 400 tokens a call; only the first `records` keep per-turn records.
+
+    `late` > 0 starts half of them `late` seconds after the others, which makes a full-load window of that length.
+    """
+    iso = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat()
     rows, total = [], 0
     for i in range(n):
         tu = [{"prompt_tokens": 9000 + 37 * i + 400 * k, "completion_tokens": 150} for k in range(60)]
@@ -35,7 +39,7 @@ def rollouts(n=8, records=8):
                     {"type": "function_call_output", "call_id": "c", "output": "ok"}]
         rows.append(dict(responses_create_params=dict(metadata=dict(instance_id=f"task-{i}")), instance_config=dict(resolved_agent_cls="CodeActAgent"),
                          reward=0.0, agent_timed_out=False, openhands_run_time=600.0, total_model_call_time=60.0, total_command_exec_time=100.0,
-                         connect_to_runtime_time=5.0, generation_start_timestamp="2026-11-25T02:52:01+00:00", response=dict(output=out),
+                         connect_to_runtime_time=5.0, generation_start_timestamp=iso(T0 + (late if i % 2 else 0)), response=dict(output=out),
                          per_turn_metrics=dict(token_usages=tu if i < records else [], response_latencies=[{"latency": 1.0}] * 60)))
     return rows, total
 
@@ -55,13 +59,13 @@ def predicted(rows):
     return lo / tot, hi / tot
 
 
-def write(tag, sample, hit=None, cache="1", run_log=True, t0=T0, t1=T0 + (NS - 1) * DT, records=8):
+def write(tag, sample, hit=None, cache="1", run_log=True, t0=T0, t1=T0 + (NS - 1) * DT, records=8, late=0):
     """sample(port, k) -> fraction of the run's work done by sample k for that port (None = no sample), or a dict override."""
     d = ROOT / tag
     d.mkdir()
-    rows, total = rollouts(records=records)
+    rows, total = rollouts(records=records, late=late)
     lo, hi = predicted(rows)
-    hit = (lo + hi) / 2 if hit is None else hit
+    hit = hi - 0.0003 if hit is None else (hit(lo, hi) if callable(hit) and hit.__code__.co_argcount == 2 else hit)
     (d / "rollouts.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
     with (d / "fleet_metrics.tsv").open("w") as f:
         for k in range(NS):
@@ -109,11 +113,17 @@ case("flat_with_waiting_only", 2, "8003: 정지 의심", lambda p, k: {"frac": m
 case("zero_hits", 2, "캐시분이 0", lin, hit=0.0)
 case("stickiness_broken", 2, "깨짐", lin, hit=0.87)
 case("hit_below_prediction", 3, "진단 필요", lin, hit=0.93)
+case("one_engine_switch_per_rollout", 3, "부족분", lin, hit=lambda lo, hi: hi - 0.006)
+case("hit_at_lower_edge", 0, "통과", lin, hit=lambda lo, hi: hi - 0.0015)
 case("one_style_low_mixed_in", 3, "진단 필요", lin, hit=lambda p: 0.87 if p in (8003, 8004, 8005) else 0.975)
 case("hit_above_prediction", 3, "진단 필요", lin, hit=0.999)
 case("prediction_covers_half", 3, "참고만", lin, records=4)
 # the other seven engines carry the whole run (the rollouts' tokens and the engines' tokens are the same tokens)
 case("idle_engine", 0, "요청을 받지 않은 엔진 [8003]", lambda p, k: {"frac": 0.0, "running": 0} if p == 8003 else {"frac": k / (NS - 1) * 8 / 7})
+# full-load window (half of the rollouts start 1,600 s later): counters are judged without the running / waiting gauges
+case("idle_then_stalled_in_full_load", 2, "만부하 구간에서 누계가", lambda p, k: {"frac": min(k, 8) / (NS - 1), "running": 0, "waiting": 0} if p == 8003 else lin(p, k), late=1600)
+case("slow_engine_in_full_load", 2, "느린 엔진", lambda p, k: {"frac": (min(k, 5) + 0.1 * max(0, min(k, 25) - 5) + max(0, k - 25)) / (NS - 1)} if p == 8003 else lin(p, k), late=1600)
+case("engine_idle_after_last_start", 0, "통과", lambda p, k: {"frac": min(k, 30) / 30, "running": 0} if p == 8003 else lin(p, k), late=1600)
 case("cache_off", 0, "해당 없음", lin, hit=0.0, cache="0")
 case("cache_off_but_cached", 2, "캐시 끔으로 기록된 런인데", lin, hit=0.5, cache="0")
 
