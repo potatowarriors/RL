@@ -23,6 +23,7 @@ REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alp
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
 MODEL_CFG=${MODEL_CFG:-$HERE/alpha_vllm_model_swe_8k.yaml}
 PREFIX_CACHE=${PREFIX_CACHE:-0}
+PROMPT_MIX=${PROMPT_MIX:-codeact}   # codeact | codex | opencode | all (세 가지를 롤아웃마다 무작위 — RL_PLAN 결정 81)
 PORTS="8000 8001 8002 8003 8004 8005 8006 8007"
 mkdir -p $D; LOG=$D/run.log
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
@@ -104,7 +105,7 @@ MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.main1; on_sub1 "python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.sub1; echo ok" > /dev/null
 [ -e $D/fuse_before.sub1 ] || { log "ABORT: sub1 의 FUSE 고아 목록을 적지 못했다 (ssh)"; exit 1; }
 ROWS=$(wc -l < $INPUT); FUSE0=$(fuse_orphans)
-log "armed: tag=$TAG gym_dir=$GYM ray=$RAY_HEAD model_cfg=$(basename $MODEL_CFG) prefix_cache=$PREFIX_CACHE ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
+log "armed: tag=$TAG gym_dir=$GYM ray=$RAY_HEAD model_cfg=$(basename $MODEL_CFG) prefix_cache=$PREFIX_CACHE prompt_mix=$PROMPT_MIX ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
 
 if [ "$DRY" = 1 ]; then
   MODEL_URL=http://127.0.0.1:9/v1; log "DRY=1 — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL, 롤아웃은 모델 호출에서 실패한다)"
@@ -141,6 +142,15 @@ fi
 
 # 2. Gym 서버. use_absolute_ip: 에이전트 컨테이너는 두 노드에 뜨고 (Ray SPREAD) 컨테이너 안에서 Gym 모델 서버를 부른다 —
 #    기본값 (127.0.0.1) 이면 sub1 의 컨테이너가 모델에 닿지 못한다. 학습 레시피도 true 다.
+# 에이전트 프롬프트 (Gym 학습 설정은 CodeAct 만 켜 둔다 — 세 클래스와 프롬프트 틀은 설치본에 다 있다, E2E_SANDBOX.md §7.7 "프롬프트 혼합")
+po() { printf '        - user_prompt_template: responses_api_agents/swe_agents/prompts/%s/user_prompt.j2\n          system_prompt_template: responses_api_agents/swe_agents/prompts/%s/system_prompt.j2\n          agent_cls: %s\n          diversify_tool_names: false\n' "$1" "$1" "$2"; }
+case "$PROMPT_MIX" in
+  codeact)  PO=$(po openhands CodeActAgent); PO_RANDOM=false ;;
+  codex)    PO=$(po codex CodexAgent); PO_RANDOM=false ;;
+  opencode) PO=$(po opencode OpenCodeAgent); PO_RANDOM=false ;;
+  all)      PO=$(po codex CodexAgent; po opencode OpenCodeAgent; po openhands CodeActAgent); PO_RANDOM=true ;;
+  *) echo "PROMPT_MIX 는 codeact | codex | opencode | all"; exit 1 ;;
+esac
 cat > $D/overrides.yaml <<YAML
 cache_dir: $NRL/gym_cache
 use_absolute_ip: true
@@ -154,6 +164,9 @@ swe_agents_train:
       swebench_agent_timeout: $AGENT_TIMEOUT
       apptainer_memory_limit_mb: $MEM_MB
       openhands_should_log: $([ "$OH_LOG" = 1 ] && echo true || echo false)
+      agent_prompt_override_random: $PO_RANDOM
+      agent_prompt_overrides:
+$PO
       dataset_path: $INPUT
       container_formatter:
         - $SIF/r2egym_{instance_id}.sif
@@ -167,6 +180,9 @@ swe_agents_val:
       swebench_agent_timeout: $AGENT_TIMEOUT
       apptainer_memory_limit_mb: $MEM_MB
       openhands_should_log: $([ "$OH_LOG" = 1 ] && echo true || echo false)
+      agent_prompt_override_random: $PO_RANDOM
+      agent_prompt_overrides:
+$PO
       dataset_path: $INPUT
       container_formatter:
         - $SIF/r2egym_{instance_id}.sif

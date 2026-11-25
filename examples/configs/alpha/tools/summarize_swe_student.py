@@ -71,7 +71,7 @@ for r in rows:
         pre_existing = sorted(f for f in pre if f in mp)
     repo = "/" + (m.get("repo") or "/").split("/")[-1] + "/"
     edited_rel = {p[len(repo):] for p in edited if p.startswith(repo)}
-    recs.append(dict(iid=m["instance_id"], lang=d.get("language") or "?", reward=r.get("reward"), patch=bool(r.get("patch_exists")), mask=bool(ic.get("mask_sample")),
+    recs.append(dict(iid=m["instance_id"], lang=d.get("language") or "?", cls=ic.get("resolved_agent_cls") or "?", reward=r.get("reward"), patch=bool(r.get("patch_exists")), mask=bool(ic.get("mask_sample")),
                      err=r.get("agent_error_kind"), agent_to=bool(r.get("agent_timed_out")), eval_to=bool(r.get("eval_timed_out")), oom=bool(r.get("oom_killed") or r.get("eval_oom_killed")),
                      n_model=sum(o.get("type") in ("reasoning", "function_call", "message") for o in out), n_calls=len(calls), n_exec=len(executed), markup=markup,
                      max_comp=max(comp) if comp else None, n_turns=len(comp) if comp is not None else None, trunc=(max(comp) >= a.cap) if comp else None,
@@ -111,6 +111,17 @@ for name, key, unit in (("모델 호출 수", "n_turns", ""), ("롤아웃 시간
 by = collections.defaultdict(lambda: [0, 0])
 for x in recs: by[x["lang"]][0] += x["reward"] == 1.0; by[x["lang"]][1] += 1
 print("언어별 (참고):", {k: f"{v[0]}/{v[1]}" for k, v in sorted(by.items(), key=lambda kv: -kv[1][1])})
+# 에이전트 프롬프트 틀별 (RL_PLAN 결정 81 — CodeAct · Codex · OpenCode 를 롤아웃마다 무작위로 고른다). 틀마다 도구 형식이 달라 따로 본다.
+bc = collections.defaultdict(list)
+for x in recs: bc[x["cls"]].append(x)
+if len(bc) > 1 or "CodeActAgent" not in bc:
+    print("에이전트 틀별:")
+for k, v in sorted(bc.items(), key=lambda kv: -len(kv[1])):
+    if len(bc) == 1 and k == "CodeActAgent": break
+    nt = [x["n_turns"] for x in v if x["n_turns"] is not None]; rs = [x["run_s"] for x in v if x["run_s"] is not None]
+    print(f"  {k}: {len(v)} 롤아웃 · 통과 {sum(x['reward'] == 1.0 for x in v)} ({100 * sum(x['reward'] == 1.0 for x in v) / len(v):.1f}%) · 마스킹 {sum(x['mask'] for x in v)} · "
+          f"시간 초과 {sum(x['mask'] and x['agent_to'] for x in v)} · 실행된 도구 호출이 0 인 롤아웃 {sum(x['n_exec'] == 0 for x in v)} · 도구 호출 표기가 글에 남은 롤아웃 {sum(bool(x['markup']) for x in v)} · "
+          f"모델 호출 수 중앙 {quant(nt, .5) if nt else float('nan'):.0f} · 롤아웃 시간 중앙 {quant(rs, .5) if rs else float('nan'):.0f}s")
 ns = D + "node_samples.tsv"
 if os.path.exists(ns):
     tot = []; shm = []; load = []; used = []
