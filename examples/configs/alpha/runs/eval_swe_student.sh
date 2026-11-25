@@ -144,10 +144,12 @@ for p in $PORTS; do
   f=/home/work/vidsearch/tools/fleet_logs/serve_$p.log
   head1=$(grep -a -m1 "^\[serve\] " $f 2>/dev/null)
   echo "$head1" | grep -q "prefix_cache=$PREFIX_CACHE ssm_state=float32 mem_util=0.95" || continue   # /block · batched= 가 붙으면 여기서 걸린다
+  # 엔진 기동 줄 ("Initializing a V1 LLM engine … enable_prefix_caching=…") 이 vLLM 이 실제로 확정한 값이다. non-default args 는 명령줄 값일 뿐이고
+  # "block size to 1056" 은 캐시를 꺼도 찍힌다 (2026-11-25 재검토).
   if [ "$PREFIX_CACHE" = 1 ]; then
-    grep -a -q "'enable_prefix_caching': True" $f && grep -a -q "'mamba_cache_mode': 'align'" $f && grep -a -q "block size to 1056" $f && pc=$((pc+1))
+    grep -a -q "enable_prefix_caching=True" $f && ! grep -a -q "enable_prefix_caching=False" $f && grep -a -q "Mamba cache mode is set to 'align'\|'mamba_cache_mode': 'align'" $f && pc=$((pc+1))
   else
-    grep -a -q "'enable_prefix_caching': True" $f || pc=$((pc+1))
+    grep -a -q "enable_prefix_caching=False" $f && ! grep -a -q "enable_prefix_caching=True" $f && pc=$((pc+1))
   fi
 done
 [ "$pc" -eq 8 ] || abort "캐시 설정이 요청 ($PREFIX_CACHE) 대로 뜨지 않은 서버가 있다 ($pc/8 — 머리줄 · 엔진 인자 · 블록 1056 · GDN 상태 fp32)"

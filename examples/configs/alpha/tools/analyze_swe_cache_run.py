@@ -54,10 +54,14 @@ def load(tag):
         r = json.loads(line)
         ic = r.get("instance_config") or {}
         out = (r.get("response") or {}).get("output") or []
-        turns, cur = [], None
+        turns, cur, n_user = [], None, 0
         for o in out:
             ty = o.get("type")
             if ty == "function_call_output":
+                cur = None
+                continue
+            if ty == "message" and o.get("role") not in (None, "assistant"):
+                n_user += 1          # 에이전트가 끼워 넣는 안내 ("계속하라" 등) — 모델 턴이 아니다. 도구 결과처럼 턴을 닫는다
                 cur = None
                 continue
             # 모델 호출 하나 = (추론) → 메시지 또는 도구 호출들. 도구 결과 뒤, 또는 이미 메시지 · 도구 호출이 나온 뒤의 추론 · 메시지에서 새 턴이 시작된다.
@@ -79,7 +83,7 @@ def load(tag):
             cls=ic.get("resolved_agent_cls") or "?", reward=r.get("reward"), to=bool(r.get("agent_timed_out")),
             run_s=r.get("openhands_run_time") or 0.0, model_s=r.get("total_model_call_time") or 0.0, cmd_s=r.get("total_command_exec_time") or 0.0,
             connect_s=r.get("connect_to_runtime_time"), start=num(r.get("generation_start_timestamp")),
-            turns=turns, same_prompt=sum(1 for a, b in zip(pt, pt[1:]) if a == b), pt_calls=len(pt)))
+            turns=turns, n_user=n_user, same_prompt=sum(1 for a, b in zip(pt, pt[1:]) if a == b), pt_calls=len(pt)))
     return rows
 
 
@@ -106,7 +110,7 @@ def rollout_block(rows, title):
         nt = len(turns)
         print(f"      행동 ({nt:,} 턴): 도구 호출 있는 턴 {100 * sum(t['call'] > 0 for t in turns) / nt:.2f}% · 메시지만 있는 턴 {100 * sum(t['call'] == 0 and t['msg'] > 0 for t in turns) / nt:.2f}% · "
               f"도구 표기가 글에 남은 턴 {100 * sum(t['mark'] > 0 for t in turns) / nt:.3f}% · 추론 길이 중앙 {q([t['reason'] for t in turns], .5):.0f}자 · p90 {q([t['reason'] for t in turns], .9):.0f}자 · "
-              f"같은 프롬프트 재호출 {sum(r['same_prompt'] for r in rows)}/{sum(r['pt_calls'] for r in rows)} (턴 기록이 있는 롤아웃만)")
+              f"같은 프롬프트 재호출 {sum(r['same_prompt'] for r in rows)}/{sum(r['pt_calls'] for r in rows)} (턴 기록이 있는 롤아웃만) · 에이전트 안내 메시지 {sum(r['n_user'] for r in rows)} 개")
 
 
 def engine_block(tag):
@@ -124,6 +128,7 @@ def engine_block(tag):
         except ValueError:
             pass
     ok, tot_p, tot_c, low = True, 0.0, 0.0, []
+    last_all = max((v[-1][0] for m in S.values() for v in m.values() if v), default=0)
     print("  엔진별 (런 구간 증분): 포트 · 프롬프트 토큰 · 캐시분 · 적중률 · 계산한 prefill · 생성 토큰 · 실행 최대 · 대기 최대 · KV 최대 · 선점 · 요청당 prefill · 대기 · e2e")
     for port in sorted(S):
         m = S[port]
@@ -152,6 +157,11 @@ def engine_block(tag):
                 stall = max(stall, tb - flat_since)
             else:
                 flat_since = None
+        ts_list = sorted({ts for v in m.values() for ts, _ in v})
+        gap = max((b - a for a, b in zip(ts_list, ts_list[1:])), default=0)   # /metrics 가 응답하지 않은 시간 — API 서버째 멈추면 표본이 없다
+        behind = last_all - ts_list[-1] if ts_list else 10 ** 9
+        if gap > 120 or behind >= 120:
+            stall = max(stall, gap, behind)
         print(f"    {port} · {dp / 1e6:8.1f}M · {dc / 1e6:8.1f}M · {hr:.3f} · {(dp - dc) / 1e6:7.2f}M · {dg / 1e6:6.2f}M · {mx('vllm:num_requests_running'):3.0f} · {mx('vllm:num_requests_waiting'):3.0f} · "
               f"{100 * mx('vllm:kv_cache_usage_perc'):4.0f}% · {delta('vllm:num_preemptions_total'):.0f} · {per('vllm:request_prefill_time_seconds'):.2f}s · {per('vllm:request_queue_time_seconds'):.2f}s · {per('vllm:e2e_request_latency_seconds'):.2f}s"
               + (f"  ← 정지 의심 {stall}s" if stall >= 120 else ""))
@@ -160,12 +170,12 @@ def engine_block(tag):
             tot_c += dc
         if not (hr == hr) or stall >= 120:
             ok = False
-        if hr == hr and hr < 0.90:
+        if not (hr == hr) or hr < 0.90:    # 적중률을 못 낸 엔진 (재기동 등) 도 판정 실패다
             low.append(port)
     print(f"  fleet 적중률 {tot_c / tot_p if tot_p else float('nan'):.3f} · 계산한 prefill 토큰 {(tot_p - tot_c) / 1e6:.1f}M / 프롬프트 {tot_p / 1e6:.1f}M · 엔진 {len(S)} 개")
     if tot_c > 0:
-        print("  세션 고정 판정: " + ("엔진 8 개가 모두 적중률 0.90 이상 — 한 롤아웃의 호출이 같은 엔진에 머문 것으로 본다" if not low and len(S) == 8
-                                 else f"적중률 0.90 미만 엔진 {low} (엔진 {len(S)} 개) — 결론 대신 진단이 필요하다 (세션 고정 깨짐 또는 캐시 축출)"))
+        print("  세션 고정 판정: " + ("엔진 8 개가 모두 적중률 0.90 이상 — 한 롤아웃의 호출이 같은 엔진에 머문 것으로 본다 (틀별 접두사 성질을 따로 확인했을 때만 유효)" if not low and len(S) == 8
+                                 else f"적중률 0.90 미만이거나 계산 불가인 엔진 {low} (엔진 {len(S)} 개) — 결론 대신 진단이 필요하다 (세션 고정 깨짐 · 캐시 축출 · 재기동)"))
     return ok
 
 
