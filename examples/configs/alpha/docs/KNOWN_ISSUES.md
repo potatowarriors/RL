@@ -17,6 +17,8 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 - **영향**: ① 선별 `golden_ultra_c1` 의 통과율이 완료 순서 2,250 번째까지 94 ~ 96%, 그 뒤 90% → 80% → 75% — 뒤쪽 결과는 sub1 채점 실패가 섞였으므로 버리고 다시 채점한다 ② 11-25 오전 학생 측정 S2b 의 sub1 256 롤아웃은 호스트 홈이 보이는 채로 돌았다 (볼륨이 차기 전이라 동작은 했으나 캐시가 과제 사이에 공유됐다) ③ 모델이 만든 명령이 호스트 홈 · 리포에 닿을 수 있었다 (격리 구멍).
 - **왜 사전 점검이 못 잡았나**: 실행기의 기동 전 점검은 쓰기 공간 상한 · 포트 · GPU · 잔재만 본다. 노드의 홈 볼륨 여유와 raylet 의 현재 디렉토리는 보지 않았다. 판정 기준 3 (모델 도달) 은 사후에 50% 로 잡았다.
 - **수정안 (승인 대기)**: raylet 을 빈 전용 디렉토리에서 띄운다 (`runs/ray_cluster.sh`, 클러스터 재시작) + Gym 실행 옵션에 `cwd` 를 더한다 (`gym_patches/`) + sub1 홈의 컨테이너 잔재 삭제 · `.bashrc` 복구 + 실행기 기동 전 점검에 "두 노드의 raylet 현재 디렉토리 · 홈 볼륨 여유" 추가.
+- **수정안의 효과 확인 (11-25 17:40, sub1 에서 CPU 로 직접)**: `/home/work` 에서 같은 플래그로 띄우면 컨테이너의 `~` 가 `/dev/loop1 49G 100%` (항목 75 개), `--no-mount home,tmp,bind-paths,cwd` 면 `/home/work` 자체가 없다 (항목 0 · `pwd` 는 `/`), 빈 디렉토리에서 원래 플래그로 띄워도 없다 (`pwd` 는 그 빈 디렉토리). 둘 다 구멍을 닫는다.
+- **sub1 홈의 오염 범위**: 세션 컨테이너는 11-24 14:03 에 만들어졌고 최상위 73 항목 중 69 개가 그 뒤에 바뀌었다. 세션이 준 것 (`.ssh` · `.password` · `id_container` · `.tmux.conf` · `.vimrc` · `.zshrc` · `.claude` · `.pai_megatron_alpha_env`) 과 우리 스택이 쓴 것 (`.triton` · `.flashattn` · `.nv` · `.apptainer` · `.local`) 을 빼면 과제 컨테이너가 만든 것이다 — `.gitconfig` (11-25 14:30) · `.gnupg` · `.aws` · `.npmrc` · `.conda` · `.composer` 같은 설정 파일도 포함된다. sub1 에서 git 을 쓰기 전에 `.gitconfig` 를 확인한다.
 - **선행 사례**: upstream Gym `swe_agents` 의 옵션은 `main` 에서도 `home,tmp,bind-paths` 다 (cwd 미포함, 확인 필요). Nemotron 레시피는 일회용 클러스터 전제라 드러나지 않는다.
 
 ## SWE 에이전트의 모델 호출이 422 로 거부된다 — Gym 0.6.0 이 그 Gym 이 고정한 OpenHands 와 세 곳에서 안 맞는다 (`aws_region_name` · 도구 결과 `name` · `defer_loading`) (2026-11-25, ✅ 결정 79 — upstream 수정 이식, 가짜 모델 시험 통과)
