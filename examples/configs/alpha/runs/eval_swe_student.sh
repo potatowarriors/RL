@@ -22,7 +22,7 @@ STUB_URL=${STUB_URL:-}; RAY_HEAD=${RAY_HEAD:-main1:6379}
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alpha/runs
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
 MODEL_CFG=${MODEL_CFG:-$HERE/alpha_vllm_model_swe_8k.yaml}
-PREFIX_CACHE=${PREFIX_CACHE:-0}
+PREFIX_CACHE=${PREFIX_CACHE:-0}; case "$PREFIX_CACHE" in 0|1) ;; *) echo "PREFIX_CACHE 는 0 또는 1"; exit 1 ;; esac
 PROMPT_MIX=${PROMPT_MIX:-codeact}   # codeact | codex | opencode | all (세 가지를 롤아웃마다 무작위 — RL_PLAN 결정 81)
 PORTS="8000 8001 8002 8003 8004 8005 8006 8007"
 mkdir -p $D; LOG=$D/run.log
@@ -52,7 +52,10 @@ stop_env() {  # 프로세스 그룹째로 내린다 (KNOWN_ISSUES 2026-11-20)
 FLEET_UP=0
 stop_fleet() {
   [ "$FLEET_UP" = 1 ] || return 0
-  FLEET_UP=0; bash "$PAI/eval_sft/stop_fleet.sh" 0,1,2,3,4,5,6,7 >> "$LOG" 2>&1; log "fleet 정지"
+  FLEET_UP=0
+  # 다음 fleet 기동이 로그를 덮어쓴다 — 캐시 적중 · 엔진 통계의 근거이므로 내리기 전에 보존한다 (2026-11-25)
+  touch $D/metrics.stop; mkdir -p $D/fleet_logs; cp -p /home/work/vidsearch/tools/fleet_logs/serve_800[0-7].log /home/work/vidsearch/tools/fleet_logs/proxy.log $D/fleet_logs/ 2>/dev/null
+  bash "$PAI/eval_sft/stop_fleet.sh" 0,1,2,3,4,5,6,7 >> "$LOG" 2>&1; log "fleet 정지 (로그 보존 $(find $D/fleet_logs -name 'serve_*.log' | wc -l) 개)"
 }
 FUSE_CNT='ps -eo ppid,comm | awk "\$1==1 && (\$2==\"squashfuse_ll\" || \$2==\"fuse-overlayfs\")" | wc -l'
 fuse_orphans() {  # 강제 종료된 컨테이너가 남기는 FUSE 데몬 (부모 1) 수 — "main1+sub1". sub1 을 못 읽으면 ? 로 적는다
@@ -135,9 +138,21 @@ ident=0; for p in $PORTS; do curl -s -m 5 "http://127.0.0.1:$p/v1/models" | grep
 pident=0; for i in $(seq 1 16); do curl -s -m 5 "http://127.0.0.1:8100/v1/models" | grep -qF "$CK" && pident=$((pident+1)); done
 [ "$pident" -eq 16 ] || abort "프록시 :8100 응답의 모델 경로가 체크포인트와 다르다 ($pident/16 일치)"
 # 캐시 설정이 요청대로 떴는지 서버 로그의 머리줄로 확인한다 (KNOWN_ISSUES 2026-11-08 — 기본값이 조용히 바뀐 적이 있다)
-pc=0; for p in $PORTS; do grep -a -m1 "^\[serve\] " /home/work/vidsearch/tools/fleet_logs/serve_$p.log 2>/dev/null | grep -q "prefix_cache=$PREFIX_CACHE" && pc=$((pc+1)); done
-[ "$pc" -eq 8 ] || abort "서버 로그의 prefix_cache 표지가 요청 ($PREFIX_CACHE) 과 다른 서버가 있다 ($pc/8 일치)"
-log "fleet ready: 8/8 · 모델 경로 일치 백엔드 8/8 · 프록시 16/16 · prefix_cache=$PREFIX_CACHE 8/8"
+# 머리줄 (요청한 값) 과 엔진이 실제로 받은 인자를 둘 다 본다: 머리줄은 환경변수를 찍을 뿐이다.
+pc=0
+for p in $PORTS; do
+  f=/home/work/vidsearch/tools/fleet_logs/serve_$p.log
+  head1=$(grep -a -m1 "^\[serve\] " $f 2>/dev/null)
+  echo "$head1" | grep -q "prefix_cache=$PREFIX_CACHE ssm_state=float32 mem_util=0.95" || continue   # /block · batched= 가 붙으면 여기서 걸린다
+  if [ "$PREFIX_CACHE" = 1 ]; then
+    grep -a -q "'enable_prefix_caching': True" $f && grep -a -q "'mamba_cache_mode': 'align'" $f && grep -a -q "block size to 1056" $f && pc=$((pc+1))
+  else
+    grep -a -q "'enable_prefix_caching': True" $f || pc=$((pc+1))
+  fi
+done
+[ "$pc" -eq 8 ] || abort "캐시 설정이 요청 ($PREFIX_CACHE) 대로 뜨지 않은 서버가 있다 ($pc/8 — 머리줄 · 엔진 인자 · 블록 1056 · GDN 상태 fp32)"
+log "fleet ready: 8/8 · 모델 경로 일치 백엔드 8/8 · 프록시 16/16 · prefix_cache=$PREFIX_CACHE 8/8 (엔진 인자 확인)"
+rm -f $D/metrics.stop; setsid nohup bash "$HERE/swe_fleet_metrics.sh" $D > $D/fleet_metrics.out 2>&1 < /dev/null &
 fi
 
 # 2. Gym 서버. use_absolute_ip: 에이전트 컨테이너는 두 노드에 뜨고 (Ray SPREAD) 컨테이너 안에서 Gym 모델 서버를 부른다 —
