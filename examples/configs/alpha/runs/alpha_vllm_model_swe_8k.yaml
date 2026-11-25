@@ -1,12 +1,14 @@
 # alpha fleet 용 NeMo-Gym 모델 서버 — SWE 학생 롤아웃 측정 (runs/eval_swe_student.sh). 턴당 생성 상한 8,192 는 teacher_swe_e2e_alpha.yaml 과 같다.
+# 서버는 학습 레시피와 같은 alpha 플러그인 (`gym_plugins/responses_api_models/alpha_vllm_model`) 이다 — Gym 내장 `vllm_model` 은
+#   nv-OpenHands 가 늘 보내는 `aws_region_name` 을 422 로 거부한다 (KNOWN_ISSUES 2026-11-25, RL_PLAN 결정 78). `strict` 유지도 학습과 같다.
+#   NEMO_GYM_EXTRA_ROOTS=<NeMo-RL>/examples/configs/alpha/gym_plugins 가 필요하다 (실행기가 준다).
+# 학습용 설정과 다른 점: 토큰 ID 를 돌려받지 않는다 (fleet 은 Pai 서빙이라 토큰 ID · logprob 을 주지 않는다).
 # 전제: fleet 는 `eval_sft/serve_alpha.sh` 를 TOOLS=1 REASONING_PARSER=nemotron_v3 로 띄운다.
-#   - uses_reasoning_parser: true 인데 vLLM 이 reasoning 키를 안 주면 Gym 이 assert 로 중단한다 (설계상 의도: 파서 누락을 조용히 넘기지 않음).
-#   - 이전 턴 추론은 Gym 이 reasoning_content 필드로 되돌려 보내고, restore/strip 은 alpha 템플릿(truncate_history_thinking) 이 결정한다.
-#     도구 미선언 하니스(TB-2) 는 alpha_vllm_model_tb2.yaml 을 쓴다.
-# 값은 env.yaml 또는 CLI `++policy_base_url=...` 로 채운다 (env.yaml.example 참조).
+#   - uses_reasoning_parser: true 인데 vLLM 이 reasoning 키를 안 주면 Gym 이 assert 로 중단한다 (파서 누락을 조용히 넘기지 않는다).
+#   - 이전 턴 추론은 Gym 이 reasoning_content 필드로 되돌려 보내고, restore/strip 은 alpha 템플릿 (truncate_history_thinking) 이 결정한다.
 policy_model:
   responses_api_models:
-    vllm_model:
+    alpha_vllm_model:
       entrypoint: app.py
       base_url: ${policy_base_url}
       api_key: ${policy_api_key}

@@ -22,7 +22,8 @@ mkdir -p $D; LOG=$D/run.log
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=main1:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
 on_sub1() { timeout 25 ssh -o BatchMode=yes -o ConnectTimeout=10 sub1 "$1" 2>/dev/null | tail -1; }
-SERVER_DIRS="$GYM/responses_api_agents/swe_agents $GYM/responses_api_models/vllm_model"
+PLUGINS=$REPO/examples/configs/alpha/gym_plugins
+SERVER_DIRS="$GYM/responses_api_agents/swe_agents $GYM/responses_api_models/vllm_model $PLUGINS/responses_api_models/alpha_vllm_model"
 gym_server_pids() {  # Gym 자식 서버 (`python app.py`) 는 명령줄로 구분되지 않는다 — cwd 로 찾는다
   local pid cwd d
   for pid in $(pgrep -f '^python app\.py$' 2>/dev/null); do
@@ -154,6 +155,7 @@ YAML
 export PATH=/home/work/vidsearch/tools/bin:$PATH UV_CACHE_DIR=/home/work/vidsearch/tools/uv_cache \
        UV_PYTHON_INSTALL_DIR=/home/work/vidsearch/tools/uv_python RAY_TMPDIR=/tmp
 cd $GYM && source .venv/bin/activate
+export NEMO_GYM_EXTRA_ROOTS=$PLUGINS   # 모델 서버는 alpha 플러그인 (alpha_vllm_model_swe_8k.yaml)
 export RAY_DEDUP_LOGS=0   # 워커 로그 줄이 합쳐지면 (repeated Nx across cluster) 어느 노드 · 어느 과제의 줄인지 잃는다
 setsid gym env start --config responses_api_agents/swe_agents/configs/swebench_openhands_training.yaml \
   --config $MODEL_CFG --config $D/overrides.yaml \
