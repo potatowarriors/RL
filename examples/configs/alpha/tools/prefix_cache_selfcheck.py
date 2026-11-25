@@ -14,15 +14,20 @@ What is judged (all must hold; "identical" = token ids, token log-prob and the w
   decode   a hit on a block boundary that was produced while *generating* continues the original generation
            identically (the first computed token is a single-token step, i.e. the decode kernel again); the
            generating request is cold in `decode` and itself starts from a hit in `decode_hit`
-  marconi  the state saved by the common-prefix admission cut (attention blocks hit further than the recurrent
-           state) vs cold, and that path vs a plain hit at a boundary off the chunk-budget grid
+  marconi  a request that goes through the common-prefix admission cut (attention blocks hit further than the
+           recurrent state) vs a plain hit at the same boundary, which lies off the chunk-budget grid and is
+           followed by a multi-block chunk
   requests every request's cached-token count (engine counters) equals the predicted hit, cold requests report 0
-Reported but not judged ("char"): hits whose chunk sequence differs from the cold one (they cannot be identical).
+Reported but not judged ("char"): hits whose chunk sequence differs from the cold one (they cannot be identical),
+and a later hit on the state the admission cut saved (its attention blocks for the cut segment are the first
+request's, computed in a longer chunk than the state: `Model` tracks how the state was cut, not the KV blocks).
 
 Not shown by a PASS: that cache-on equals cache-off (a defect that changes every boundary state the same way in
-the cold path too is invisible to a same-server comparison); a generated boundary state read by a multi-token
-prefill chunk (only the not-judged forced rows take that path); concurrent requests, preemption, eviction; the
-chat-template path; any GDN prefill backend other than the one the server logs.
+the cold path too is invisible to a same-server comparison); a defect of a multi-block chunk that starts off the
+budget grid whether it starts from a restore or not (both sides of `admit_vs_offgrid` share it; the one-block-chunk
+server does not have such chunks); a generated boundary state read by a multi-token prefill chunk (only the
+not-judged forced rows take that path); concurrent requests, preemption, eviction; the chat-template path; any
+GDN prefill backend other than the one the server logs.
 
     prefix_cache_selfcheck.py run   --url http://127.0.0.1:8011/v1 --budget 8192 --set prod --out prod.json [--serve-log f]
     prefix_cache_selfcheck.py judge --clean prod.json b1056.json --nc nc_scale.json nc_bf16.json [--json out.json]
@@ -264,7 +269,10 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
     # same salt: A[:26b+300], then A[:20b] + other text. The attention hit (20b) passes the last state boundary (2c = 14b)
     marconi = {"name": "marconi", "kind": "marconi", "conv": 0, "conv_tail": 1, "shared": 20 * b, "first": 26 * b + 300,
                "length": 30 * b + 300, "probe": 20 * b + 50, "pre": 20 * b + 100}  # fmt: skip
-    ch = lambda name, exact, conv, *lengths: {"name": name, "kind": "chain", "exact": exact, "conv": conv, "lengths": list(lengths)}  # noqa: E731
+    ch = lambda name, exact, conv, *lengths, rehit=0: {"name": name, "kind": "chain", "exact": exact, "conv": conv,  # noqa: E731
+                                                      "lengths": list(lengths), "rehit": rehit}  # fmt: skip
+    # `rehit`: a last prompt under the same salt that hits the first turn's boundary again, after the later turns
+    # restored from it and computed several blocks (its chunk sequence equals the cold one)
     if set_name == "prod":  # the fleet's chunk budget: bit-identity is expected only at aligned hit positions
         assert c == 7 * b, "the prod set is built for a chunk budget of 7 blocks (8192 tokens, block 1056)"
         return [
@@ -275,7 +283,7 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
             ch("sameblock_43k", True, 1, 41 * b + 17, 41 * b + 1040),
             ch("sameblock_60k", True, 2, 57 * b + 500, 57 * b + 900),
             # hit boundary = a multiple of the chunk budget; the later prompt is many blocks longer
-            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300),
+            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=34 * b + 10),
             ch("budget_52k", True, 0, 7 * c + 50, 7 * c + 8750),
             # three turns: the third hits a state that was saved by a request that itself started from a hit
             ch("turns3_budget", True, 2, 2 * c + 200, 5 * c + 900, 8 * c + 400),
@@ -290,7 +298,7 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
         assert c == b, "the b1056 set needs --budget equal to the block size"
         return [
             rep21,
-            ch("any_28k", True, 0, 20 * b + 100, 26 * b + 300),
+            ch("any_28k", True, 0, 20 * b + 100, 26 * b + 300, rehit=20 * b + 500),
             ch("any_60k", True, 1, 41 * b + 17, 57 * b + 300),
             ch("turns3_any", True, 2, 13 * b + 77, 24 * b + 555, 40 * b + 1000),
             ch("sameblock_60k", True, 2, 57 * b + 500, 57 * b + 900),
@@ -302,7 +310,7 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
         return [
             rep21,
             ch("sameblock_21k", True, 0, 20 * b + 100, 20 * b + 700),
-            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300),
+            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=34 * b + 10),
             ch("turns3_budget", True, 2, 2 * c + 200, 5 * c + 900, 8 * c + 400),
             # not judged: how large the injected fault is where bit-identity is not available (compare with the clean run)
             ch("offgrid_28k", False, 0, 20 * b + 100, 26 * b + 300),
@@ -333,6 +341,8 @@ def expected_rows(set_name: str, budget: int, block: int = BLOCK) -> dict[str, b
             for t in range(1, len(s["lengths"])):
                 out[f"{name}:turn{t + 1}:hit_vs_cold"] = s["exact"]
                 out[f"{name}:turn{t + 1}:hit2_vs_cold"] = s["exact"]
+            if s["rehit"]:
+                out[f"{name}:rehit_vs_cold"] = True
         elif s["kind"] == "decode":
             bounds = decode_bounds(s["length"], block)
             for e in bounds:
@@ -341,7 +351,7 @@ def expected_rows(set_name: str, budget: int, block: int = BLOCK) -> dict[str, b
             if s["forced"]:
                 out[f"{name}:forced_after_{bounds[-1]}"] = False
         else:
-            out[f"{name}:probe_hit_vs_cold"] = True
+            out[f"{name}:probe_hit_vs_cold"] = False  # the hit position still proves that the cut saved a state
             out[f"{name}:admit_vs_offgrid"] = True
             out[f"{name}:admit_vs_cold"] = False
             out[f"{name}:offgrid_vs_cold"] = False
@@ -370,6 +380,14 @@ def run_chain(run: Run, s: dict, seqs: list[list[int]]) -> list[dict]:
             why = [] if h else ["the model predicts no hit: nothing is tested"]
             rows.append(_row(f"{s['name']}:turn{t + 1}:{tag}_vs_cold", "chain", p == prov_cold, x, b, [first, x, b], why,
                              length=length, hit=h, chunks_hit=[e for e in p if isinstance(e, int)], chunks_cold=list(prov_cold)))  # fmt: skip
+    if s["rehit"]:
+        ids = seq[: s["rehit"]]
+        want = s["lengths"][0] // run.model.block * run.model.block  # the boundary the second turn restored from
+        a, hit_at, prov, _ = run.ask(salt, ids, N_GEN, f"{s['name']} re-hit of the first boundary")
+        b, _, prov_cold, _ = run.ask(run.eng.salt(s["name"] + "-cold"), ids, N_GEN, f"{s['name']} re-hit cold")
+        why = [] if hit_at == want else [f"the model predicts a hit at {hit_at}, the scenario needs {want}"]
+        rows.append(_row(f"{s['name']}:rehit_vs_cold", "chain", prov == prov_cold, a, b, [first, a, b], why, length=len(ids),
+                         hit=hit_at, chunks_hit=[e for e in prov if isinstance(e, int)], chunks_cold=list(prov_cold)))  # fmt: skip
     return rows
 
 
@@ -460,7 +478,7 @@ def run_marconi(run: Run, s: dict, seqs: list[list[int]]) -> list[dict]:
         why.append(f"the second salt is predicted to hit at {off_hit} with common prefix {off_common}, wanted {s['shared']} / 0")
     ints = lambda p: [e for e in p if isinstance(e, int)]  # noqa: E731
     return [
-        _row(f"{name}:probe_hit_vs_cold", "marconi", probe_prov == probe_cold_prov, probe, probe_cold, [r0, adm, probe, probe_cold],
+        _row(f"{name}:probe_hit_vs_cold", "marconi", False, probe, probe_cold, [r0, adm, probe, probe_cold],
              why, length=len(probe_ids), hit=probe_hit, chunks_hit=ints(probe_prov), chunks_cold=ints(probe_cold_prov)),
         _row(f"{name}:admit_vs_offgrid", "marconi", adm_prov == off_prov, adm, off, [r0, adm, pre, off], why,
              length=len(r1_ids), hit=adm_hit, hit_other=off_hit, chunks_hit=ints(adm_prov), chunks_cold=ints(off_prov)),

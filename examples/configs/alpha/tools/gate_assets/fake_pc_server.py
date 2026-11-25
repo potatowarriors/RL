@@ -13,9 +13,10 @@ Faults, each a way the real engine could be broken or the gate could be fooled:
     restore_scale   the restored state is multiplied by 1.0001
     restore_zero    the restored state is replaced by zero
     inplace_src     a hit is right, but it damages the cached state it restored from (the next hit on it is wrong)
+    inplace_multi   the same, but only when the hit request goes on to compute more than one block
     decode_off1     boundary states made while generating are saved one token late
     hit_decode      boundary states made while generating are wrong when the generating request started from a hit
-    admit_state     the state saved by the common-prefix admission cut is wrong (the request itself is right)
+    admit_cut       the chunk that ends at the common-prefix admission cut leaves a wrong state
     offgrid_multi   a restore at a boundary off the chunk-budget grid is wrong when a multi-block chunk follows
     nondet          every request gets its own noise (two cold computations differ)
     no_salt         `cache_salt` is ignored (a "cold" reference would silently be a hit)
@@ -75,7 +76,7 @@ def run(ids, salt, n):
         if FAULT in ("restore_scale", "restore_zero"):
             s = s * 1.0001 if FAULT == "restore_scale" else 0.0
             print(f"[ALPHA_GATE_FAULT pid=1] FIRED {FAULT} computed={hit} tensors=1", flush=True)
-        if FAULT == "inplace_src":
+        if FAULT == "inplace_src" or FAULT == "inplace_multi" and total - hit > BLOCK:
             STATE[(salt, hit, keys[hit])] = s * 1.0001
     if FAULT == "nondet":
         s += random.random() * 1e-9
@@ -94,8 +95,10 @@ def run(ids, salt, n):
             s += 1e-7
         s = step(s, ids[c]) if m == 1 else chunk(s, ids, c, c + m)
         c += m
+        if FAULT == "admit_cut" and admitted:
+            s *= 1.0001
         if c % BLOCK == 0:
-            STATE.setdefault((salt, c, keys[c]), s * 1.0001 if FAULT == "admit_state" and admitted else s)
+            STATE.setdefault((salt, c, keys[c]), s)
         first = False
     seq, toks, lps, tops = list(ids), [], [], []
     for i in range(n):
