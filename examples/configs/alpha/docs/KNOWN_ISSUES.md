@@ -8,6 +8,16 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
+## SWE 에이전트의 첫 모델 호출이 422 로 거부된다 — Gym 0.6.0 모델 서버가 OpenHands 가 늘 보내는 `aws_region_name` 을 모르는 키로 막는다 (2026-11-25, 🔶 대응 결정 대기)
+
+- **증상**: `USER` 를 넘긴 뒤 (결정 77) GPU 없는 시험 `p0_measure/swe/student_dry3` (4 과제 · 두 노드) 에서 에이전트는 기동했다 (연결 11 ~ 17 s · 초기화 2 ~ 5 s · `GLOBAL STEP 0`). 그런데 4/4 가 첫 모델 호출에서 `ClientResponseError: 422, message='Unprocessable Content', url='http://10.0.42.2:<port>/v1/chat/completions'` 로 끝났다 (롤아웃 44 ~ 55 s, `agent_error_kind: other`, **마스킹되지 않은 보상 0**). 죽은 모델 포트에는 닿지도 않았다 (재시도 줄 0).
+- **원인**: Gym 모델 서버 로그가 거부한 필드를 그대로 적는다 — `"type": "extra_forbidden", "loc": ["body", "aws_region_name"]` (요청마다 이 한 건뿐). nv-OpenHands (`5f018005`, Gym 0.6.0 의 학습 설정이 고정한 커밋) 는 `openhands/llm/llm.py:186` 에서 `kwargs['aws_region_name'] = self.config.aws_region_name` 을 조건 없이 넣고, `nemo_gym_client.py:79-82` 가 그 kwargs 를 요청 본문에 그대로 싣는다. Gym 0.6.0 (`3045a793`) 의 `NeMoGymChatCompletionCreateParamsNonStreaming` 은 `extra="forbid"` 이고 그 필드가 없다. 우리 alpha 모델 서버 플러그인 (`AlphaVLLMModel`) 도 같은 검증을 물려받으므로 학습 경로도 같은 지점에서 깨진다.
+- **선행 사례**: upstream — Gym 이 뒤에 고쳤다. NeMo-RL upstream/main 이 고정한 Gym `5911d628` 의 `nemo_gym/openai_utils.py` 에 `CHAT_REQUEST_IGNORED_CLIENT_FIELDS = frozenset({"aws_region_name"})` 와 `aws_region_name: object = Field(default=None, exclude=True)` 가 있고 주석이 "고정된 OpenHands fork 가 기본 null 로 보낸다 … 422 로 거부되지 않게 받고 백엔드로는 넘기지 않는다" 라고 적는다. Nemotron 3 Ultra — 그 뒤 버전의 Gym 으로 돈다. 프론티어 — 공개 안 됨.
+- **독립 검증**: 생략 — 서버가 거부 필드를 직접 출력하고 upstream 이 같은 필드를 같은 이유로 고친 자명한 원인이다 (공통 원칙의 제외 조건). 고친 뒤의 동작은 시험으로 확인한다.
+- **대응 (결정 대기)**: 플러그인 변경이라 승인 대상. 후보 — ① 우리 alpha 모델 서버 플러그인이 검증 전에 그 필드를 버린다 (`chat_completions_dispatch` 를 감싸는 몇 줄, upstream 과 같은 동작) 하고 학생 측정도 그 플러그인을 쓴다 ② Gym 고정 커밋에 upstream 수정을 이식 ③ Gym 고정을 upstream 쪽으로 올린다.
+- **함께 본 것**: 에이전트가 아무것도 하지 않은 `codeception__codeceptjs-368` 롤아웃의 패치가 비어 있지 않았다 (이미지에 남아 있던 추적 안 된 `package-lock.json` 1.16 MB 가 `git add -A` 에 실린다). "빈 패치" 통계와 패치 전달 검사 (기준 5 ③) 에서 과제의 기본 패치를 빼고 봐야 한다.
+- **교훈**: 고정된 버전 조합 (Gym 0.6.0 + 그 설정이 고정한 OpenHands) 이 서로 맞는다고 가정하지 않는다. GPU 없는 시험이 연달아 두 결함을 잡았다 — 모델을 붙이기 전에 에이전트 → 모델 서버 요청까지 돌려 본다.
+
 ## SWE 에이전트 컨테이너가 기동하지 못한다 — OpenHands 가 셸을 `su root -` 로 열고 uid 1100 이라 실패 (2026-11-24, ✅ 독립 검증 확인 · 대응 결정 대기)
 
 - **증상**: 학생 롤아웃 측정 실행기를 GPU 없이 돌린 시험 (`p0_measure/swe/student_dry1` 4 과제 · 두 노드, `student_dry2` 1 과제 · 디버그 로그) 에서 5/5 롤아웃이 에이전트 로그의 `create runtime: 0.009 seconds` 뒤로 진행하지 못하고 벽시계 한도로 종료 (rc 124). 과제별 `nemo_gym_metrics.json` 에 `connect_to_runtime_time` · `initialize_runtime_time` 이 없다. 모델 호출은 한 번도 없었다. 같은 날 같은 설정의 채점 전용 컨테이너 약 1,500 개는 정상이었다.

@@ -22,7 +22,11 @@ RAY="$NRL/clean_run.sh $NRL/venv-driver/bin/ray"
 # raylet 의 환경은 그 노드의 모든 Ray 워커가 물려받는다. Gym `swe_agents` 는 Ray 워커에서 `apptainer exec --pid` 를 부르는데,
 # 이 세션에서는 `--pid` 가 `APPTAINER_BIND=/proc` 없이는 /proc 없는 컨테이너를 만든다 (E2E_SANDBOX.md §5 · §6.1, bindproc).
 # 드라이버 쪽 환경변수는 raylet 이 띄우는 워커에 닿지 않으므로 여기서 준다.
-RAY_START="$NRL/clean_run.sh /usr/bin/env APPTAINER_BIND=/proc $NRL/venv-driver/bin/ray"
+# APPTAINERENV_USER: Gym 은 컨테이너를 `--cleanenv` 로 띄워 USER 가 빈다. nv-OpenHands 는 USER 가 없으면 사용자 이름을 root 로 두고 셸을
+# `su root -` 로 여는데, 이 세션의 컨테이너는 uid 1100 이라 실패해 에이전트가 기동하지 못한다 (KNOWN_ISSUES 2026-11-24, RL_PLAN 결정 77).
+# `APPTAINERENV_<이름>` 은 `--cleanenv` 를 거쳐도 컨테이너 안에 들어간다 — 에이전트 · 채점 컨테이너 둘 다에 USER 가 생긴다.
+RUN_USER=$(id -un)
+RAY_START="$NRL/clean_run.sh /usr/bin/env APPTAINER_BIND=/proc APPTAINERENV_USER=$RUN_USER $NRL/venv-driver/bin/ray"
 MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 SUB_IP=$(getent hosts sub1 | awk '{print $1}')
 [ -n "$MAIN_IP" ] && [ -n "$SUB_IP" ] || { echo "main1 · sub1 주소를 풀지 못했다" >&2; exit 1; }
