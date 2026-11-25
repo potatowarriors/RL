@@ -74,7 +74,7 @@ uv run --locked --extra vllm python examples/configs/alpha/tools/verify_vllm_ser
 
 | # | 게이트 | 도구 | 기준 | 결과 |
 |---|---|---|---|---|
-| R1 | GRPO Generation KL (rollout vLLM vs 학습 mcore), 8-GPU 1노드 | `grpo_alpha_smoke.yaml` (Muon 은 `grpo_alpha_smoke_muon.yaml`), 진단 `tools/analyze_rollout_logprob_gap.py` | step 1·2·3 의 `Generation KL Error` < 0.002 | 2026-10-06 iter2400: 기본 0.0042 FAIL → R3 0.0026 → **R3 + GDN 상태 fp32 Adam 0.0015/0.0013/0.0014 PASS · Muon 0.0015/0.0013/0.0013 PASS** · 2026-10-08 iter2862 Muon **0.0014/0.0013/0.0013 PASS** · 2026-10-11 `vllm_kwargs.gdn_prefill_backend: triton` + 학습 `NCCL_MAX_NCHANNELS=16` 재실행 (본 런 `main2r3` 의 `ckpt/step_40` 재개 step 41·42·43, 32K 생성·CP8·packing) **0.00177/0.00180/0.00198 PASS** · 마스킹 0/0/0 (이전 step 21~40 은 0.00177~0.00193) · 2026-10-19 RL 반출 `teacher_codemath2/hf_step_00282` (Muon) **0.0010/0.0010/0.0010 PASS** · mult_prob_err 1.018 · 위치별 평탄 · \|d\|>1 토큰 0 · 2026-11-12 RL 반출 `mopd1/hf/hf_step_00120` (Muon) **0.0006/0.0007/0.0006 PASS** (M3 기록 mean diff 0.053 / max 0.219) |
+| R1 | GRPO Generation KL (rollout vLLM vs 학습 mcore), 8-GPU 1노드 | `grpo_alpha_smoke.yaml` (Muon 은 `grpo_alpha_smoke_muon.yaml`), 진단 `tools/analyze_rollout_logprob_gap.py` | step 1·2·3 의 `Generation KL Error` < **0.001** (2026-11-25 사용자 결정 — 그 전 기록은 0.002 기준으로 판정한 것이다. 아래 "기준의 출처") | 2026-10-06 iter2400: 기본 0.0042 FAIL → R3 0.0026 → **R3 + GDN 상태 fp32 Adam 0.0015/0.0013/0.0014 PASS · Muon 0.0015/0.0013/0.0013 PASS** · 2026-10-08 iter2862 Muon **0.0014/0.0013/0.0013 PASS** · 2026-10-11 `vllm_kwargs.gdn_prefill_backend: triton` + 학습 `NCCL_MAX_NCHANNELS=16` 재실행 (본 런 `main2r3` 의 `ckpt/step_40` 재개 step 41·42·43, 32K 생성·CP8·packing) **0.00177/0.00180/0.00198 PASS** · 마스킹 0/0/0 (이전 step 21~40 은 0.00177~0.00193) · 2026-10-19 RL 반출 `teacher_codemath2/hf_step_00282` (Muon) **0.0010/0.0010/0.0010 PASS** · mult_prob_err 1.018 · 위치별 평탄 · \|d\|>1 토큰 0 · 2026-11-12 RL 반출 `mopd1/hf/hf_step_00120` (Muon) **0.0006/0.0007/0.0006 PASS** (M3 기록 mean diff 0.053 / max 0.219) |
 | R2 | Muon 실적용 (워커와 같은 setup 경로로 옵티마이저 직접 검사) | `tools/verify_muon_optimizer.py` | 4항목 전부 PASS: Muon·Adam 클래스 공존 · 파라미터 분배 · qkv 4-way split · 하이퍼파라미터 레시피 일치 | 2026-10-06 PASS — TensorParallelMuon 15.34B · Adam 0.67B · qkv 4-way · extra_scale 0.2 · nesterov · router 동결(RL 기본) |
 | R3 | chat 렌더 패리티 — RL 프롬프트 토큰 ID 가 SFT 변환기(`build_alpha_sft_idxmap.py`)의 학습 토큰 ID 와 정확히 같은가 (CPU) | `tools/verify_chat_render_parity.py` | 경로별 토큰 ID 완전 일치 | 2026-10-07: 네이티브 GRPO **PASS** · Gym 멀티턴 경로 **부분** — 턴 경계 수정 반영, `strict` 유지 미구현 (아래 표) · **2026-11-25 재실행** (alpha 모델 서버 플러그인 변경, `RL_PLAN.md` 결정 78; `--ckpt results/alpha/mopd1/hf/hf_step_00120`): P0 22/0 · P1 12/0 · P2 22/0 · P4 0/40 · P5 8/32 · P6 36/4 — 10-07 표와 같음 (산출물 `$NRL_ROOT/p0_measure/r3_render_20261125b/`). 도구의 기본 `CKPT` 경로는 스토리지 정리로 없어져 `--ckpt` 를 줘야 한다 (없으면 stage-sft 가 종료 2) |
 | R5 | 학습 처리량·recompute 변형 (`tools/measure_train_memory.py --samples-per-dp N --recompute ...`) | 같은 도구 | 정상 상태(3번째 스텝) 처리량·peak. 판정 게이트가 아니라 기준선 | 2026-10-07 부분 실행: 128K/CP8 full **33.4K tok/s**·peak 57.2 GB, selective 전 변형 OOM (`RLVR_READINESS.md` §5). 나머지는 첫 RLVR 런 뒤 (사용자 지시) |
@@ -140,19 +140,19 @@ GPU 게이트 런처는 기동 직전에 GPU 점유를 검사한다. 한 장이�
 
 10-06 의 R3 결정 실험은 학습 라우터 fp64 · 고정 (`grpo_math_1B.yaml` 상속), vLLM 플러그인 라우터 fp32 였고, R3 의 효과 (0.0042 → 0.0026) 는 GDN 상태 bf16 에서 쟀다 (그때 로그로 확인) — "R3 끔 + 상태 fp32" 와 "학습 라우터 fp32" 는 재지 않았다. 그 빈칸을 R1 로 메웠다. 공통: 체크포인트 `mopd1/hf/hf_step_00120` · GDN 상태 fp32 · 라우터 고정 · commit `d6422627b`~`10b60024f`.
 
-| 런 | R3 | 학습 라우터 | KL step 1 / 2 / 3 | R1 기준 0.002 |
-|---|---|---|---|---|
-| K0 | 켬 | fp64 (지금 기본값) | 0.00062 / 0.00062 / 0.00058 | PASS |
-| K1 | 켬 | fp32 | 0.00061 / 0.00063 / 0.00057 | PASS |
-| K2 | 끔 | fp64 | 0.00150 / 0.00149 / 0.00139 | PASS |
-| K3 | 끔 | fp32 (Ultra 방식) | 0.00151 / 0.00153 / 0.00135 | PASS |
+| 런 | R3 | 학습 라우터 | KL step 1 / 2 / 3 | 그때 기준 0.002 | 새 기준 0.001 |
+|---|---|---|---|---|---|
+| K0 | 켬 | fp64 (지금 기본값) | 0.00062 / 0.00062 / 0.00058 | PASS | PASS |
+| K1 | 켬 | fp32 | 0.00061 / 0.00063 / 0.00057 | PASS | PASS |
+| K2 | 끔 | fp64 | 0.00150 / 0.00149 / 0.00139 | PASS | **FAIL** |
+| K3 | 끔 | fp32 (Ultra 방식) | 0.00151 / 0.00153 / 0.00135 | PASS | **FAIL** |
 
 - 네 런의 step 1 롤아웃은 128/128 시퀀스가 비트 단위로 같다 (롤아웃측 logprob 도 같다) — 같은 토큰 위에서 학습측만 비교한 값이다. 두 노드 (K2 sub1 · K3 main1) 도 같은 롤아웃을 낸다.
 - **R3 를 빼면 KL 이 2.4 배** — 프롬프트 48 개 짝 비교 (`tools/judge_prefix_cache_gate.py --pair`) 로 생성 위치 [0,256) 의 k3 +0.00117 (z 19~20), [0,2048) +0.00095 (z 24), \|d\| > 0.5 토큰 비율 +0.07%p (z 15). 기준은 넘지 않지만 여유가 25% 다.
 - **학습 라우터 정밀도는 영향이 없다** — R3 켬: fp32 − fp64 z −0.04 / +0.83 / −1.45, R3 끔: z +0.95 / +0.04 / −0.45. expert 뒤집힘의 원인이 라우터 계산 정밀도가 아니라 입력 hidden state 차이라는 10-06 진단과 일치한다.
 - 같은 토큰 위에서도 학습측 logprob 은 런마다 다르다 (K1 대 K0: \|Δ\| > 1e-3 34% · > 0.1 1.4 만 토큰 · 최대 1.0; 평균 KL 은 같다) — 학습측 런 간 비결정의 크기이고, R1-L 의 같은 조건 반복이 이 바닥을 잰다.
 
-**기준 0.002 의 출처 (2026-11-25 확인)**: 이 값의 근거는 기록돼 있지 않다 — 2026-08 준비 문서 (`archive/POSTTRAIN_PREP_2026-08.md`) 에 "Generation KL < 0.002" 로 처음 나오고 유도 과정이 없다. upstream 의 안내는 더 엄하다: `docs/guides/grpo.md` "KL Divergence Error" — "values below 1e-3 considered acceptable. Investigate any metric that shows spikes above this threshold" (출처 논문 *When Speed Kills Stability* 의 경험값 약 1e-3), `docs/guides/dtensor-tp-accuracy.md` — `token_mult_prob_error` 1.05 초과는 프레임워크 결함 의심. 즉 0.002 는 "고장 경보" 로 쓰인 값이고 (10-06 의 0.0042 를 잡았다), "이 아래면 비용이 없다" 는 뜻이 아니다.
+**기준의 출처와 변경 (2026-11-25)**: 사용자 결정 2026-11-25 15:36 "기준을 1e-3 으로 낮춰" — R1 · R1-L 의 KL 기준은 이제 **0.001** 이다 (`RL_PLAN.md` 결정 80). 실제 런의 첫 step 판정 (G5 · G7 · G8 · J1 · JG1 · MS1 · MS2 행의 "KL < 0.002") 에도 같은 값을 쓸지는 미결이다 — 11 월 실제 런 (R3 켬) 의 step KL 중앙값이 0.0008 ~ 0.0010 이라 그대로 옮기면 경계에 걸린다 (아래 표). 그전 기준 0.002 의 경위: 이 값의 근거는 기록돼 있지 않다 — 2026-08 준비 문서 (`archive/POSTTRAIN_PREP_2026-08.md`) 에 "Generation KL < 0.002" 로 처음 나오고 유도 과정이 없다. upstream 의 안내는 더 엄하다: `docs/guides/grpo.md` "KL Divergence Error" — "values below 1e-3 considered acceptable. Investigate any metric that shows spikes above this threshold" (출처 논문 *When Speed Kills Stability* 의 경험값 약 1e-3), `docs/guides/dtensor-tp-accuracy.md` — `token_mult_prob_error` 1.05 초과는 프레임워크 결함 의심. 즉 0.002 는 "고장 경보" 로 쓰인 값이고 (10-06 의 0.0042 를 잡았다), "이 아래면 비용이 없다" 는 뜻이 아니다.
 
 | 같은 토큰 위의 비교 (2×2 덤프) | R3 켬 (K0) | R3 끔 (K3) |
 |---|---|---|
@@ -164,6 +164,16 @@ GPU 게이트 런처는 기동 직전에 GPU 점유를 검사한다. 한 장이�
 | 생성 위치별 KL [0,256) · [256,1024) · [1024,2048) · [2048,4096) | 0.00055 · 0.00063 · 0.00061 · 0.00060 | 0.00172 · 0.00158 · 0.00145 · 0.00134 (위치 누적 없음) |
 | 시퀀스 마스킹 (`seq_logprob_error_threshold` 2) | 0 / 384 | 0 / 384 |
 
+| 11 월 실제 런 (R3 켬, 로그의 step KL — 소수 4 자리) | step 수 | 중앙 | p90 | 최대 | 0.001 초과 step |
+|---|---|---|---|---|---|
+| `teacher_workplace/w1r` (11-19) | 76 | 0.0010 | 0.0010 | 0.0010 | 0% |
+| `teacher_workplace/w1` (11-19) | 38 | 0.0010 | 0.0011 | 0.0011 | 11% |
+| `teacher_terminal_pivot_judge/j1` (11-17) | 68 | 0.0009 | 0.0010 | 0.0010 | 0% |
+| `teacher_terminal_pivot/p2` (11-15) | 200 | 0.0008 | 0.0009 | 0.0010 | 0% |
+| `teacher_swe_pivot/p1` (11-13) | 120 | 0.0008 | 0.0009 | 0.0009 | 0% |
+| `mopd1/s3` (11-11) | 120 | 0.0009 | 0.0011 | 0.0013 | 18% |
+| `mopd1/s2` (11-10) | 43 | 0.0018 | 0.0018 | 0.0023 | 100% |
+
 ### R1-L — prefix cache 적중이 실제로 일어나는 R1 변형 (2026-11-25)
 
 R1 은 프롬프트가 약 50 토큰이라 prefix cache 가 한 번도 적중하지 않는다 (엔진 로그 적중률 0.0% — 10-06 · 11-12 · 11-25 K0 전부; alpha 의 캐시 블록은 GDN 상태 fp32 에서 1,056 토큰이고 align 모드는 블록 경계에서만 상태를 캐시한다). 그래서 캐시 적중 경로와 그 위의 R3 경로 재생은 학습 스택에서 검증된 적이 없다. R1-L 이 그 구멍을 메운다.
@@ -174,7 +184,7 @@ R1 은 프롬프트가 약 50 토큰이라 prefix cache 가 한 번도 적중하
 | 명령 | `$NRL_ROOT/gates/prefix_cache_<날짜>/run_l.sh withB\|noB` — R1 과 같은 명령 · 레시피 (`grpo_alpha_smoke_muon.yaml`) 에 오버라이드만 더한다 |
 | R1 과 다른 점 | 프롬프트 틀 `tools/gate_assets/long_prefix_prompt.txt` (문제 → 긴 참고 자료 → 문제; 프롬프트 3,400 토큰대 = 블록 3 개, 서로 다른 문제의 공유 구간 12 토큰) · 시퀀스 상한 7,168 · 엔진 인자를 학습 레시피와 같게 (chunked prefill · `max_num_batched_tokens` 16384 · `max_num_seqs` 256 · `gdn_prefill_backend` triton) · prefix caching 명시 · `RAY_DEDUP_LOGS=0` |
 | 런 | `LA_off` · `LA_on` · `LA_off2` (같은 조건 반복) · `LB_off` · `LB_on` · 음성 대조 `NC_zero` · `NC_shift` · `NC_trunc` (반드시 잡혀야 함) · `NC_state` (검출 한계 참고) |
-| 판정 | `tools/judge_prefix_cache_gate.py <gate_dir> --mode withB\|noB` (CPU). 유효성: rc 0 · KL 줄 정확히 3 개이고 덤프 재계산과 일치 · 엔진의 캐시 켬/끔 표지 · **엔진 8 개 각각 step 마다 적중률이 기대값과 "한 블록 덜 적중" 의 중간 이상** · 결함 주입 표지. 통과: KL < 0.002 (R1 기준) + 캐시 켬 − 끔의 프롬프트 단위 짝 비교 (48 개) 세 통계가 모두 z < 2.33 — 생성 위치 [0,256) 의 k3 · [0,2048) 의 k3 · \|d\| > 0.5 토큰 비율 + (A) R3 경로 누락 경고 0 줄 + 음성 대조 3 개가 잡힘 |
+| 판정 | `tools/judge_prefix_cache_gate.py <gate_dir> --mode withB\|noB` (CPU). 유효성: rc 0 · KL 줄 정확히 3 개이고 덤프 재계산과 일치 · 엔진의 캐시 켬/끔 표지 · **엔진 8 개 각각 step 마다 적중률이 기대값과 "한 블록 덜 적중" 의 중간 이상** · 결함 주입 표지. 통과: KL < 0.001 (R1 기준 — 11-25 15:36 에 0.002 에서 낮춤, 그 시점에 R1-L 결과는 아직 없었다) + 캐시 켬 − 끔의 프롬프트 단위 짝 비교 (48 개) 세 통계가 모두 z < 2.33 — 생성 위치 [0,256) 의 k3 · [0,2048) 의 k3 · \|d\| > 0.5 토큰 비율 + (A) R3 경로 누락 경고 0 줄 + 음성 대조 3 개가 잡힘 |
 | 음성 대조 | `tools/gate_assets/fault_inject/sitecustomize.py` — `PYTHONPATH` + `ALPHA_GATE_FAULT` 로 음성 대조 런에서만 설치된 vLLM 을 메모리에서 고친다 (운영 코드 · 플러그인 불변). `state_zero` · `state_scale:1.01` (GDN prefill 이 이어받는 상태) · `routes_trunc:8` · `routes_shift:3168` (`RoutedExpertsManager.get`) |
 | 못 보는 것 | 단일 턴이라 캐시 블록이 전부 prefill 산출물이고 깊이가 하나다 (디코드 중에 만든 블록 · 부분 적중 · 연쇄 적중 없음) · sync · eager · colocated (async · CUDA graph · in-flight 갱신 아님) · 캐시 축출 · 슬롯 재사용 뒤의 낡은 경로 행 · async 경로에서 `reset_prefix_cache()` 가 실행 중 요청이 있으면 False 를 돌려주는데 반환값을 아무도 보지 않는다 → 엔진 단독 2 턴 시험과 실제 SWE 런의 첫 step 으로 본다 |
 | 적대적 검토 | 2026-11-25 1 차 **보완 필요** — 고장 나도 통과하는 경로 4 개 (모든 요청이 같은 블록을 타 요청 간 뒤섞임이 안 보임 · R3 누락은 오류가 아니라 경고 + 조용한 대체 · 절대 기준 0.002 는 기준선 0.0006 의 3 배까지 통과시키고 앞부분 오차가 희석됨 · Ray 로그 합치기가 엔진별 적중률을 가림) + 작은 것 5 개 → 전부 반영. 2 차 **보완 필요 (판정기만)** — 음성 대조를 캐시 끔 기준선에 대어 채점 · 같은 조건 반복은 step 1 롤아웃이 비트 동일이라 표준오차 0 → NaN → 반영 (민감도는 `LA_on` 대비 · A/A 는 step 2·3 · step 1 은 토큰 동일성 보고 · `state_zero` 를 필수 음성 대조로). 실행기는 2 차에서 수정 사항 없음. 3 차 (판정기만) **보완 필요** — 필수 런이 빠져도 있는 항목만으로 PASS 가 나옴 · 경로만 건드리는 음성 대조의 step 1 토큰 동일성을 보고만 하고 강제하지 않음 · 엔진 표지 줄 수를 세지 않음 → 반영 (`--mode withB\|noB` 의 필수 항목이 빠지면 FAIL · 토큰이 다르면 그 런 무효 · 표지 8 줄 이상). 통계 · NaN 처리 · 적중률 문턱 · 파서는 K 매트릭스 로그로 확인됨 |

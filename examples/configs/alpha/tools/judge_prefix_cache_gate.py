@@ -33,7 +33,7 @@ import sys
 import numpy as np
 
 Z_CRIT = 2.33
-KL_GATE = 0.002
+KL_GATE = 0.001   # R1 기준 (2026-11-25 사용자 결정: 0.002 → 0.001, upstream docs/guides/grpo.md 의 허용 수준)
 FIRST, ALL = 256, 2048
 PASS_STATS = ("first", "all", "tail")
 
@@ -257,7 +257,8 @@ def judge_run(gate_dir, name, want_cache, want_r3, fault=None, block=1056, engin
     need(len(L["kl"]) == 3 and all(abs(gk[s] - L["kl"][s - 1]) < 6e-5 for s in gk),
          "덤프로 다시 계산한 KL 이 로그와 일치: " + " ".join(f"{gk[s]:.5f}" for s in sorted(gk)))
     if fault is None:
-        need(bool(L["kl"]) and all(v < KL_GATE for v in L["kl"]), f"KL < {KL_GATE} (R1 기준): {L['kl']}")
+        need(bool(gk) and all(v < KL_GATE for v in gk.values()),
+             f"KL < {KL_GATE} (R1 기준, 덤프 재계산값으로 판정 — 로그는 소수 4 자리): " + " ".join(f"{gk[s]:.5f}" for s in sorted(gk)))
     if want_cache:
         need(L["flags"] == {"True"} and L["flag_lines"] >= engines and L["align"] >= engines,
              f"엔진 {engines} 개가 모두 prefix caching 켬 · align 모드 (flags={sorted(L['flags'])} · 표지 {L['flag_lines']} 줄 · align {L['align']} 줄)")
