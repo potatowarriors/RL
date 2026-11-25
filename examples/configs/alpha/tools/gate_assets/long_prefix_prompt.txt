@@ -1,0 +1,133 @@
+Problem to solve: {0}
+
+You are a careful mathematics assistant. Before each problem you are given a reference sheet of solved examples. Read it for style only: restate what is asked, compute one step at a time, check the arithmetic, and put the final answer in a box. Do not copy numbers from the reference sheet into your solution.
+
+Reference sheet
+
+Example 1. Daniel buys 26 notebooks at 16 dollars each and uses a coupon worth 38 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 26 x 16 = 416 dollars before the coupon. After the coupon it is 416 - 38 = 378 dollars. The answer is \boxed{{378}}.
+
+Example 2. A tank holds 2104 liters. 20 percent of it is drained, and then 526 liters are added back. How many liters are in the tank?
+Solution. Draining 20 percent removes 2104 x 20 / 100 = 420 liters, leaving 1684. Adding 526 gives 1684 + 526 = 2210. The answer is \boxed{{2210}}.
+
+Example 3. What is the remainder when 73 x 27 is divided by 7?
+Solution. 73 leaves remainder 3 and 27 leaves remainder 6 when divided by 7. Their product 3 x 6 = 18 leaves remainder 4. The answer is \boxed{{4}}.
+
+Example 4. A tank holds 2332 liters. 10 percent of it is drained, and then 583 liters are added back. How many liters are in the tank?
+Solution. Draining 10 percent removes 2332 x 10 / 100 = 233 liters, leaving 2099. Adding 583 gives 2099 + 583 = 2682. The answer is \boxed{{2682}}.
+
+Example 5. A tank holds 3076 liters. 25 percent of it is drained, and then 769 liters are added back. How many liters are in the tank?
+Solution. Draining 25 percent removes 3076 x 25 / 100 = 769 liters, leaving 2307. Adding 769 gives 2307 + 769 = 3076. The answer is \boxed{{3076}}.
+
+Example 6. What is the remainder when 17 x 15 is divided by 7?
+Solution. 17 leaves remainder 3 and 15 leaves remainder 1 when divided by 7. Their product 3 x 1 = 3 leaves remainder 3. The answer is \boxed{{3}}.
+
+Example 7. What is the remainder when 95 x 84 is divided by 5?
+Solution. 95 leaves remainder 0 and 84 leaves remainder 4 when divided by 5. Their product 0 x 4 = 0 leaves remainder 0. The answer is \boxed{{0}}.
+
+Example 8. A tank holds 816 liters. 20 percent of it is drained, and then 204 liters are added back. How many liters are in the tank?
+Solution. Draining 20 percent removes 816 x 20 / 100 = 163 liters, leaving 653. Adding 204 gives 653 + 204 = 857. The answer is \boxed{{857}}.
+
+Example 9. A cyclist rides for 8 hours at 50 kilometers per hour and then 9 hours at 89 kilometers per hour. How many kilometers are covered in total?
+Solution. The first part covers 8 x 50 = 400 kilometers. The second part covers 9 x 89 = 801 kilometers. The total is 400 + 801 = 1201. The answer is \boxed{{1201}}.
+
+Example 10. A rectangular garden is 27 meters wide and 14 meters long. What is its perimeter in meters, and what is its area in square meters? Give the sum of the two numbers.
+Solution. The perimeter is 2 x (27 + 14) = 82. The area is 27 x 14 = 378. Their sum is 82 + 378 = 460. The answer is \boxed{{460}}.
+
+Example 11. What is the remainder when 46 x 87 is divided by 8?
+Solution. 46 leaves remainder 6 and 87 leaves remainder 7 when divided by 8. Their product 6 x 7 = 42 leaves remainder 2. The answer is \boxed{{2}}.
+
+Example 12. Omar buys 26 apples at 16 dollars each and uses a coupon worth 28 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 26 x 16 = 416 dollars before the coupon. After the coupon it is 416 - 28 = 388 dollars. The answer is \boxed{{388}}.
+
+Example 13. What is the remainder when 68 x 31 is divided by 6?
+Solution. 68 leaves remainder 2 and 31 leaves remainder 1 when divided by 6. Their product 2 x 1 = 2 leaves remainder 2. The answer is \boxed{{2}}.
+
+Example 14. An arithmetic sequence starts at 10 and increases by 5 each step. What is the sum of its first 10 terms?
+Solution. The last of the 10 terms is 10 + 9 x 5 = 55. The sum is 10 x (10 + 55) / 2 = 325. The answer is \boxed{{325}}.
+
+Example 15. An arithmetic sequence starts at 5 and increases by 5 each step. What is the sum of its first 3 terms?
+Solution. The last of the 3 terms is 5 + 2 x 5 = 15. The sum is 3 x (5 + 15) / 2 = 30. The answer is \boxed{{30}}.
+
+Example 16. An arithmetic sequence starts at 2 and increases by 3 each step. What is the sum of its first 4 terms?
+Solution. The last of the 4 terms is 2 + 3 x 3 = 11. The sum is 4 x (2 + 11) / 2 = 26. The answer is \boxed{{26}}.
+
+Example 17. A tank holds 3236 liters. 40 percent of it is drained, and then 809 liters are added back. How many liters are in the tank?
+Solution. Draining 40 percent removes 3236 x 40 / 100 = 1294 liters, leaving 1942. Adding 809 gives 1942 + 809 = 2751. The answer is \boxed{{2751}}.
+
+Example 18. What is the remainder when 80 x 35 is divided by 8?
+Solution. 80 leaves remainder 0 and 35 leaves remainder 3 when divided by 8. Their product 0 x 3 = 0 leaves remainder 0. The answer is \boxed{{0}}.
+
+Example 19. A tank holds 3332 liters. 75 percent of it is drained, and then 833 liters are added back. How many liters are in the tank?
+Solution. Draining 75 percent removes 3332 x 75 / 100 = 2499 liters, leaving 833. Adding 833 gives 833 + 833 = 1666. The answer is \boxed{{1666}}.
+
+Example 20. An arithmetic sequence starts at 10 and increases by 9 each step. What is the sum of its first 6 terms?
+Solution. The last of the 6 terms is 10 + 5 x 9 = 55. The sum is 6 x (10 + 55) / 2 = 195. The answer is \boxed{{195}}.
+
+Example 21. A cyclist rides for 2 hours at 31 kilometers per hour and then 3 hours at 51 kilometers per hour. How many kilometers are covered in total?
+Solution. The first part covers 2 x 31 = 62 kilometers. The second part covers 3 x 51 = 153 kilometers. The total is 62 + 153 = 215. The answer is \boxed{{215}}.
+
+Example 22. Ines buys 26 stamps at 5 dollars each and uses a coupon worth 19 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 26 x 5 = 130 dollars before the coupon. After the coupon it is 130 - 19 = 111 dollars. The answer is \boxed{{111}}.
+
+Example 23. A cyclist rides for 8 hours at 56 kilometers per hour and then 9 hours at 89 kilometers per hour. How many kilometers are covered in total?
+Solution. The first part covers 8 x 56 = 448 kilometers. The second part covers 9 x 89 = 801 kilometers. The total is 448 + 801 = 1249. The answer is \boxed{{1249}}.
+
+Example 24. Yuna buys 21 batteries at 9 dollars each and uses a coupon worth 25 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 21 x 9 = 189 dollars before the coupon. After the coupon it is 189 - 25 = 164 dollars. The answer is \boxed{{164}}.
+
+Example 25. An arithmetic sequence starts at 1 and increases by 2 each step. What is the sum of its first 12 terms?
+Solution. The last of the 12 terms is 1 + 11 x 2 = 23. The sum is 12 x (1 + 23) / 2 = 144. The answer is \boxed{{144}}.
+
+Example 26. A tank holds 948 liters. 50 percent of it is drained, and then 237 liters are added back. How many liters are in the tank?
+Solution. Draining 50 percent removes 948 x 50 / 100 = 474 liters, leaving 474. Adding 237 gives 474 + 237 = 711. The answer is \boxed{{711}}.
+
+Example 27. What is the remainder when 33 x 40 is divided by 10?
+Solution. 33 leaves remainder 3 and 40 leaves remainder 0 when divided by 10. Their product 3 x 0 = 0 leaves remainder 0. The answer is \boxed{{0}}.
+
+Example 28. A cyclist rides for 7 hours at 36 kilometers per hour and then 8 hours at 40 kilometers per hour. How many kilometers are covered in total?
+Solution. The first part covers 7 x 36 = 252 kilometers. The second part covers 8 x 40 = 320 kilometers. The total is 252 + 320 = 572. The answer is \boxed{{572}}.
+
+Example 29. An arithmetic sequence starts at 4 and increases by 5 each step. What is the sum of its first 12 terms?
+Solution. The last of the 12 terms is 4 + 11 x 5 = 59. The sum is 12 x (4 + 59) / 2 = 378. The answer is \boxed{{378}}.
+
+Example 30. A rectangular garden is 7 meters wide and 13 meters long. What is its perimeter in meters, and what is its area in square meters? Give the sum of the two numbers.
+Solution. The perimeter is 2 x (7 + 13) = 40. The area is 7 x 13 = 91. Their sum is 40 + 91 = 131. The answer is \boxed{{131}}.
+
+Example 31. A tank holds 676 liters. 50 percent of it is drained, and then 169 liters are added back. How many liters are in the tank?
+Solution. Draining 50 percent removes 676 x 50 / 100 = 338 liters, leaving 338. Adding 169 gives 338 + 169 = 507. The answer is \boxed{{507}}.
+
+Example 32. Omar buys 7 batteries at 2 dollars each and uses a coupon worth 39 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 7 x 2 = 14 dollars before the coupon. After the coupon it is 14 - 39 = -25 dollars. The answer is \boxed{{-25}}.
+
+Example 33. A tank holds 908 liters. 10 percent of it is drained, and then 227 liters are added back. How many liters are in the tank?
+Solution. Draining 10 percent removes 908 x 10 / 100 = 90 liters, leaving 818. Adding 227 gives 818 + 227 = 1045. The answer is \boxed{{1045}}.
+
+Example 34. What is the remainder when 16 x 93 is divided by 7?
+Solution. 16 leaves remainder 2 and 93 leaves remainder 2 when divided by 7. Their product 2 x 2 = 4 leaves remainder 4. The answer is \boxed{{4}}.
+
+Example 35. A rectangular garden is 21 meters wide and 22 meters long. What is its perimeter in meters, and what is its area in square meters? Give the sum of the two numbers.
+Solution. The perimeter is 2 x (21 + 22) = 86. The area is 21 x 22 = 462. Their sum is 86 + 462 = 548. The answer is \boxed{{548}}.
+
+Example 36. A cyclist rides for 7 hours at 51 kilometers per hour and then 8 hours at 90 kilometers per hour. How many kilometers are covered in total?
+Solution. The first part covers 7 x 51 = 357 kilometers. The second part covers 8 x 90 = 720 kilometers. The total is 357 + 720 = 1077. The answer is \boxed{{1077}}.
+
+Example 37. Yuna buys 8 tickets at 8 dollars each and uses a coupon worth 32 dollars on the whole order. How many dollars are paid?
+Solution. The order costs 8 x 8 = 64 dollars before the coupon. After the coupon it is 64 - 32 = 32 dollars. The answer is \boxed{{32}}.
+
+Example 38. A rectangular garden is 24 meters wide and 26 meters long. What is its perimeter in meters, and what is its area in square meters? Give the sum of the two numbers.
+Solution. The perimeter is 2 x (24 + 26) = 100. The area is 24 x 26 = 624. Their sum is 100 + 624 = 724. The answer is \boxed{{724}}.
+
+Example 39. An arithmetic sequence starts at 11 and increases by 8 each step. What is the sum of its first 11 terms?
+Solution. The last of the 11 terms is 11 + 10 x 8 = 91. The sum is 11 x (11 + 91) / 2 = 561. The answer is \boxed{{561}}.
+
+Example 40. An arithmetic sequence starts at 7 and increases by 9 each step. What is the sum of its first 10 terms?
+Solution. The last of the 10 terms is 7 + 9 x 9 = 88. The sum is 10 x (7 + 88) / 2 = 475. The answer is \boxed{{475}}.
+
+
+End of the reference sheet. Solve the problem that follows in the same careful style.
+
+Think step-by-step to solve the following problem. Output your answer inside of \\boxed{{}} tags.:
+{0}
+
+Let's think step-by-step

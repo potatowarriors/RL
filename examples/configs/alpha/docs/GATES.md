@@ -136,6 +136,21 @@ $NRL_ROOT/clean_run.sh /usr/bin/env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:
 ```
 GPU 게이트 런처는 기동 직전에 GPU 점유를 검사한다. 한 장이라도 1 GiB 이상 쓰이면 중단한다 (원장 #25).
 
+### R1-L — prefix cache 적중이 실제로 일어나는 R1 변형 (2026-11-25)
+
+R1 은 프롬프트가 약 50 토큰이라 prefix cache 가 한 번도 적중하지 않는다 (엔진 로그 적중률 0.0% — 10-06 · 11-12 · 11-25 K0 전부; alpha 의 캐시 블록은 GDN 상태 fp32 에서 1,056 토큰이고 align 모드는 블록 경계에서만 상태를 캐시한다). 그래서 캐시 적중 경로와 그 위의 R3 경로 재생은 학습 스택에서 검증된 적이 없다. R1-L 이 그 구멍을 메운다.
+
+| 항목 | 내용 |
+|---|---|
+| 지키는 것 | ① 캐시 적중 경로 (블록 경계에서 복원한 GDN 상태 · KV 재사용) 가 롤아웃 logprob 을 바꾸지 않는다 ② R3 를 켠 채 캐시된 토큰의 경로 행이 온전히 학습으로 간다 ③ 두 후보 설정 — A (R3 유지) · B (R3 끔 + 학습 라우터 fp32, Ultra 방식) — 의 KL |
+| 명령 | `$NRL_ROOT/gates/prefix_cache_<날짜>/run_l.sh withB\|noB` — R1 과 같은 명령 · 레시피 (`grpo_alpha_smoke_muon.yaml`) 에 오버라이드만 더한다 |
+| R1 과 다른 점 | 프롬프트 틀 `tools/gate_assets/long_prefix_prompt.txt` (문제 → 긴 참고 자료 → 문제; 프롬프트 3,400 토큰대 = 블록 3 개, 서로 다른 문제의 공유 구간 12 토큰) · 시퀀스 상한 7,168 · 엔진 인자를 학습 레시피와 같게 (chunked prefill · `max_num_batched_tokens` 16384 · `max_num_seqs` 256 · `gdn_prefill_backend` triton) · prefix caching 명시 · `RAY_DEDUP_LOGS=0` |
+| 런 | `LA_off` · `LA_on` · `LA_off2` (같은 조건 반복) · `LB_off` · `LB_on` · 음성 대조 `NC_zero` · `NC_shift` · `NC_trunc` (반드시 잡혀야 함) · `NC_state` (검출 한계 참고) |
+| 판정 | `tools/judge_prefix_cache_gate.py <gate_dir>` (CPU). 유효성: rc 0 · KL 줄 정확히 3 개이고 덤프 재계산과 일치 · 엔진의 캐시 켬/끔 표지 · **엔진 8 개 각각 step 마다 적중률이 기대값과 "한 블록 덜 적중" 의 중간 이상** · 결함 주입 표지. 통과: KL < 0.002 (R1 기준) + 캐시 켬 − 끔의 프롬프트 단위 짝 비교 (48 개) 세 통계가 모두 z < 2.33 — 생성 위치 [0,256) 의 k3 · [0,2048) 의 k3 · \|d\| > 0.5 토큰 비율 + (A) R3 경로 누락 경고 0 줄 + 음성 대조 3 개가 잡힘 |
+| 음성 대조 | `tools/gate_assets/fault_inject/sitecustomize.py` — `PYTHONPATH` + `ALPHA_GATE_FAULT` 로 음성 대조 런에서만 설치된 vLLM 을 메모리에서 고친다 (운영 코드 · 플러그인 불변). `state_zero` · `state_scale:1.01` (GDN prefill 이 이어받는 상태) · `routes_trunc:8` · `routes_shift:3168` (`RoutedExpertsManager.get`) |
+| 못 보는 것 | 단일 턴이라 캐시 블록이 전부 prefill 산출물이고 깊이가 하나다 (디코드 중에 만든 블록 · 부분 적중 · 연쇄 적중 없음) · sync · eager · colocated (async · CUDA graph · in-flight 갱신 아님) · 캐시 축출 · 슬롯 재사용 뒤의 낡은 경로 행 · async 경로에서 `reset_prefix_cache()` 가 실행 중 요청이 있으면 False 를 돌려주는데 반환값을 아무도 보지 않는다 → 엔진 단독 2 턴 시험과 실제 SWE 런의 첫 step 으로 본다 |
+| 적대적 검토 | 2026-11-25 1 차 **보완 필요** — 고장 나도 통과하는 경로 4 개 (모든 요청이 같은 블록을 타 요청 간 뒤섞임이 안 보임 · R3 누락은 오류가 아니라 경고 + 조용한 대체 · 절대 기준 0.002 는 기준선 0.0006 의 3 배까지 통과시키고 앞부분 오차가 희석됨 · Ray 로그 합치기가 엔진별 적중률을 가림) + 작은 것 5 개 → 전부 반영. 2 차 **보완 필요 (판정기만)** — 음성 대조를 캐시 끔 기준선에 대어 채점 · 같은 조건 반복은 step 1 롤아웃이 비트 동일이라 표준오차 0 → NaN → 반영 (민감도는 `LA_on` 대비 · A/A 는 step 2·3 · step 1 은 토큰 동일성 보고 · `state_zero` 를 필수 음성 대조로). 실행기는 2 차에서 수정 사항 없음 |
+
 ## 커널·데이터 (K·D)
 
 | # | 게이트 | 도구 | 기준 | 결과 |
