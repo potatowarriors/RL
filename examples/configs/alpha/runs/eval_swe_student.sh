@@ -22,6 +22,7 @@ STUB_URL=${STUB_URL:-}; RAY_HEAD=${RAY_HEAD:-main1:6379}
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alpha/runs
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
 MODEL_CFG=${MODEL_CFG:-$HERE/alpha_vllm_model_swe_8k.yaml}
+PREFIX_CACHE=${PREFIX_CACHE:-0}
 PORTS="8000 8001 8002 8003 8004 8005 8006 8007"
 mkdir -p $D; LOG=$D/run.log
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
@@ -103,7 +104,7 @@ MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.main1; on_sub1 "python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.sub1; echo ok" > /dev/null
 [ -e $D/fuse_before.sub1 ] || { log "ABORT: sub1 의 FUSE 고아 목록을 적지 못했다 (ssh)"; exit 1; }
 ROWS=$(wc -l < $INPUT); FUSE0=$(fuse_orphans)
-log "armed: tag=$TAG gym_dir=$GYM ray=$RAY_HEAD model_cfg=$(basename $MODEL_CFG) ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
+log "armed: tag=$TAG gym_dir=$GYM ray=$RAY_HEAD model_cfg=$(basename $MODEL_CFG) prefix_cache=$PREFIX_CACHE ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
 
 if [ "$DRY" = 1 ]; then
   MODEL_URL=http://127.0.0.1:9/v1; log "DRY=1 — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL, 롤아웃은 모델 호출에서 실패한다)"
@@ -113,8 +114,9 @@ elif [ -n "$STUB_URL" ]; then
   log "STUB_URL — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL)"
 else
 MODEL_URL=http://127.0.0.1:8100/v1
-# 1. fleet — eval_lcb.sh 와 같은 플래그 (도구 파서 · 사고 파서 · 제약 디코딩 끔 · prefix cache 끔)
-export TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 VLLM_ENFORCE_STRICT_TOOL_CALLING=0 PREFIX_CACHE=0
+# 1. fleet — eval_lcb.sh 와 같은 플래그 (도구 파서 · 사고 파서 · 제약 디코딩 끔). prefix cache 는 기본 끔이고 PREFIX_CACHE=1 로 켠다
+#    (2026-11-25 — 켬/끔 대조 측정. GDN 상태 fp32 + 캐시는 Pai 게이트 `prefix_cache_check.py --block 1056` 를 통과한 뒤에만 켠다).
+export TOOLS=1 TOOL_PARSER=qwen3_xml REASONING_PARSER=nemotron_v3 VLLM_ENFORCE_STRICT_TOOL_CALLING=0 PREFIX_CACHE=$PREFIX_CACHE
 FLEET_UP=1
 GPUS=0,1,2,3,4,5,6,7 bash "$PAI/eval_sft/serve_fleet.sh" "$CK" "$MAXLEN" 8 8100 >> "$LOG" 2>&1
 ready=0
@@ -131,7 +133,10 @@ ident=0; for p in $PORTS; do curl -s -m 5 "http://127.0.0.1:$p/v1/models" | grep
 [ "$ident" -eq 8 ] || abort "모델 경로가 체크포인트와 다른 서버가 있다 ($ident/8 일치)"
 pident=0; for i in $(seq 1 16); do curl -s -m 5 "http://127.0.0.1:8100/v1/models" | grep -qF "$CK" && pident=$((pident+1)); done
 [ "$pident" -eq 16 ] || abort "프록시 :8100 응답의 모델 경로가 체크포인트와 다르다 ($pident/16 일치)"
-log "fleet ready: 8/8 · 모델 경로 일치 백엔드 8/8 · 프록시 16/16"
+# 캐시 설정이 요청대로 떴는지 서버 로그의 머리줄로 확인한다 (KNOWN_ISSUES 2026-11-08 — 기본값이 조용히 바뀐 적이 있다)
+pc=0; for p in $PORTS; do grep -a -m1 "^\[serve\] " /home/work/vidsearch/tools/fleet_logs/serve_$p.log 2>/dev/null | grep -q "prefix_cache=$PREFIX_CACHE" && pc=$((pc+1)); done
+[ "$pc" -eq 8 ] || abort "서버 로그의 prefix_cache 표지가 요청 ($PREFIX_CACHE) 과 다른 서버가 있다 ($pc/8 일치)"
+log "fleet ready: 8/8 · 모델 경로 일치 백엔드 8/8 · 프록시 16/16 · prefix_cache=$PREFIX_CACHE 8/8"
 fi
 
 # 2. Gym 서버. use_absolute_ip: 에이전트 컨테이너는 두 노드에 뜨고 (Ray SPREAD) 컨테이너 안에서 Gym 모델 서버를 부른다 —
