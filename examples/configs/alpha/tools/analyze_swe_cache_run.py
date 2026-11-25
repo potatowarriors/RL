@@ -33,11 +33,7 @@ P = os.environ.get("SWE_MEASURE_ROOT", "/home/work/vidsearch/tools/nemo_rl/p0_me
 MARK = re.compile(r"<tool_call>|</tool_call>|<function=|<parameter=|</function>")
 PORTS = list(range(8000, 8008))
 BLOCK = 1056
-# 편집 도구 (틀마다 이름이 다르다) 와 실패로 세는 결과 글머리. 실패 글머리는 nv-OpenHands 의 도구 구현이 내는 문구다.
-EDIT_TOOLS = {"str_replace_editor", "apply_patch", "edit", "write"}
-VIEW_ONLY = {"view"}   # str_replace_editor 의 읽기 명령은 편집이 아니다
-EDIT_FAIL = re.compile(r"^\s*(ERROR|Error|error)\b|No replacement was performed|did not appear verbatim|Invalid `?path|patch (failed|does not apply)|"
-                       r"Failed to (apply|edit|write)|oldString not found|old_string.{0,40}not found|must be different", re.S)
+NOT_COMMANDS = {"finish", "think", "update_plan", "todo_write"}   # 실행 · 편집이 아닌 도구 (세 틀 공통으로 뺀다)
 BANDS = [(1, 20), (21, 50), (51, 100), (101, 200)]
 
 
@@ -62,6 +58,41 @@ def text_len(x):
     if isinstance(x, list):
         return sum(len(c.get("text", "")) for c in x if isinstance(c, dict))
     return len(str(x or ""))
+
+
+def edit_result(name, args, res):
+    """편집 도구 호출 하나의 결과: "ok" · "fail" · "unknown" (아는 문구가 아니다) · None (편집 도구가 아니다).
+
+    틀마다 편집 도구와 결과 문구가 다르다 (nv-OpenHands 의 도구 구현, 2026-11-25 틀별 런에서 확인):
+    CodeAct `str_replace_editor` (create · str_replace · insert) 실패는 "ERROR" 로 시작 · Codex `apply_patch` 성공은
+    "Patch applied successfully", 실패는 "Errors (N):" · "Patch parse error" · OpenCode `edit` 성공은 "The file … has been edited",
+    실패는 "ERROR" · `write` 성공은 "File written successfully".
+    """
+    head = str(res or "").lstrip()[:300]
+    if name == "str_replace_editor":
+        if not isinstance(args, dict) or args.get("command") not in ("create", "str_replace", "insert"):
+            return None
+        return "fail" if head.startswith("ERROR") else "ok"
+    if name == "apply_patch":
+        return "ok" if head.startswith("Patch applied successfully") else "fail" if re.match(r"Errors? \(\d+\)|Patch parse error", head) else "unknown"
+    if name == "edit":
+        return "fail" if head.startswith("ERROR") else "ok" if re.match(r"The file \S.* has been edited", head, re.S) else "unknown"
+    if name == "write":
+        return "fail" if head.startswith("ERROR") else "ok" if head.startswith("File written successfully") else "unknown"
+    return None
+
+
+def edited_paths(name, args, res):
+    """성공한 편집이 건드린 파일 경로 (apply_patch 는 저장소 기준 상대 경로일 수 있다)."""
+    if not isinstance(args, dict):
+        return []
+    if name == "str_replace_editor":
+        return [str(args.get("path") or "")]
+    if name in ("edit", "write"):
+        return [str(args.get("file_path") or "")]
+    if name == "apply_patch":
+        return re.findall(r"^\*\*\* (?:Update|Add) File: (\S+)", str(args.get("input") or ""), flags=re.M)
+    return []
 
 
 def run_info(tag):
@@ -92,7 +123,7 @@ def load(tag):
         ic = r.get("instance_config") or {}
         out = (r.get("response") or {}).get("output") or []
         outs = {o.get("call_id"): o for o in out if o.get("type") == "function_call_output"}
-        turns, cur, n_user, edits, edit_fail, fail_heads = [], None, 0, 0, 0, []
+        turns, cur, n_user, edits, edit_fail, edit_unknown, fail_heads = [], None, 0, 0, 0, 0, []
         for o in out:
             ty = o.get("type")
             if ty == "function_call_output":
@@ -108,17 +139,19 @@ def load(tag):
                 turns.append(cur)
             if ty == "function_call":
                 cur["call"] += 1
-                if o.get("name") in EDIT_TOOLS and o.get("call_id") in outs:
+                if o.get("call_id") in outs:
                     try:
                         args = json.loads(o.get("arguments") or "{}")
                     except ValueError:
                         args = {}
-                    if not (o.get("name") == "str_replace_editor" and isinstance(args, dict) and args.get("command") in VIEW_ONLY):
-                        res = str(outs[o["call_id"]].get("output") or "")
+                    res = str(outs[o["call_id"]].get("output") or "")
+                    kind = edit_result(o.get("name"), args, res)
+                    if kind is not None:
                         edits += 1
-                        if EDIT_FAIL.search(res[:400]):
-                            edit_fail += 1
-                            fail_heads.append(" ".join(res.split())[:60])
+                        edit_fail += kind == "fail"
+                        edit_unknown += kind == "unknown"
+                        if kind != "ok":
+                            fail_heads.append(f"{o.get('name')}: " + " ".join(res.split())[:44])
             elif ty == "message":
                 c = o.get("content")
                 txt = " ".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else str(c or "")
@@ -135,7 +168,7 @@ def load(tag):
             connect_s=r.get("connect_to_runtime_time"), start=num(r.get("generation_start_timestamp")),
             turns=turns, n_user=n_user, tu=tu, same_prompt=sum(1 for a, b in zip(tu, tu[1:]) if a[0] == b[0]), pt_calls=len(tu),
             lat=[x.get("latency") for x in ptm.get("response_latencies") or [] if isinstance(x.get("latency"), (int, float))],
-            edits=edits, edit_fail=edit_fail, fail_heads=fail_heads))
+            edits=edits, edit_fail=edit_fail, edit_unknown=edit_unknown, fail_heads=fail_heads))
     return rows
 
 
@@ -183,10 +216,10 @@ def rollout_block(rows, title):
         print(f"      행동 ({nt:,} 턴): 도구 호출 있는 턴 {100 * sum(t['call'] > 0 for t in turns) / nt:.2f}% · 메시지만 있는 턴 {100 * sum(t['call'] == 0 and t['msg'] > 0 for t in turns) / nt:.2f}% · "
               f"도구 표기가 글에 남은 턴 {100 * sum(t['mark'] > 0 for t in turns) / nt:.3f}% · 추론 길이 중앙 {q([t['reason'] for t in turns], .5):.0f}자 · p90 {q([t['reason'] for t in turns], .9):.0f}자 · "
               f"같은 프롬프트 재호출 {sum(r['same_prompt'] for r in rows)}/{sum(r['pt_calls'] for r in rows)} (턴 기록이 있는 롤아웃만) · 에이전트 안내 메시지 {sum(r['n_user'] for r in rows)} 개")
-    ne, nf = sum(r["edits"] for r in rows), sum(r["edit_fail"] for r in rows)
+    ne, nf, nu = sum(r["edits"] for r in rows), sum(r["edit_fail"] for r in rows), sum(r["edit_unknown"] for r in rows)
     heads = collections.Counter(h for r in rows for h in r["fail_heads"]).most_common(3)
     errs = collections.Counter(r["err"] for r in rows if r["err"] != "None")
-    print(f"      편집 도구 호출 {ne} · 실패 {nf} ({100 * nf / ne if ne else float('nan'):.1f}%)" + (f" — 흔한 실패 글머리 {heads}" if heads else "")
+    print(f"      편집 도구 호출 {ne} · 실패 {nf} ({100 * nf / ne if ne else float('nan'):.1f}%)" + (f" · 분류 못 한 결과 {nu}" if nu else "") + (f" — 흔한 글머리 {heads}" if heads else "")
           + f" | agent_error_kind {dict(errs) if errs else '없음'}")
 
 

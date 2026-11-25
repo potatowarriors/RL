@@ -21,7 +21,8 @@ rows = [json.loads(l) for l in open(D + "rollouts.jsonl")]
 fails = [json.loads(l) for l in open(D + "rollouts_failures.jsonl")] if os.path.exists(D + "rollouts_failures.jsonl") else []
 env = open(D + "env_start.log", errors="replace").read() if os.path.exists(D + "env_start.log") else ""
 run_log = open(D + "run.log", errors="replace").read() if os.path.exists(D + "run.log") else ""
-EDIT_CMDS = {"create", "str_replace", "insert"}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # `python -I` 는 스크립트 디렉토리를 경로에 넣지 않는다
+from analyze_swe_cache_run import NOT_COMMANDS, edit_result, edited_paths  # noqa: E402  (세 틀의 도구 이름 · 결과 문구는 한 곳에 둔다)
 
 def wilson(k, n, z=1.96):
     if n == 0: return (float("nan"),) * 2
@@ -38,14 +39,15 @@ for r in rows:
     out = (r.get("response") or {}).get("output") or []
     calls = [o for o in out if o.get("type") == "function_call"]; outs = {o.get("call_id"): o for o in out if o.get("type") == "function_call_output"}
     msgs = [o for o in out if o.get("type") == "message"]
-    executed = [c for c in calls if c.get("call_id") in outs and c.get("name") in ("execute_bash", "str_replace_editor")]
+    executed = [c for c in calls if c.get("call_id") in outs and c.get("name") not in NOT_COMMANDS]   # 틀마다 도구 이름이 다르다 — 결과가 돌아온 호출을 센다
     edited = set()
     for c in calls:
-        if c.get("name") != "str_replace_editor" or c.get("call_id") not in outs: continue
+        if c.get("call_id") not in outs: continue
         try: args = json.loads(c.get("arguments") or "{}")
         except ValueError: continue
-        if args.get("command") in EDIT_CMDS and not str(outs[c["call_id"]].get("output") or "").lstrip().startswith("ERROR"):
-            edited.add(str(args.get("path") or ""))
+        res = outs[c["call_id"]].get("output")
+        if edit_result(c.get("name"), args, res) == "ok":
+            edited.update(edited_paths(c.get("name"), args, res))
     def text(o):
         c = o.get("content"); return c if isinstance(c, str) else " ".join(str(p.get("text", "")) for p in (c or []) if isinstance(p, dict))
     markup = sum(bool(re.search(r"<tool_call>|</tool_call>|<function=", text(o))) for o in msgs)
@@ -70,7 +72,7 @@ for r in rows:
         rej_model = sorted(f for f in bad if f in mp and f not in tp); rej_test = sorted(f for f in bad if f in tp)
         pre_existing = sorted(f for f in pre if f in mp)
     repo = "/" + (m.get("repo") or "/").split("/")[-1] + "/"
-    edited_rel = {p[len(repo):] for p in edited if p.startswith(repo)}
+    edited_rel = {p[len(repo):] for p in edited if p.startswith(repo)} | {p for p in edited if p and not p.startswith("/")}   # apply_patch 의 상대 경로는 저장소 기준이다
     recs.append(dict(iid=m["instance_id"], lang=d.get("language") or "?", cls=ic.get("resolved_agent_cls") or "?", reward=r.get("reward"), patch=bool(r.get("patch_exists")), mask=bool(ic.get("mask_sample")),
                      err=r.get("agent_error_kind"), agent_to=bool(r.get("agent_timed_out")), eval_to=bool(r.get("eval_timed_out")), oom=bool(r.get("oom_killed") or r.get("eval_oom_killed")),
                      n_model=sum(o.get("type") in ("reasoning", "function_call", "message") for o in out), n_calls=len(calls), n_exec=len(executed), markup=markup,
