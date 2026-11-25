@@ -8,6 +8,17 @@ pre-train·SFT·벤치 쪽 사고는 Pai `examples/alpha/docs/KNOWN_ISSUES.md` �
 
 2026-11-12 정리: **2026-10-07 이전 항목** (RL 준비 단계 — 스케줄러 재개 assert · HF 반출 토크나이저 · async_save · strict 도구 제약 디코딩 · batched tokens · 첫 턴 길이 · pidfd refit · R4 NaN · 장문맥 단편화 OOM · 턴 경계 · Gym 렌더 차이 · 엔진 동등성 · **GDN 재귀 상태 bf16** · zero-centered RMSNorm · **환경 원장 #1~#27**) 은 [`archive/KNOWN_ISSUES_2026-08_10-07.md`](archive/KNOWN_ISSUES_2026-08_10-07.md) 로 옮겼다.
 
+
+## 과제 컨테이너가 호스트 홈 · 리포 작업 트리에 쓴다 — sub1 홈 볼륨이 가득 차 sub1 롤아웃 전멸 (2026-11-25 발견, ⏳ 수정 승인 대기)
+
+- **증상**: 세 틀 혼합 가짜 모델 시험 `student_stubmix2` (CPU, 12 과제 × 3) 에서 main1 18/18 보상 1, **sub1 0/18** — 에이전트 초기 설정이 `bash: echo: write error: No space left on device` (`~/.bashrc` 에 덧붙이기) 로 실패, 결과에는 모델 호출 · 도구 호출이 0 으로 남고 오류 종류는 비어 있다.
+- **원인 (재현으로 확인 — 자명한 환경 원인이라 진단 절차에서 제외)**: Apptainer 는 실행 프로세스의 현재 디렉토리를 컨테이너에 붙인다. Gym 의 실행 옵션은 `--no-mount home,tmp,bind-paths` 로 `cwd` 가 빠져 있다. Ray 워커의 현재 디렉토리는 raylet 의 것이고, **sub1 raylet 은 `/home/work` (호스트 홈, 49 GB 루프 볼륨) · main1 raylet 은 이 리포 디렉토리**에서 떠 있다. 그래서 sub1 의 컨테이너는 호스트 홈을 `~` 로 보고 쓴다 — 같은 플래그로 `apptainer exec` 해 보면 main1 은 `~` 가 덧씌움 (16 G) 이고 sub1 은 `/dev/loop1 49G 100%` 다.
+- **쌓인 것**: sub1 `/home/work` 47.5 GB / 49 GB (여유 0) — `go` 19.1 GB · `.cache` 14.1 GB · `.npm` 6.0 GB · `.m2` 3.6 GB · `mne_data` 1.6 GB · `abagen-data` 1.4 GB 등 과제의 빌드 · 테스트 캐시. `~/.bashrc` 896 줄 중 883 줄이 에이전트 초기 설정이 덧붙인 줄 (`export SWE_INSTANCE_ID=…` · `PIP_CACHE_DIR` · `alias git`). main1 쪽은 리포 작업 트리가 쓰기 가능하게 보인다 (루트의 10 월 미추적 파일 `output*.txt` · `solution.txt` 등이 같은 경로로 생긴 것으로 보인다 — 미확인).
+- **영향**: ① 선별 `golden_ultra_c1` 의 통과율이 완료 순서 2,250 번째까지 94 ~ 96%, 그 뒤 90% → 80% → 75% — 뒤쪽 결과는 sub1 채점 실패가 섞였으므로 버리고 다시 채점한다 ② 11-25 오전 학생 측정 S2b 의 sub1 256 롤아웃은 호스트 홈이 보이는 채로 돌았다 (볼륨이 차기 전이라 동작은 했으나 캐시가 과제 사이에 공유됐다) ③ 모델이 만든 명령이 호스트 홈 · 리포에 닿을 수 있었다 (격리 구멍).
+- **왜 사전 점검이 못 잡았나**: 실행기의 기동 전 점검은 쓰기 공간 상한 · 포트 · GPU · 잔재만 본다. 노드의 홈 볼륨 여유와 raylet 의 현재 디렉토리는 보지 않았다. 판정 기준 3 (모델 도달) 은 사후에 50% 로 잡았다.
+- **수정안 (승인 대기)**: raylet 을 빈 전용 디렉토리에서 띄운다 (`runs/ray_cluster.sh`, 클러스터 재시작) + Gym 실행 옵션에 `cwd` 를 더한다 (`gym_patches/`) + sub1 홈의 컨테이너 잔재 삭제 · `.bashrc` 복구 + 실행기 기동 전 점검에 "두 노드의 raylet 현재 디렉토리 · 홈 볼륨 여유" 추가.
+- **선행 사례**: upstream Gym `swe_agents` 의 옵션은 `main` 에서도 `home,tmp,bind-paths` 다 (cwd 미포함, 확인 필요). Nemotron 레시피는 일회용 클러스터 전제라 드러나지 않는다.
+
 ## SWE 에이전트의 모델 호출이 422 로 거부된다 — Gym 0.6.0 이 그 Gym 이 고정한 OpenHands 와 세 곳에서 안 맞는다 (`aws_region_name` · 도구 결과 `name` · `defer_loading`) (2026-11-25, ✅ 결정 79 — upstream 수정 이식, 가짜 모델 시험 통과)
 
 - **증상**: `USER` 를 넘긴 뒤 (결정 77) GPU 없는 시험 `p0_measure/swe/student_dry3` (4 과제 · 두 노드) 에서 에이전트는 기동했다 (연결 11 ~ 17 s · 초기화 2 ~ 5 s · `GLOBAL STEP 0`). 그런데 4/4 가 첫 모델 호출에서 `ClientResponseError: 422, message='Unprocessable Content', url='http://10.0.42.2:<port>/v1/chat/completions'` 로 끝났다 (롤아웃 44 ~ 55 s, `agent_error_kind: other`, **마스킹되지 않은 보상 0**). 죽은 모델 포트에는 닿지도 않았다 (재시도 줄 0).
