@@ -3,7 +3,7 @@
 게이트 정의 · 기준의 출처 · 적대적 검토 결과는 docs/GATES.md "R1-L" 절. 런 디렉토리 규약은 $NRL_ROOT/gates/prefix_cache_*/run_l.sh 와 같다:
   <gate_dir>/gate_<run>.log · rc_<run> · <run>/exp_001/train_data_step{1,2,3}.jsonl
 
-  python judge_prefix_cache_gate.py <gate_dir>                 # R1-L 전체 판정 (종료 코드 0 = 모든 판정 통과)
+  python judge_prefix_cache_gate.py <gate_dir> --mode withB|noB   # R1-L 전체 판정 (종료 코드 0 = 필수 판정이 모두 있고 모두 통과)
   python judge_prefix_cache_gate.py --pair <dirA> <dirB>       # 두 런의 짝 비교만 (B − A). K 매트릭스 (R3 × 라우터 정밀도) 분석에도 쓴다
 
 통계 (두 차례 적대적 검토 반영, 실행 전에 고정):
@@ -198,6 +198,7 @@ def parse_log(path):
     return dict(
         kl=kl, kl_lines=len([l for l in lines if "Generation KL Error" in l]), hits=hits,
         flags=set(re.findall(r"enable_prefix_caching=(True|False)", txt)),
+        flag_lines=len(re.findall(r"enable_prefix_caching=(True|False)", txt)),
         align=len(re.findall(r"Mamba cache mode is set to 'align'", txt)),
         fallback=len(re.findall(r"R3 router replay fallback", txt)),
         fault_patched=len(re.findall(r"\[ALPHA_GATE_FAULT pid=\d+\] patched", txt)),
@@ -258,7 +259,8 @@ def judge_run(gate_dir, name, want_cache, want_r3, fault=None, block=1056, engin
     if fault is None:
         need(bool(L["kl"]) and all(v < KL_GATE for v in L["kl"]), f"KL < {KL_GATE} (R1 기준): {L['kl']}")
     if want_cache:
-        need(L["flags"] == {"True"} and L["align"] >= 1, f"엔진이 prefix caching 켬 · align 모드 (flags={sorted(L['flags'])}, align 줄 {L['align']})")
+        need(L["flags"] == {"True"} and L["flag_lines"] >= engines and L["align"] >= engines,
+             f"엔진 {engines} 개가 모두 prefix caching 켬 · align 모드 (flags={sorted(L['flags'])} · 표지 {L['flag_lines']} 줄 · align {L['align']} 줄)")
         exp = expected_hit_rate(steps, block, engines)
         for s in (1, 2, 3):
             by_pid = {}
@@ -271,7 +273,8 @@ def judge_run(gate_dir, name, want_cache, want_r3, fault=None, block=1056, engin
                  f"step {s} 적중률: 엔진 {len(by_pid)}/{engines} 개 · 최소 {min(by_pid.values()) if by_pid else float('nan'):.1f}% · 최대 {max(by_pid.values()) if by_pid else float('nan'):.1f}% "
                  f"(기대 {100 * lo:.1f}~{100 * hi:.1f}% · 한 블록 덜 적중하면 {100 * short:.1f}% · 문턱 {thr:.1f}%)")
     else:
-        need(L["flags"] == {"False"} and L["align"] == 0, f"엔진이 prefix caching 끔 (flags={sorted(L['flags'])}, align 줄 {L['align']})")
+        need(L["flags"] == {"False"} and L["flag_lines"] >= engines and L["align"] == 0,
+             f"엔진 {engines} 개가 모두 prefix caching 끔 (flags={sorted(L['flags'])} · 표지 {L['flag_lines']} 줄 · align {L['align']} 줄)")
         mx = max([r for _, _, r in L["hits"]], default=0.0)
         need(mx == 0.0, f"적중률 최대 {mx:.1f}% (0 이어야 한다)")
     if fault is None:
@@ -289,6 +292,7 @@ def main():
     ap.add_argument("--pair", nargs=2, metavar=("A", "B"))
     ap.add_argument("--block", type=int, default=1056)
     ap.add_argument("--engines", type=int, default=8)
+    ap.add_argument("--mode", choices=("withB", "noB"), help="전체 판정에 필수 — 실행기에 준 것과 같은 값. 필수 런이 빠지면 FAIL 이다")
     ap.add_argument("--json")
     args = ap.parse_args()
 
@@ -301,6 +305,8 @@ def main():
         return 0
 
     G = args.gate_dir
+    if not G or not args.mode:
+        ap.error("전체 판정에는 <gate_dir> 와 --mode withB|noB 가 필요하다")
     plan = [  # 이름, 캐시, R3, 결함
         ("LA_off", False, True, None), ("LA_on", True, True, None), ("LA_off2", False, True, None),
         ("LB_off", False, False, None), ("LB_on", True, False, None),
@@ -329,14 +335,18 @@ def main():
         report[label] = {k: dict(zip(("mean", "se", "z", "n"), v)) for k, v in res.items()}
         return res
 
-    def identity(label, a, b):
+    def identity(label, a, b, enforce=False):
+        """enforce=True 면 step 1 생성 토큰이 전부 같아야 한다 — 다르면 b 런을 무효로 한다 (엔진 계산이 달라졌거나 하네스가 결정적이지 않다)."""
         t = token_identity(raw[a], raw[b]) if a in raw and b in raw else None
         print(fmt_identity(label, t))
         report["identity " + label] = t
+        if enforce and t is not None and t["identical"] != t["n"]:
+            valid[b] = False
+            print(f"    FAIL {b}: step 1 토큰이 {a} 와 같아야 하는데 {t['identical']}/{t['n']} — {b} 무효")
         return t
 
     print("\n== 같은 조건 반복 (A/A) — 보정 확인 ==")
-    identity("LA_off2 대 LA_off", "LA_off", "LA_off2")
+    identity("LA_off2 대 LA_off (같은 설정 — step 1 토큰이 전부 같아야 한다)", "LA_off", "LA_off2", enforce=True)
     aa = compare("LA_off2 − LA_off, step 2·3 (세 통계 모두 |z| < 2.33 이어야 한다)", "LA_off", "LA_off2", only_steps=(2, 3))
     if aa is not None:
         verdict["A/A 보정"] = valid["LA_off"] and valid["LA_off2"] and all(math.isfinite(aa[k][2]) and abs(aa[k][2]) < Z_CRIT for k in PASS_STATS)
@@ -353,7 +363,7 @@ def main():
     print("\n== 음성 대조 (일부러 넣은 결함 — 여기서는 잡혀야 게이트가 그 결함을 본다; 민감도는 LA_on 대비) ==")
     for name, what, must in (("NC_zero", "복원 상태를 0 으로", True), ("NC_shift", "접두사 3,168 토큰의 expert 번호 +1", True), ("NC_state", "복원 상태 × 1.01 — 검출 한계 참고", False)):
         if name == "NC_shift":
-            identity("NC_shift 대 LA_on (엔진 계산은 같아야 한다)", "LA_on", "NC_shift")
+            identity("NC_shift 대 LA_on (엔진 계산은 같아야 한다)", "LA_on", "NC_shift", enforce=True)
         res = compare(f"{name} ({what}) − LA_on", "LA_on", name)
         compare(f"   (참고) {name} − LA_off", "LA_off", name)
         if res is not None:
@@ -362,17 +372,26 @@ def main():
             if must:
                 verdict[f"음성 대조 {name} 가 잡힘"] = hit
     if logs.get("NC_trunc"):
-        identity("NC_trunc 대 LA_on (엔진 계산은 같아야 한다)", "LA_on", "NC_trunc")
+        identity("NC_trunc 대 LA_on (엔진 계산은 같아야 한다)", "LA_on", "NC_trunc", enforce=True)
         hit = valid["NC_trunc"] and logs["NC_trunc"]["fallback"] >= 1
         print(f"  NC_trunc (경로 행 끝 8 개 누락): R3 경로 누락 경고 {logs['NC_trunc']['fallback']} 줄 → {'잡힘' if hit else '못 잡음'}")
         verdict["음성 대조 NC_trunc 가 잡힘"] = hit
 
-    print("\n== 판정 ==")
+    required = ["A/A 보정", "A (R3 유지 + 캐시 켬)", "음성 대조 NC_zero 가 잡힘", "음성 대조 NC_shift 가 잡힘", "음성 대조 NC_trunc 가 잡힘"]
+    if args.mode == "withB":
+        required.insert(2, "B (R3 끔 · 라우터 fp32 + 캐시 켬)")
+    print(f"\n== 판정 (mode={args.mode}; 필수 항목이 빠지면 FAIL) ==")
+    final = {}
+    for k in required:
+        final[k] = bool(verdict.get(k, False))
+        print(f"  {'PASS' if final[k] else 'FAIL'}  {k}{'' if k in verdict else ' — 미실행 · 판정 불가'}")
     for k, v in verdict.items():
-        print(f"  {'PASS' if v else 'FAIL'}  {k}")
+        if k not in final:
+            print(f"  (참고) {'PASS' if v else 'FAIL'}  {k}")
+    print("  PASS 의 뜻: 캐시 켬이 위 MDE 보다 큰 차이를 내지 않는다. 음성 대조로 확인한 검출력은 '복원 상태 0' · 'expert 번호 밀기' 수준이고, × 1.01 결과 (NC_state) 는 위 참고 줄을 본다.")
     if args.json:
-        json.dump(dict(valid=valid, verdict=verdict, report=report), open(args.json, "w"), ensure_ascii=False, indent=1, default=str)
-    return 0 if verdict and all(verdict.values()) else 1
+        json.dump(dict(mode=args.mode, valid=valid, verdict=final, all=verdict, report=report), open(args.json, "w"), ensure_ascii=False, indent=1, default=str)
+    return 0 if all(final.values()) else 1
 
 
 if __name__ == "__main__":
