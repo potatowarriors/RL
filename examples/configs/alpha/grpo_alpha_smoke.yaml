@@ -1,6 +1,6 @@
 # grpo_alpha_smoke.yaml — alpha 1 노드 8-GPU GRPO 드라이런 + Generation KL 게이트 (README "레시피" 표 1행)
 #
-# 게이트: step 1·2·3 의 `Generation KL Error` < 0.002 (rollout vLLM vs 학습 mcore 의 토큰 logprob 정합).
+# 게이트: step 1·2·3 의 `Generation KL Error` < 0.001 (2026-11-25 결정 80, 이전 0.002 — `docs/GATES.md` R1) (rollout vLLM vs 학습 mcore 의 토큰 logprob 정합).
 # step 1 은 갱신 전 가중치라 옵티마이저와 무관하고, step 2·3 은 갱신 후 refit 경로까지 본다.
 #
 # 실행 (Pai 컨테이너 공존 환경, NEMO_RL_SETUP.md §4.6):
