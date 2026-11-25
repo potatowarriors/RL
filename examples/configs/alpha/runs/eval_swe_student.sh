@@ -4,7 +4,7 @@
 #   (teacher_swe_e2e_alpha.yaml) 와 같다: 200 턴 · 1,800 s · 턴당 8,192 · CodeAct 프롬프트 (이 Gym 의 학습 설정 기본값).
 #   모델은 Pai fleet (main1 GPU 8, 벤치와 같은 서빙) 이다 — 학습 때의 NeMo-RL vLLM 워커가 아니다. 토큰 ID · logprob · refit 은 이 측정이 보지 않는다.
 #   eval_swe_student.sh <tag> <hf_ckpt> <input.jsonl> [concurrency=128] [repeats=1]
-#   환경변수: TURNS (200) · AGENT_TIMEOUT (1800) · MEM_MB (32768) · MAXLEN (131072) · MEM_STOP_GIB (1400, 노드 메모리가 넘으면 중단)
+#   환경변수: TURNS (200) · AGENT_TIMEOUT (1800) · MEM_MB (32768) · MAXLEN (131072) · MEM_STOP_GIB (1400, 노드의 anon + shmem 이 넘으면 중단 — 페이지 캐시는 세지 않는다)
 #            GYM (기본 /home/work/vidsearch/tools/Gym) · MODEL_CFG (기본 alpha_vllm_model_swe_8k.yaml) — 다른 Gym 체크아웃 · 모델 서버 설정으로 돌릴 때
 #            STUB_URL=http://127.0.0.1:<포트>/v1 — fleet 대신 이미 떠 있는 모델 주소를 쓴다 (가짜 모델 서버로 고리 전체를 CPU 에서 도는 시험)
 #            RAY_HEAD (기본 main1:6379) — `local` 이면 클러스터에 붙지 않고 Gym 이 띄우는 로컬 Ray 를 쓴다 (Gym 과 클러스터의 Ray 버전이 다를 때.
@@ -209,14 +209,15 @@ t0=$(date +%s)
 timeout $BUDGET gym eval run --no-serve --input $INPUT --output $D/rollouts.jsonl --num-repeats $REPEATS --concurrency $CONC ++use_absolute_ip=true > $D/eval_run.log 2>&1 < /dev/null &
 EVAL_PID=$!
 
-# 4. 노드 표본 (15 초): 세션 cgroup 의 shmem (컨테이너 쓰기 공간은 tmpfs 라 여기에 잡힌다) · 전체 (GiB) · load. 전체가 한도를 넘으면 롤아웃을 내린다.
-( m='echo "$(awk "/^shmem /{printf \"%.2f\", \$2/2^30}" /sys/fs/cgroup/memory.stat) $(awk "{printf \"%.1f\", \$1/2^30}" /sys/fs/cgroup/memory.current) $(cut -d" " -f1 /proc/loadavg)"'
-  echo -e "time\tmain1_shmem main1_total main1_load\tsub1_shmem sub1_total sub1_load" > $D/node_samples.tsv
+# 4. 노드 표본 (15 초): 세션 cgroup 의 shmem (컨테이너 쓰기 공간은 tmpfs 라 여기에 잡힌다) · anon · 전체 (GiB) · load.
+#    중단 기준은 anon + shmem 이다 — 전체 (memory.current) 는 되돌려 받을 수 있는 페이지 캐시 (모델 가중치 · SIF) 를 포함해 부풀어 보인다.
+( m='awk "/^shmem /{s=\$2} /^anon /{a=\$2} END{printf \"%.2f %.1f \", s/2^30, a/2^30}" /sys/fs/cgroup/memory.stat; echo "$(awk "{printf \"%.1f\", \$1/2^30}" /sys/fs/cgroup/memory.current) $(cut -d" " -f1 /proc/loadavg)"'
+  echo -e "time\tmain1_shmem main1_anon main1_total main1_load\tsub1_shmem sub1_anon sub1_total sub1_load" > $D/node_samples.tsv
   while kill -0 $EVAL_PID 2>/dev/null; do
     a=$(bash -c "$m"); b=$(on_sub1 "$m")
-    echo -e "$(date '+%T')\t$a\t${b:-? ? ?}" >> $D/node_samples.tsv
-    for tot in $(echo "$a" | awk '{print $2}') $(echo "${b:-0 0 0}" | awk '{print $2}'); do
-      if [ "${tot%.*}" -ge "$MEM_STOP_GIB" ] 2>/dev/null; then echo "$(date '+%T') total ${tot} GiB >= $MEM_STOP_GIB" > $D/MEM_STOP; kill $EVAL_PID 2>/dev/null; fi
+    echo -e "$(date '+%T')\t$a\t${b:-? ? ? ?}" >> $D/node_samples.tsv
+    for used in $(echo "$a" | awk '{printf "%d", $1+$2}') $(echo "${b:-0 0 0 0}" | awk '{printf "%d", $1+$2}'); do
+      if [ "$used" -ge "$MEM_STOP_GIB" ] 2>/dev/null; then echo "$(date '+%T') anon+shmem ${used} GiB >= $MEM_STOP_GIB" > $D/MEM_STOP; kill $EVAL_PID 2>/dev/null; fi
     done
     sleep 15
   done ) &
