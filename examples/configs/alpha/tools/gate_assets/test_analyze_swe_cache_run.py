@@ -26,8 +26,11 @@ NAMES = ["vllm:num_requests_running", "vllm:num_requests_waiting", "vllm:kv_cach
 def rollouts(n=8, records=8, late=0):
     """n rollouts of 60 calls whose prompt grows by 400 tokens a call; only the first `records` keep per-turn records.
 
-    `late` > 0 starts half of them `late` seconds after the others, which makes a full-load window of that length.
+    `late` > 0 makes a loaded run: 160 rollouts of 1,500 s, half of them starting `late` seconds after the others, so at
+    least 64 are in progress from the start until `late` + 1,500 s (the full-load window of the tool).
     """
+    if late:
+        n = records = 160
     iso = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat()
     rows, total = [], 0
     for i in range(n):
@@ -38,7 +41,7 @@ def rollouts(n=8, records=8, late=0):
             out += [{"type": "reasoning", "summary": [{"text": "think"}]}, {"type": "function_call", "name": "execute_bash", "call_id": "c"},
                     {"type": "function_call_output", "call_id": "c", "output": "ok"}]
         rows.append(dict(responses_create_params=dict(metadata=dict(instance_id=f"task-{i}")), instance_config=dict(resolved_agent_cls="CodeActAgent"),
-                         reward=0.0, agent_timed_out=False, openhands_run_time=600.0, total_model_call_time=60.0, total_command_exec_time=100.0,
+                         reward=0.0, agent_timed_out=False, openhands_run_time=1500.0 if late else 600.0, total_model_call_time=60.0, total_command_exec_time=100.0,
                          connect_to_runtime_time=5.0, generation_start_timestamp=iso(T0 + (late if i % 2 else 0)), response=dict(output=out),
                          per_turn_metrics=dict(token_usages=tu if i < records else [], response_latencies=[{"latency": 1.0}] * 60)))
     return rows, total
@@ -78,7 +81,7 @@ def write(tag, sample, hit=None, cache="1", run_log=True, t0=T0, t1=T0 + (NS - 1
                 h = o.get("hit", hit(p) if callable(hit) else hit)
                 vals = {"vllm:num_requests_running": o.get("running", 2), "vllm:num_requests_waiting": o.get("waiting", 0),
                         "vllm:prompt_tokens_total": total / 8 * frac, "vllm:prompt_tokens_cached_total": h * total / 8 * frac,
-                        "vllm:generation_tokens_total": 9000 * 60 * frac, "vllm:e2e_request_latency_seconds_count": 100 * frac,
+                        "vllm:generation_tokens_total": 150 * 60 * len(rows) / 8 * frac, "vllm:e2e_request_latency_seconds_count": 100 * frac,
                         "vllm:e2e_request_latency_seconds_sum": 100 * frac}
                 for n in NAMES:
                     f.write(f"{T0 + k * DT}\t{p}\t{n}\t{float(vals.get(n, 0.0))}\n")
@@ -120,10 +123,15 @@ case("hit_above_prediction", 3, "진단 필요", lin, hit=0.999)
 case("prediction_covers_half", 3, "참고만", lin, records=4)
 # the other seven engines carry the whole run (the rollouts' tokens and the engines' tokens are the same tokens)
 case("idle_engine", 0, "요청을 받지 않은 엔진 [8003]", lambda p, k: {"frac": 0.0, "running": 0} if p == 8003 else {"frac": k / (NS - 1) * 8 / 7})
-# full-load window (half of the rollouts start 1,600 s later): counters are judged without the running / waiting gauges
-case("idle_then_stalled_in_full_load", 2, "만부하 구간에서 누계가", lambda p, k: {"frac": min(k, 8) / (NS - 1), "running": 0, "waiting": 0} if p == 8003 else lin(p, k), late=1600)
-case("slow_engine_in_full_load", 2, "느린 엔진", lambda p, k: {"frac": (min(k, 5) + 0.1 * max(0, min(k, 25) - 5) + max(0, k - 25)) / (NS - 1)} if p == 8003 else lin(p, k), late=1600)
-case("engine_idle_after_last_start", 0, "통과", lambda p, k: {"frac": min(k, 30) / 30, "running": 0} if p == 8003 else lin(p, k), late=1600)
+# loaded run (160 rollouts, at least 64 in progress until 600 + 1,500 s = sample 33): counters are judged without the gauges
+frozen = lambda k0: (lambda p, k: {"frac": min(k, k0) / (NS - 1), "running": 0, "waiting": 0} if p == 8003 else lin(p, k))
+case("loaded_healthy", 0, "에서 엔진별 누계 진행을 확인했다", lin, late=600)
+case("idle_then_stalled_in_full_load", 2, "8003: 정지 의심 — 만부하 구간", frozen(8), late=600)
+case("stalled_after_the_last_rollout_started", 2, "8003: 정지 의심 — 만부하 구간", frozen(18), late=600)
+case("slow_engine_in_full_load", 2, "느린 엔진", lambda p, k: {"frac": (min(k, 5) + 0.1 * max(0, min(k, 25) - 5) + max(0, k - 25)) / (NS - 1)} if p == 8003 else lin(p, k), late=600)
+case("engine_idle_after_the_load_dropped", 0, "통과", lambda p, k: {"frac": min(k, 35) / 35, "running": 0} if p == 8003 else lin(p, k), late=600)
+# five engines (or the harness) stop together for about 500 s with their gauges at zero, then go on
+case("fleet_wide_stall", 2, "fleet 정지 의심", lambda p, k: {"frac": (min(k, 12) + max(0, k - 20)) / (NS - 9), "running": 0 if 12 <= k < 20 else 2} if p >= 8003 else lin(p, k), late=600)
 case("cache_off", 0, "해당 없음", lin, hit=0.0, cache="0")
 case("cache_off_but_cached", 2, "캐시 끔으로 기록된 런인데", lin, hit=0.5, cache="0")
 

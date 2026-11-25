@@ -6,9 +6,10 @@
   1. 엔진: 적중률 = Δprompt_tokens_cached / Δprompt_tokens (요청당 한 번 세는 누계). 계산한 prefill 토큰 = Δprompt − Δcached.
      - 수집 구간이 런 (Gym 서버 준비 ~ eval 종료) 을 덮지 않으면 엔진 수치 전체가 무효다 (수집기가 도중에 끝나면 앞부분만 남는다).
      - 정지 = 대기 · 실행 요청이 있는데 생성 · 프롬프트 누계가 120 초 넘게 그대로, 또는 /metrics 무응답 구간에 누계가 평소 속도의 1/4 도
-       늘지 않음, 또는 그 포트의 표본이 먼저 끊김. 여기에 **만부하 구간** (런 시작 ~ 마지막 롤아웃이 시작한 시각: 동시 수만큼 롤아웃이 늘
-       돌고 있어 모든 엔진에 세션이 있다) 에서는 게이지와 무관하게 본다 — 한 엔진의 누계가 300 초 넘게 그대로이거나 (유휴 직후 멈추면
-       게이지가 0 으로 굳는다), 생성 속도가 엔진 중앙값의 1/4 미만으로 600 초 넘게 이어지면 정지 · 느린 엔진이다.
+       늘지 않음, 또는 그 포트의 표본이 먼저 끊김. 여기에 **만부하 구간** (진행 중인 롤아웃이 64 개 이상인 시간대 — 롤아웃의 시작 시각과
+       실행 시간으로 센다. 모든 엔진에 세션이 있다) 에서는 게이지와 무관하게 본다 — 한 엔진의 누계가 300 초 넘게 그대로이거나 (유휴 직후
+       멈추면 게이지가 0 으로 굳는다), 생성 속도가 엔진 중앙값의 1/4 미만으로 600 초 넘게 이어지면 정지 · 느린 엔진이고, 첫 생성 뒤에
+       엔진 중앙값이 300 초 넘게 0 이면 fleet 전체의 정지다 (Gym 쪽이 멈춰도 이렇게 보인다).
        정지 · 느린 엔진 · 재기동 · 사라진 엔진이 있으면 속도 수치는 무효이고 종료 코드는 2 다.
      - 세션 고정 · 접두사 성질은 직접 볼 수 없다. **그 런 자신의 롤아웃 기록으로 낸 예측 적중률** 과 견준다: 턴별 (프롬프트, 생성) 토큰에서
        P_lo = 직전 프롬프트의 마지막 블록 경계까지 재사용 · P_hi = 직전 생성까지 재사용 (블록 1,056, 적중은 블록 경계에서 끝나고 1 토큰 이상
@@ -41,6 +42,7 @@ PORTS = list(range(8000, 8008))
 BLOCK = 1056
 NOT_COMMANDS = {"finish", "think", "update_plan", "todo_write"}   # 실행 · 편집이 아닌 도구 (세 틀 공통으로 뺀다)
 BANDS = [(1, 20), (21, 50), (51, 100), (101, 200)]
+FULL_LOAD = 64   # 진행 중인 롤아웃이 이만큼이면 세션 해시로 엔진 8 개 중 하나가 비어 있을 확률이 (7/8)^64 ≈ 2e-4 다
 
 
 def q(v, p):
@@ -324,36 +326,44 @@ def engine_block(tag, rows, info):
             tot_p += dp
             tot_c += dc
             tot_g += dg
-    # 만부하 구간: 런 시작 ~ 마지막 롤아웃이 시작한 시각. 이 구간에는 모든 엔진에 세션이 있어야 하므로 게이지를 믿지 않고 누계만 본다.
-    starts = [r["start"] for r in rows if isinstance(r["start"], (int, float))]
-    w0, w1 = (info["t0"] if info["t0"] is not None else first_all), (max(starts) if starts else None)
-    if w1 is not None and w1 - w0 > 600:
+    # 만부하 구간: 진행 중인 롤아웃이 FULL_LOAD 개 이상인 시간대. 이 구간에는 모든 엔진에 세션이 있어야 하므로 게이지를 믿지 않고 누계만 본다.
+    spans = [(r["start"], r["start"] + max(r["run_s"], 0.0)) for r in rows if isinstance(r["start"], (int, float))]
+    loaded = [ts for ts in all_ts if sum(1 for a_, b_ in spans if a_ <= ts <= b_) >= FULL_LOAD]
+    if loaded and loaded[-1] - loaded[0] > 600:
+        w0, w1 = loaded[0], loaded[-1]
         grid = [ts for ts in all_ts if w0 <= ts <= w1]
         val = {port: (dict(S[port].get("vllm:generation_tokens_total") or []), dict(S[port].get("vllm:prompt_tokens_total") or [])) for port in S}
         flat_run, slow_run = collections.Counter(), collections.Counter()
         flat_cur, slow_cur = collections.Counter(), collections.Counter()
+        seen_gen, zero_cur, zero_run = False, 0, 0
         for ta, tb in zip(grid, grid[1:]):
             rate = {}
             for port, (g, pr) in val.items():
                 if ta in g and tb in g and tb > ta:
                     rate[port] = ((g[tb] - g[ta]) / (tb - ta), pr.get(tb, 0) - pr.get(ta, 0))
-            med = sorted(v[0] for v in rate.values())[len(rate) // 2] if rate else 0.0
+            if not rate:                # 어느 엔진에도 표본이 없는 구간은 위의 무응답 규칙이 본다
+                continue
+            med = sorted(v[0] for v in rate.values())[len(rate) // 2]
+            seen_gen = seen_gen or med > 0
+            zero_cur = zero_cur + (tb - ta) if (seen_gen and med == 0) else 0   # 엔진 절반 이상이 함께 멈춘 경우 (중앙값이 0 이라 아래 두 규칙이 못 본다)
+            zero_run = max(zero_run, zero_cur)
             for port in val:
-                if port not in rate:        # 표본이 없는 구간은 위의 무응답 규칙이 본다
-                    flat_cur[port] = slow_cur[port] = 0
+                if port not in rate:        # 이 엔진만 표본이 빠진 구간: 이어 가던 구간을 끊지 않는다
                     continue
                 gr, dpr = rate[port]
                 flat_cur[port] = flat_cur[port] + (tb - ta) if (gr == 0 and dpr == 0 and med > 0) else 0
                 slow_cur[port] = slow_cur[port] + (tb - ta) if (med > 0 and gr < 0.25 * med) else 0
                 flat_run[port], slow_run[port] = max(flat_run[port], flat_cur[port]), max(slow_run[port], slow_cur[port])
+        if zero_run > 300:
+            problems.append(f"fleet 정지 의심 — 만부하 구간에서 엔진 절반 이상의 생성이 {zero_run}s 동안 멈췄다 (엔진 또는 Gym 쪽)")
         for port in sorted(val):
             if flat_run[port] > 300:
                 problems.append(f"{port}: 정지 의심 — 만부하 구간에서 누계가 {flat_run[port]}s 동안 그대로다 (다른 엔진은 진행)")
             elif slow_run[port] > 600:
                 problems.append(f"{port}: 느린 엔진 — 만부하 구간에서 생성 속도가 엔진 중앙값의 1/4 미만으로 {slow_run[port]}s 이어졌다")
-        print(f"  만부하 구간 {w1 - w0:.0f}s (런 시작 ~ 마지막 롤아웃 시작) 에서 엔진별 누계 진행을 확인했다")
+        print(f"  만부하 구간 {w1 - w0:.0f}s (진행 중인 롤아웃 {FULL_LOAD} 개 이상) 에서 엔진별 누계 진행을 확인했다")
     else:
-        print("  만부하 구간이 600s 미만이다 (롤아웃이 한꺼번에 시작한 소량 런) — 게이지에 기대지 않는 정지 · 느린 엔진 검사는 하지 않았다")
+        print(f"  만부하 구간 (진행 중인 롤아웃 {FULL_LOAD} 개 이상) 이 600s 미만이다 — 게이지에 기대지 않는 정지 · 느린 엔진 검사는 하지 않았다 (소량 런)")
     H = tot_c / tot_p if tot_p else float("nan")
     dur = max(last_all - first_all, 1)
     span = info["seconds"] or dur        # 처리량의 분모는 eval 구간이다 (수집은 그보다 조금 넓다 — 그 바깥에는 요청이 없다)
