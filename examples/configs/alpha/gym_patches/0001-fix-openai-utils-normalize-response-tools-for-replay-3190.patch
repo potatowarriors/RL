@@ -1,0 +1,135 @@
+From 7bfccecc1bbd7c51c6e8f3b3ae4c5796fe66a0c7 Mon Sep 17 00:00:00 2001
+From: Jeremi Piotrowski <jeremi.piotrowski@gmail.com>
+Date: Wed, 9 Sep 2026 22:15:54 +0200
+Subject: [PATCH] fix(openai-utils): normalize response tools for replay
+ (#3190)
+
+## Problem
+
+OpenAI response tool models serialize `defer_loading` as `null` when the
+provider omits it. Replaying `FunctionTool.model_dump()` through
+`NeMoGymResponseCreateParamsNonStreaming` then fails strict request
+validation because the request schema accepts only a boolean. This
+regressed when #2839 removed the SWE-local conversion.
+
+Using `exclude_none=True` is too broad: it also removes nullable fields
+such as `strict`, whose key is required by the request schema.
+
+## Fix
+
+Normalize response tools at the existing response-to-request schema
+boundary. Convert only `defer_loading: null` to `false`, and preserve
+all other fields.
+
+## Tests
+
+- `uv run ruff check nemo_gym/openai_utils.py
+tests/unit_tests/test_openai_utils.py`
+- `uv run ruff format --check nemo_gym/openai_utils.py
+tests/unit_tests/test_openai_utils.py`
+- `uv run pytest tests/unit_tests/test_openai_utils.py` (188 passed)
+- `uv run pytest tests/unit_tests/test_responses_converter.py` (133
+passed)
+
+---------
+
+Signed-off-by: Jeremi Piotrowski <jpiotrowski@nvidia.com>
+Signed-off-by: yaoyu-33 <yaoyu.094@gmail.com>
+Co-authored-by: yaoyu-33 <yaoyu.094@gmail.com>
+---
+ nemo_gym/openai_utils.py              | 28 ++++++++++++++++++++++-----
+ tests/unit_tests/test_openai_utils.py | 16 +++++++++++++++
+ 2 files changed, 39 insertions(+), 5 deletions(-)
+
+diff --git a/nemo_gym/openai_utils.py b/nemo_gym/openai_utils.py
+index a41d4d375..aeb78ca6e 100644
+--- a/nemo_gym/openai_utils.py
++++ b/nemo_gym/openai_utils.py
+@@ -600,8 +600,8 @@ NeMoGymResponseInputItem = Annotated[
+ NeMoGymResponseInput: TypeAlias = List[NeMoGymResponseInputItem]
+ 
+ 
+-def _normalize_response_item_for_input(item: Any) -> Any:
+-    """Convert a provider output item to the request input schema."""
++def _normalize_output_item_for_replay(item: Any) -> Any:
++    """Convert a provider output item for request replay."""
+     if isinstance(item, BaseModel):
+         item = item.model_dump(exclude_unset=True)
+     if not isinstance(item, dict):
+@@ -617,6 +617,18 @@ def _normalize_response_item_for_input(item: Any) -> Any:
+     return item
+ 
+ 
++def _normalize_tool_for_replay(tool: Any) -> Any:
++    """Convert a provider response tool for request replay."""
++    if isinstance(tool, BaseModel):
++        tool = tool.model_dump()
++    if not isinstance(tool, dict) or "defer_loading" not in tool or tool["defer_loading"] is not None:
++        return tool
++
++    tool = tool.copy()
++    tool["defer_loading"] = False
++    return tool
++
++
+ class NeMoGymResponseCreateParamsNonStreaming(BaseModel):
+     """
+     This class is a copy of openai.types.responses.response_create_params.ResponseCreateParamsNonStreaming
+@@ -629,11 +641,17 @@ class NeMoGymResponseCreateParamsNonStreaming(BaseModel):
+     @model_validator(mode="before")
+     @classmethod
+     def normalize_output_items_for_replay(cls, value: Any) -> Any:
+-        """Normalize fields whose OpenAI output and input schemas differ."""
+-        if not isinstance(value, dict) or not isinstance(value.get("input"), list):
++        """Normalize response-derived fields before request validation.
++
++        The method name is retained for compatibility; replayed tools are normalized too.
++        """
++        if not isinstance(value, dict):
+             return value
+         value = value.copy()
+-        value["input"] = [_normalize_response_item_for_input(item) for item in value["input"]]
++        if isinstance(value.get("input"), list):
++            value["input"] = [_normalize_output_item_for_replay(item) for item in value["input"]]
++        if isinstance(value.get("tools"), list):
++            value["tools"] = [_normalize_tool_for_replay(tool) for tool in value["tools"]]
+         return value
+ 
+     background: Optional[bool] = None
+diff --git a/tests/unit_tests/test_openai_utils.py b/tests/unit_tests/test_openai_utils.py
+index 24c273473..90b991090 100644
+--- a/tests/unit_tests/test_openai_utils.py
++++ b/tests/unit_tests/test_openai_utils.py
+@@ -34,6 +34,7 @@ import pytest
+ from openai.types.chat.completion_create_params import CompletionCreateParamsNonStreaming
+ from openai.types.responses import (
+     EasyInputMessage,
++    FunctionTool,
+     ResponseCodeInterpreterToolCall,
+     ResponseComputerToolCall,
+     ResponseCustomToolCall,
+@@ -156,6 +157,21 @@ class TestNeMoGymResponseCreateParamsNonStreaming:
+         with pytest.raises(ValidationError):
+             NeMoGymResponseCreateParamsNonStreaming(input="hello", not_a_real_field=1)
+ 
++    def test_response_tool_null_defer_loading_normalized_for_replay(self) -> None:
++        response_tool = FunctionTool(
++            name="get_weather",
++            parameters={"type": "object", "properties": {}},
++            strict=None,
++            type="function",
++        )
++        response_tool_dump = response_tool.model_dump()
++        assert response_tool_dump["defer_loading"] is None
++
++        replay = NeMoGymResponseCreateParamsNonStreaming(input="hello", tools=[response_tool_dump])
++
++        assert replay.tools[0]["defer_loading"] is False
++        assert replay.tools[0]["strict"] is None
++
+     @pytest.mark.parametrize(
+         "role",
+         ["unknown", "user", "assistant", "system", "critic", "discriminator", "developer", "tool"],
+-- 
+2.43.0
+

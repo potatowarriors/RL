@@ -16,6 +16,9 @@ paths:
   브리지 수정 중에는 레시피에 `megatron_cfg.force_reconvert_from_hf: true` 를 두고(변환 캐시에 버전 검사 없음),
   끝나면 `docs/GATES.md` 게이트 1~3 을 재실행한다.
 - **Gym** (`3rdparty/Gym-workspace/Gym`): **v0.6.0 `3045a793` 고정** (사용자 결정 2026-09-15, 머지 `0fcf0d88b` 2026-10-06).
+  필요한 upstream 수정은 포인터를 올리지 않고 **`examples/configs/alpha/gym_patches/` 의 패치 파일**로 얹는다 (결정 79, 2026-11-25) —
+  `tools/apply_gym_patches.sh` 가 서브모듈과 측정용 체크아웃 `/home/work/vidsearch/tools/Gym` 에 적용 · 확인한다. 서브모듈 안에서 커밋하지 않는다.
+  2026-09-28 이후의 Gym 은 vLLM 0.29 짝이라 우리 잠금 파일에서 풀리지 않는다 (`gym_patches/README.md`).
   버전을 올리려면 먼저 제안 보고 후 승인을 받는다.
 - **vLLM**: fork 를 lock 에 넣지 않는다 — `nemo-gym[vllm]` 의 flashinfer 핀과 충돌한다(`KNOWN_ISSUES` #10).
   alpha 모델은 플러그인(`examples/configs/alpha/vllm_alpha_plugin/`)으로만 등록한다. `3rdparty/vllm/` 은 커스텀 빌드용

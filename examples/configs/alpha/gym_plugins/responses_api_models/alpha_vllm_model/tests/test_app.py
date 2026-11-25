@@ -45,6 +45,37 @@ def test_alpha_drops_openhands_client_field_and_does_not_forward_it():
     assert dumped["messages"][0]["content"] == "hi" and dumped["temperature"] == 1.0
 
 
+def _openhands_history():
+    # nv-OpenHands 가 둘째 호출부터 보내는 꼴: assistant 의 도구 호출 + 도구 결과 (name 포함) + litellm 의 provider_specific_fields
+    return [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "provider_specific_fields": {"refusal": None},
+         "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "execute_bash", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "execute_bash", "content": "ok"},
+    ]
+
+
+def test_builtin_rejects_openhands_tool_result_name():
+    # 음성 대조: Gym 0.6.0 내장 서버는 도구 결과 메시지의 name 을 거부한다 (2026-11-25 S2a 의 둘째 호출 422)
+    with pytest.raises(RequestValidationError) as e:
+        _dispatch(VLLMModel, {"model": "alpha", "messages": _openhands_history()[:1] + [
+            {"role": "assistant", "content": None, "tool_calls": _openhands_history()[1]["tool_calls"]}, _openhands_history()[2]]})
+    assert any(err["loc"][-1] == "name" and err["type"] == "extra_forbidden" for err in e.value.errors())
+
+
+def test_alpha_drops_tool_result_name_and_provider_specific_fields():
+    params = _dispatch(AlphaVLLMModel, {"model": "alpha", "messages": _openhands_history(), "aws_region_name": None})
+    msgs = params.model_dump(exclude_unset=True)["messages"]
+    assert "provider_specific_fields" not in msgs[1] and msgs[1]["tool_calls"][0]["function"]["name"] == "execute_bash"
+    assert "name" not in msgs[2] and msgs[2]["tool_call_id"] == "c1" and msgs[2]["content"] == "ok"
+
+
+def test_alpha_keeps_name_on_non_tool_messages():
+    # name 은 도구 결과 메시지에서만 버린다 — user · assistant 의 name 은 OpenAI 형식의 정식 필드다
+    params = _dispatch(AlphaVLLMModel, {"model": "alpha", "messages": [{"role": "user", "content": "hi", "name": "alice"}]})
+    assert params.model_dump(exclude_unset=True)["messages"][0]["name"] == "alice"
+
+
 def test_alpha_still_rejects_other_unknown_fields():
     with pytest.raises(RequestValidationError) as e:
         _dispatch(AlphaVLLMModel, _chat_body(aws_region_name=None, not_a_real_field=1))

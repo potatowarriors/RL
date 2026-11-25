@@ -5,6 +5,10 @@
 #   모델은 Pai fleet (main1 GPU 8, 벤치와 같은 서빙) 이다 — 학습 때의 NeMo-RL vLLM 워커가 아니다. 토큰 ID · logprob · refit 은 이 측정이 보지 않는다.
 #   eval_swe_student.sh <tag> <hf_ckpt> <input.jsonl> [concurrency=128] [repeats=1]
 #   환경변수: TURNS (200) · AGENT_TIMEOUT (1800) · MEM_MB (32768) · MAXLEN (131072) · MEM_STOP_GIB (1400, 노드 메모리가 넘으면 중단)
+#            GYM (기본 /home/work/vidsearch/tools/Gym) · MODEL_CFG (기본 alpha_vllm_model_swe_8k.yaml) — 다른 Gym 체크아웃 · 모델 서버 설정으로 돌릴 때
+#            STUB_URL=http://127.0.0.1:<포트>/v1 — fleet 대신 이미 떠 있는 모델 주소를 쓴다 (가짜 모델 서버로 고리 전체를 CPU 에서 도는 시험)
+#            RAY_HEAD (기본 main1:6379) — `local` 이면 클러스터에 붙지 않고 Gym 이 띄우는 로컬 Ray 를 쓴다 (Gym 과 클러스터의 Ray 버전이 다를 때.
+#                    컨테이너가 이 노드에만 뜨고, Apptainer 환경변수는 실행기가 직접 준다)
 #            OH_LOG=1 — OpenHands 디버그 로그를 켠다 (진단용, 기본은 Gym 과 같이 CRITICAL)
 #            DRY=1 — GPU 없이 기동 경로만 돌린다: fleet 를 띄우지 않고 모델 주소를 죽은 포트로 둔다. Gym 서버 주소 · 두 노드의 컨테이너 기동 ·
 #                    클라이언트 접속 · 컨테이너 정리를 CPU 로 확인하는 용도다 (롤아웃은 모델 호출에서 실패한다). 승인 없이 돌릴 수 있다.
@@ -13,16 +17,17 @@
 set -u
 TAG=$1; CK=$(readlink -f "$2"); INPUT=$(readlink -f "$3"); CONC=${4:-128}; REPEATS=${5:-1}
 TURNS=${TURNS:-200}; AGENT_TIMEOUT=${AGENT_TIMEOUT:-1800}; MEM_MB=${MEM_MB:-32768}; MAXLEN=${MAXLEN:-131072}; MEM_STOP_GIB=${MEM_STOP_GIB:-1400}; DRY=${DRY:-0}; OH_LOG=${OH_LOG:-0}
-NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}; P=$NRL/p0_measure; D=$P/swe/$TAG; GYM=/home/work/vidsearch/tools/Gym; SIF=$NRL/sif/swe
+NRL=${NRL_ROOT:-/home/work/vidsearch/tools/nemo_rl}; P=$NRL/p0_measure; D=$P/swe/$TAG; GYM=${GYM:-/home/work/vidsearch/tools/Gym}; SIF=$NRL/sif/swe
+STUB_URL=${STUB_URL:-}; RAY_HEAD=${RAY_HEAD:-main1:6379}
 REPO=$(cd "$(dirname "$0")/../../../.." && pwd); HERE=$REPO/examples/configs/alpha/runs
 PAI=/home/work/vidsearch/repos/project_s/Pai-Megatron-Patch/examples/alpha
-MODEL_CFG=$HERE/alpha_vllm_model_swe_8k.yaml
+MODEL_CFG=${MODEL_CFG:-$HERE/alpha_vllm_model_swe_8k.yaml}
 PORTS="8000 8001 8002 8003 8004 8005 8006 8007"
 mkdir -p $D; LOG=$D/run.log
 log() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 ray_py() { "$NRL/clean_run.sh" /usr/bin/env RAY_ADDRESS=main1:6379 "$NRL/venv-driver/bin/python" -I "$@" </dev/null 2>/dev/null; }
 on_sub1() { timeout 25 ssh -o BatchMode=yes -o ConnectTimeout=10 sub1 "$1" 2>/dev/null | tail -1; }
-PLUGINS=$REPO/examples/configs/alpha/gym_plugins
+PLUGINS=${PLUGINS:-$REPO/examples/configs/alpha/gym_plugins}
 SERVER_DIRS="$GYM/responses_api_agents/swe_agents $GYM/responses_api_models/vllm_model $PLUGINS/responses_api_models/alpha_vllm_model"
 gym_server_pids() {  # Gym 자식 서버 (`python app.py`) 는 명령줄로 구분되지 않는다 — cwd 로 찾는다
   local pid cwd d
@@ -79,7 +84,14 @@ trap cleanup EXIT
 SESS='grep -c "^sessiondir max size = 16384" /etc/apptainer/apptainer.conf'
 [ "$(bash -c "$SESS")" = 1 ] && [ "$(on_sub1 "$SESS")" = 1 ] || { log "ABORT: 쓰기 공간 16384 MB 설정이 두 노드에 없다 (setup_session.sh --sessiondir-mb 16384)"; exit 1; }
 BINDCHK='p=$(pgrep -x raylet | head -1); tr "\0" "\n" < /proc/$p/environ 2>/dev/null | grep -c "^APPTAINER_BIND=/proc$"'
-[ "$(bash -c "$BINDCHK")" = 1 ] && [ "$(on_sub1 "$BINDCHK")" = 1 ] || { log "ABORT: raylet 환경에 APPTAINER_BIND=/proc 이 없다 (runs/ray_cluster.sh 로 다시 띄운다)"; exit 1; }
+if [ "$RAY_HEAD" = local ]; then
+  export APPTAINER_BIND=/proc APPTAINERENV_USER=$(id -un)   # Gym 이 띄우는 로컬 Ray 의 워커가 이 환경을 물려받는다
+else
+  [ "$(bash -c "$BINDCHK")" = 1 ] && [ "$(on_sub1 "$BINDCHK")" = 1 ] || { log "ABORT: raylet 환경에 APPTAINER_BIND=/proc 이 없다 (runs/ray_cluster.sh 로 다시 띄운다)"; exit 1; }
+fi
+if [ "$GYM" = /home/work/vidsearch/tools/Gym ]; then   # 설치된 Gym 이면 upstream 수정 (결정 79) 이 얹혀 있어야 한다 — 빠지면 결과 조립이 500 으로 죽는다
+  "$REPO/examples/configs/alpha/tools/apply_gym_patches.sh" check >> "$LOG" 2>&1 || { log "ABORT: Gym 패치가 적용돼 있지 않다 (tools/apply_gym_patches.sh)"; exit 1; }
+fi
 for p in 8100 $PORTS; do
   (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && { log "ABORT: 포트 $p 를 이미 누가 듣고 있다 (묵은 fleet · 프록시 · 터널)"; exit 1; }
 done
@@ -91,10 +103,14 @@ MAIN_IP=$(getent hosts main1 | awk '{print $1}')
 python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.main1; on_sub1 "python3 -I $HERE/swe_kill_containers.py orphans > $D/fuse_before.sub1; echo ok" > /dev/null
 [ -e $D/fuse_before.sub1 ] || { log "ABORT: sub1 의 FUSE 고아 목록을 적지 못했다 (ssh)"; exit 1; }
 ROWS=$(wc -l < $INPUT); FUSE0=$(fuse_orphans)
-log "armed: tag=$TAG ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
+log "armed: tag=$TAG gym_dir=$GYM ray=$RAY_HEAD model_cfg=$(basename $MODEL_CFG) ck=$CK input=$ROWS repeats=$REPEATS conc=$CONC turns=$TURNS agent_timeout=$AGENT_TIMEOUT mem_mb=$MEM_MB maxlen=$MAXLEN repo=$(git -C $REPO rev-parse --short HEAD) gym=$(git -C $GYM rev-parse --short HEAD) fuse_orphans_before=$FUSE0 load=$(cut -d' ' -f1 /proc/loadavg)"
 
 if [ "$DRY" = 1 ]; then
   MODEL_URL=http://127.0.0.1:9/v1; log "DRY=1 — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL, 롤아웃은 모델 호출에서 실패한다)"
+elif [ -n "$STUB_URL" ]; then
+  MODEL_URL=$STUB_URL
+  curl -s -m 5 "$STUB_URL/models" | grep -q '"alpha"' || { log "ABORT: STUB_URL 이 응답하지 않는다 ($STUB_URL)"; exit 1; }
+  log "STUB_URL — fleet 를 띄우지 않는다 (모델 주소 $MODEL_URL)"
 else
 MODEL_URL=http://127.0.0.1:8100/v1
 # 1. fleet — eval_lcb.sh 와 같은 플래그 (도구 파서 · 사고 파서 · 제약 디코딩 끔 · prefix cache 끔)
@@ -124,7 +140,7 @@ cat > $D/overrides.yaml <<YAML
 cache_dir: $NRL/gym_cache
 use_absolute_ip: true
 $([ "$DRY" = 1 ] && echo "model_endpoint_readiness_timeout_seconds: 0")
-ray_head_node_address: main1:6379
+$([ "$RAY_HEAD" = local ] || echo "ray_head_node_address: $RAY_HEAD")
 swe_agents_train:
   responses_api_agents:
     swe_agents:
@@ -155,6 +171,11 @@ YAML
 export PATH=/home/work/vidsearch/tools/bin:$PATH UV_CACHE_DIR=/home/work/vidsearch/tools/uv_cache \
        UV_PYTHON_INSTALL_DIR=/home/work/vidsearch/tools/uv_python RAY_TMPDIR=/tmp
 cd $GYM && source .venv/bin/activate
+if [ "$RAY_HEAD" = local ]; then
+  # 주소 없이 ray.init() 을 부르면 이 노드에 이미 떠 있는 클러스터에 붙는다 (버전이 다르면 "Version mismatch" 로 죽는다, 2026-11-25).
+  # 새 로컬 Ray 를 강제하고, 임시 디렉토리도 따로 둬 운영 클러스터의 /tmp/ray 를 건드리지 않는다.
+  export RAY_ADDRESS=local RAY_TMPDIR=/tmp/gymlocal_ray_$$; mkdir -p $RAY_TMPDIR
+fi
 export NEMO_GYM_EXTRA_ROOTS=$PLUGINS   # 모델 서버는 alpha 플러그인 (alpha_vllm_model_swe_8k.yaml)
 export RAY_DEDUP_LOGS=0   # 워커 로그 줄이 합쳐지면 (repeated Nx across cluster) 어느 노드 · 어느 과제의 줄인지 잃는다
 setsid gym env start --config responses_api_agents/swe_agents/configs/swebench_openhands_training.yaml \
@@ -176,9 +197,11 @@ except Exception: pass" 2>/dev/null)
   sleep 5
 done
 [ "$gready" = 1 ] || abort "gym 서버가 40분 안에 준비되지 않았다 ($D/env_start.log)"
-hosts=$(grep -o "'host': '[0-9.]*'" $D/env_start.log | sort -u | tr '\n' ' ')
-[ "$hosts" = "'host': '$MAIN_IP' " ] || abort "Gym 서버가 노드 주소 ($MAIN_IP) 가 아닌 곳에 묶였다: $hosts"
-log "gym servers ready ($n 개, 주소 $MAIN_IP)"
+# 묶인 주소 확인: head 가 돌려준 서버 주소가 전부 이 노드의 주소여야 한다 (127.0.0.1 이면 sub1 의 컨테이너가 모델 서버에 닿지 못한다).
+# 로그의 설정 출력으로 확인하지 않는다 — 그 줄은 서버가 다 뜬 뒤에 찍혀 경쟁이 난다 (2026-11-25 student_stub3 에서 빈 값으로 오판).
+hosts=$(for u in $urls; do echo "$u" | sed -E 's#^https?://([^:/]+).*#\1#'; done | sort -u | tr '\n' ' ')
+[ "$hosts" = "$MAIN_IP " ] || abort "Gym 서버가 노드 주소 ($MAIN_IP) 가 아닌 곳에 묶였다: $hosts"
+log "gym servers ready ($n 개, 주소 $hosts)"
 
 # 3. 롤아웃. 클라이언트가 멈추면 (/aggregate_metrics 재시도, 2026-11-24 golden_ultra_b2) GPU 를 쥔 채 남으므로 시간 한도를 건다.
 WAVES=$(( (ROWS * REPEATS + CONC - 1) / CONC )); BUDGET=$(( WAVES * (AGENT_TIMEOUT + 1800) + 900 ))
