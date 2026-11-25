@@ -10,6 +10,9 @@ negative-control runs of gates/prefix_cache_*/run_l.sh. It patches the installed
                                       (cache-hit restore only: a cold prefill's own chunk boundaries are untouched,
                                       which is what the same-server gate PC-S needs)
   ALPHA_GATE_FAULT=restore_bf16       round that restored state to bf16 and back (a cache that lost precision)
+  ALPHA_GATE_FAULT=routes_restore_shift   when a request restores from the cache, replace expert ids e by (e + 1) % 192 in
+                                      the stored routes of the cached block that ends at its hit position (what this
+                                      and later hits then return for those tokens); log-probs are untouched
   ALPHA_GATE_FAULT=routes_trunc:8     drop the last 8 expert rows vLLM returns for a request (R3)
   ALPHA_GATE_FAULT=routes_shift:3168  replace expert ids e by (e + 1) % num_experts on the first 3168 tokens
 
@@ -99,6 +102,56 @@ def _patch_restore(mod, kind, value):
     _say(f"patched mamba_utils.preprocess_mamba ({kind})")
 
 
+_MGR = {}  # the engine's RoutedExpertsManager (scheduler and model runner share the engine-core process at TP 1)
+
+
+def _register_routes_manager(mod):
+    cls = mod.RoutedExpertsManager
+    orig_init = cls.__init__
+
+    def init(self, *args, **kwargs):
+        orig_init(self, *args, **kwargs)
+        _MGR["mgr"] = self
+        _say("registered RoutedExpertsManager for routes_restore_shift")
+
+    cls.__init__ = init
+
+
+def _patch_restore_routes(mod, kind):
+    """Corrupt the stored routes of the last cached block (the one ending at the hit position) of every request
+    that restores from the cache. The last block, not the first: two hits at different positions then differ from
+    each other as well as from a cold request."""
+    import inspect
+
+    orig = mod.preprocess_mamba
+    sig = inspect.signature(orig)
+
+    def patched(*args, **kwargs):
+        a = sig.bind(*args, **kwargs).arguments
+        so, state_idx, requests = a["scheduler_output"], a["mamba_state_idx"], a["requests"]
+        stale = set(so.finished_req_ids) | set(so.preempted_req_ids or ()) | set(so.scheduled_cached_reqs.resumed_req_ids)
+        restores = [
+            rid for rid in a["input_batch"].req_ids
+            if (rid not in state_idx or rid in stale) and requests[rid].num_computed_tokens > 0
+        ]  # fmt: skip
+        out = orig(*args, **kwargs)
+        for rid in restores:
+            req, mgr, n, block_id = requests[rid], _MGR.get("mgr"), 0, None
+            if mgr is not None:
+                mamba = set(a["copy_bufs"].mamba_group_ids)
+                attn = [g for g in range(len(a["kv_cache_config"].kv_cache_groups)) if g not in mamba]
+                block_id = req.block_ids[attn[0]][req.num_computed_tokens // mgr.block_size - 1]
+                rows = slice(block_id * mgr.block_size, (block_id + 1) * mgr.block_size)
+                slots = mgr.routed_experts_by_slot
+                slots[rows] = ((slots[rows].astype("int64") + 1) % 192).astype(slots.dtype)  # alpha_v2: 192 experts
+                n = 1
+            _say(f"FIRED {kind} req={rid} computed={req.num_computed_tokens} block={block_id} tensors={n}")
+        return out
+
+    mod.preprocess_mamba = patched
+    _say(f"patched mamba_utils.preprocess_mamba ({kind})")
+
+
 def _patch_routes(mod, kind, value):
     cls = mod.RoutedExpertsManager
     orig = cls.get
@@ -156,6 +209,9 @@ if _FAULT:
         _targets[_GDN] = lambda m: _patch_gdn(m, _kind, float(_val or 0))
     elif _kind in ("restore_scale", "restore_bf16"):
         _targets[_MU] = lambda m: _patch_restore(m, _kind, float(_val or 0))
+    elif _kind == "routes_restore_shift":
+        _targets[_RE] = _register_routes_manager
+        _targets[_MU] = lambda m: _patch_restore_routes(m, _kind)
     elif _kind in ("routes_trunc", "routes_shift"):
         _targets[_RE] = lambda m: _patch_routes(m, _kind, int(_val))
     else:

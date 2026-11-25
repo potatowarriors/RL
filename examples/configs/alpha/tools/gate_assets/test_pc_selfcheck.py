@@ -22,9 +22,10 @@ TMP = Path(tempfile.mkdtemp(prefix="pcs_test_"))
 PROCS = []
 
 
-def serve(name: str, port: int, budget: int, fault: str = "") -> dict:
+def serve(name: str, port: int, budget: int, fault: str = "", routes: bool = False) -> dict:
     log = TMP / f"{name}.serve.log"
-    PROCS.append(subprocess.Popen(PY + [str(FAKE), str(port), str(budget), fault], stdout=log.open("w"), stderr=subprocess.STDOUT))
+    PROCS.append(subprocess.Popen(PY + [str(FAKE), str(port), str(budget), fault] + (["routes"] if routes else []),
+                                  stdout=log.open("w"), stderr=subprocess.STDOUT))
     for _ in range(100):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=1).read()
@@ -36,11 +37,11 @@ def serve(name: str, port: int, budget: int, fault: str = "") -> dict:
     return {"name": name, "url": f"http://127.0.0.1:{port}/v1", "log": str(log), "budget": budget}
 
 
-def run(srv: dict, set_name: str, budget: int | None = None) -> str:
+def run(srv: dict, set_name: str, budget: int | None = None, extra: tuple = ()) -> str:
     out = TMP / f"{srv['name']}.{set_name}.json"
     r = subprocess.run(
         PY + [str(TOOL), "run", "--url", srv["url"], "--budget", str(budget or srv["budget"]), "--set", set_name,
-              "--out", str(out), "--serve-log", srv["log"]],
+              "--out", str(out), "--serve-log", srv["log"], *extra],
         capture_output=True, text=True,
     )  # fmt: skip
     if r.returncode != 0:
@@ -54,7 +55,7 @@ def judge(clean: list[str], nc: list[str]) -> tuple[bool, str]:
 
 
 def main() -> int:
-    port = iter(range(18300, 18360))
+    port = iter(range(18300, 18380))
     good = serve("good", next(port), 8192)
     good1056 = serve("good1056", next(port), 1056)
     nc_scale = serve("nc_scale", next(port), 8192, "restore_scale")
@@ -108,6 +109,19 @@ def main() -> int:
             r["expect_exact"] = False
     (TMP / "relabel.json").write_text(json.dumps(relabel))
     cases.append(("a judged row relabelled as not judged", [str(TMP / "relabel.json"), b1056], ncs, False, "built for the opposite"))
+
+    # an engine that returns routed experts (router replay), at the training engine's chunk budget (16384 = 15 blocks)
+    rt = ("--routes", "--backend", "FakeCPU")
+    t_prod = run(serve("t_good", next(port), 16384, routes=True), "prod", extra=rt)
+    t_1056 = run(serve("t_good1056", next(port), 1056, routes=True), "b1056", extra=rt)
+    t_ncs = [run(serve("t_nc_scale", next(port), 16384, "restore_scale", routes=True), "nc", extra=rt),
+             run(serve("t_nc_routes", next(port), 16384, "routes_restore_shift", routes=True), "nc", extra=rt)]
+    cases.append(("routes engine at budget 16384: correct, state fault and routes fault detected", [t_prod, t_1056], t_ncs, True, ""))
+    bad_routes = serve("t_bad_routes", next(port), 16384, "routes_restore_shift", routes=True)
+    cases.append(("routes engine broken: a hit returns wrong routes (log-probs right)", [run(bad_routes, "prod", extra=rt), t_1056], t_ncs, False, "routes different"))
+    no_routes = serve("t_no_routes", next(port), 16384)
+    cases.append(("routes expected but the engine returns none", [run(no_routes, "prod", extra=rt), t_1056], t_ncs, False, "routed experts absent"))
+    cases.append(("backend named in the log differs from the expected one", [run(serve("t_backend", next(port), 16384, routes=True), "prod", extra=("--routes", "--backend", "Triton/FLA")), t_1056], t_ncs, False, "GDN prefill backend"))
 
     bad = 0
     for name, clean, nc, want, phrase in cases:

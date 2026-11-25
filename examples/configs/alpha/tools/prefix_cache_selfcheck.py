@@ -7,7 +7,9 @@ cache-on server computes every prompt twice: once as a cache hit and once cold (
 hash of block 0 and so of every later block). A single server repeats itself bit for bit, so a correct restore
 must give bit-identical log-probs whenever the hit path and the cold path cut the prefill into the same chunks.
 
-What is judged (all must hold; "identical" = token ids, token log-prob and the whole top-5 dict, 32 tokens):
+What is judged (all must hold; "identical" = token ids, token log-prob and the whole top-5 dict, 32 tokens, and —
+when the engine returns them (`--routes`, router replay) — the routed-expert rows of the whole sequence, which
+for a hit come from the cached blocks' slots):
   rep      the same prompt computed cold twice is identical            (otherwise the exact criterion is void)
   chain    cache hit vs cold where `Model` predicts the same chunk sequence; each hit is sent twice, so a hit
            request that damages the block it restored from is seen by the second one
@@ -30,6 +32,7 @@ not-judged forced rows take that path); concurrent requests, preemption, evictio
 GDN prefill backend other than the one the server logs.
 
     prefix_cache_selfcheck.py run   --url http://127.0.0.1:8011/v1 --budget 8192 --set prod --out prod.json [--serve-log f]
+                                    [--routes] [--backend Triton/FLA]     (training engine: budget 16384, routes, triton)
     prefix_cache_selfcheck.py judge --clean prod.json b1056.json --nc nc_scale.json nc_bf16.json [--json out.json]
 
 Standard library only (`python3 -I`). Sequential single requests.
@@ -38,6 +41,7 @@ Standard library only (`python3 -I`). Sequential single requests.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -63,6 +67,26 @@ def _http(url: str, body: dict | None = None, timeout: int = 1800):
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+
+def parse_npy(b64: str | None) -> dict | None:
+    """The engine sends routed experts as a base64 `.npy` array [tokens, MoE layers, top-k]. Parsed without numpy."""
+    if not b64:
+        return None
+    raw = base64.b64decode(b64)
+    if raw[:6] != b"\x93NUMPY":
+        raise RuntimeError("routed_experts is not an .npy payload")
+    off = 10 if raw[6] == 1 else 12
+    hlen = int.from_bytes(raw[8:off], "little")
+    header, data = raw[off : off + hlen].decode("latin1"), raw[off + hlen :]
+    m = re.search(r"'shape':\s*\(([^)]*)\)", header)
+    if not m or "'fortran_order': False" not in header:
+        raise RuntimeError(f"unexpected .npy header: {header[:120]}")
+    shape = [int(x) for x in m.group(1).replace(" ", "").split(",") if x]
+    rows = shape[0] if shape else 0
+    if not rows or len(data) % rows:
+        raise RuntimeError(f"routed_experts payload of {len(data)} bytes does not fit shape {shape}")
+    return {"rows": rows, "row_bytes": len(data) // rows, "shape": shape, "data": data}
 
 
 class Engine:
@@ -117,6 +141,7 @@ class Engine:
             "tops": [{tid(k): float(v) for k, v in d.items()} for d in lp["top_logprobs"]],
             "usage_prompt": int(r["usage"]["prompt_tokens"]),
             "secs": round(secs, 2),
+            "routes": parse_npy(r["choices"][0].get("routed_experts")),
         }
         d_prompt = d_cached = float("nan")
         for _ in range(40):  # the counters are updated by the engine's stat loop, not by the response
@@ -244,10 +269,25 @@ def compare(a: dict, b: dict) -> dict:
             div = i
             break
     full = len(a["tokens"]) == len(b["tokens"]) == compared and compared > 0
+    lp_identical = bool(full and equal == compared and div is None)
+    # routed experts: rows are per forwarded token from position 0, so the common leading rows are comparable
+    ra, rb = a.get("routes"), b.get("routes")
+    route_rows = 0
+    if ra is None and rb is None:
+        routes = "absent"
+    elif ra is None or rb is None:
+        routes = "missing on one side"
+    else:
+        route_rows = min(ra["rows"], rb["rows"])
+        k = route_rows * ra["row_bytes"]
+        routes = "identical" if (ra["row_bytes"] == rb["row_bytes"] and route_rows > 0 and ra["data"][:k] == rb["data"][:k]) else "different"
     return {
         "compared": compared,
         "equal": equal,
-        "identical": bool(full and equal == compared and div is None),
+        "lp_identical": lp_identical,
+        "routes": routes,
+        "route_rows": route_rows,
+        "identical": bool(lp_identical and routes in ("absent", "identical")),
         "first_token_divergence": div,
         "max_abs_dlogprob": dmax,
         "mean_exp_abs_dlogprob": (sum(exps) / len(exps)) if exps else float("nan"),
@@ -266,15 +306,17 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
     rep21 = {"name": "rep_21k", "kind": "rep", "conv": 0, "length": 20 * b + 100}
     dec = {"name": "decode", "kind": "decode", "conv": 2, "length": 19 * b + b - 16, "pre": 0, "forced": True}
     dec_hit = {"name": "decode_hit", "kind": "decode", "conv": 1, "length": 19 * b + b - 16, "pre": 12 * b + 300, "forced": False}
-    # same salt: A[:26b+300], then A[:20b] + other text. The attention hit (20b) passes the last state boundary (2c = 14b)
-    marconi = {"name": "marconi", "kind": "marconi", "conv": 0, "conv_tail": 1, "shared": 20 * b, "first": 26 * b + 300,
-               "length": 30 * b + 300, "probe": 20 * b + 50, "pre": 20 * b + 100}  # fmt: skip
+    # same salt: A[:shared+6b+300], then A[:shared] + other text, with shared = k*c + 6b: the attention hit (shared)
+    # passes the last state boundary (k*c) by 6 blocks. For c = 7b this is 26b+300, 20b, 30b+300 (k = 2).
+    shared = (20 * b // c) * c + 6 * b if c > b else 20 * b
+    marconi = {"name": "marconi", "kind": "marconi", "conv": 0, "conv_tail": 1, "shared": shared, "first": shared + 6 * b + 300,
+               "length": shared + 10 * b + 300, "probe": shared + 50, "pre": shared + 100}  # fmt: skip
     ch = lambda name, exact, conv, *lengths, rehit=0: {"name": name, "kind": "chain", "exact": exact, "conv": conv,  # noqa: E731
                                                       "lengths": list(lengths), "rehit": rehit}  # fmt: skip
     # `rehit`: a last prompt under the same salt that hits the first turn's boundary again, after the later turns
     # restored from it and computed several blocks (its chunk sequence equals the cold one)
     if set_name == "prod":  # the fleet's chunk budget: bit-identity is expected only at aligned hit positions
-        assert c == 7 * b, "the prod set is built for a chunk budget of 7 blocks (8192 tokens, block 1056)"
+        assert c in (7 * b, 15 * b), "the prod set is built for a chunk budget of 7 blocks (8192) or 15 blocks (16384)"
         return [
             rep21,
             {"name": "rep_60k", "kind": "rep", "conv": 2, "length": 57 * b + 500},
@@ -283,7 +325,7 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
             ch("sameblock_43k", True, 1, 41 * b + 17, 41 * b + 1040),
             ch("sameblock_60k", True, 2, 57 * b + 500, 57 * b + 900),
             # hit boundary = a multiple of the chunk budget; the later prompt is many blocks longer
-            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=34 * b + 10),
+            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=4 * c + 6 * b + 10),
             ch("budget_52k", True, 0, 7 * c + 50, 7 * c + 8750),
             # three turns: the third hits a state that was saved by a request that itself started from a hit
             ch("turns3_budget", True, 2, 2 * c + 200, 5 * c + 900, 8 * c + 400),
@@ -306,11 +348,11 @@ def scenario_table(set_name: str, budget: int, block: int = BLOCK) -> list[dict]
             dec_hit,
         ]
     if set_name == "nc":  # negative control (fault injected on restore): the judged comparisons must all differ
-        assert c == 7 * b
+        assert c in (7 * b, 15 * b)
         return [
             rep21,
             ch("sameblock_21k", True, 0, 20 * b + 100, 20 * b + 700),
-            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=34 * b + 10),
+            ch("budget_30k", True, 1, 4 * c + 300, 4 * c + 9300, rehit=4 * c + 6 * b + 10),
             ch("turns3_budget", True, 2, 2 * c + 200, 5 * c + 900, 8 * c + 400),
             # not judged: how large the injected fault is where bit-identity is not available (compare with the clean run)
             ch("offgrid_28k", False, 0, 20 * b + 100, 26 * b + 300),
@@ -413,7 +455,8 @@ def run_decode(run: Run, s: dict, seqs: list[list[int]]) -> list[dict]:
         for e in bounds:
             m = e + 1 - len(ids)
             a, hit_at, _, _ = run.ask(salt, ids + g[:m], N_GEN, f"{name} {tag} {e}")
-            ref = {"tokens": g[m : m + N_GEN], "lps": first["lps"][m : m + N_GEN], "tops": first["tops"][m : m + N_GEN]}
+            ref = {"tokens": g[m : m + N_GEN], "lps": first["lps"][m : m + N_GEN], "tops": first["tops"][m : m + N_GEN],
+                   "routes": first["routes"]}  # the original generation's rows cover the continuation's whole sequence
             why = why0 + ([] if hit_at == e else [f"the model predicts a hit at {hit_at}, the scenario needs {e}"])
             rows.append(_row(f"{name}:{tag}_{e}", "decode", True, a, ref, setup + [a], why, length=len(ids) + m, hit=hit_at,
                              generation_started_from_hit=gen_hit))  # fmt: skip
@@ -518,15 +561,16 @@ def read_serve_log(path: str | None) -> dict:
         return {}
     txt = Path(path).read_text(errors="ignore")
     grab = lambda pat: sorted(set(re.findall(pat, txt)))  # noqa: E731
-    fired = re.findall(r"\[ALPHA_GATE_FAULT pid=\d+\] FIRED restore_\w+ [^\n]*computed=(\d+)[^\n]*tensors=[1-9]", txt)
+    fired = re.findall(r"\[ALPHA_GATE_FAULT pid=\d+\] FIRED (?:routes_)?restore_\w+ [^\n]*computed=(\d+)[^\n]*tensors=[1-9]", txt)
     return {
         "serve_log": path,
         "enable_prefix_caching": grab(r"enable_prefix_caching=(\w+)"),
-        "mamba_cache_mode": grab(r"mamba_cache_mode\W+(\w+)"),
+        "mamba_cache_mode": grab(r"(?:mamba_cache_mode\W+|Mamba cache mode is set to ')(\w+)"),
         "mamba_ssm_cache_dtype": grab(r"mamba_ssm_cache_dtype\W+(\w+)"),
-        "max_num_batched_tokens": grab(r"max_num_batched_tokens=(\d+)"),
+        "max_num_batched_tokens": grab(r"max_num_batched_tokens['\"]?[=:]\s*(\d+)"),
         "attention_block_size": grab(r"Setting attention block size to (\d+) tokens"),
-        "gdn_prefill_backend": grab(r"(\w+) GDN prefill kernel"),
+        "gdn_prefill_backend": grab(r"([\w/]+) GDN prefill kernel"),
+        "enable_return_routed_experts": grab(r"enable_return_routed_experts['\"]?[=:]\s*(\w+)"),
         "fault_patched": grab(r"\[ALPHA_GATE_FAULT pid=\d+\] patched ([^\n]+)"),
         "fault_fired_at": sorted(int(x) for x in fired),
         "fault_lines": len(re.findall(r"\[ALPHA_GATE_FAULT", txt)),
@@ -538,8 +582,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     table = scenario_table(a.set, a.budget, a.block)
     need = max(max(s.get("lengths", [0]) + [s.get("length", 0), s.get("first", 0)]) for s in table) + N_DECODE + 64
     seqs, meta = build_documents(run.eng, need)
-    meta.update({"url": a.url, "set": a.set, "budget": a.budget, "block": a.block, "n_gen": N_GEN,
-                 "started": time.strftime("%F %T")})  # fmt: skip
+    meta.update({"url": a.url, "set": a.set, "budget": a.budget, "block": a.block, "n_gen": N_GEN, "routes_expected": bool(a.routes),
+                 "backend_expected": a.backend, "started": time.strftime("%F %T")})  # fmt: skip
     # one discarded request, so that anything the engine does only on its first request is not part of a comparison
     run.ask(run.eng.salt("warmup"), seqs[1][: 3 * a.block + 7], 4, "warm-up (discarded)")
     rows = []
@@ -549,7 +593,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         rows += new
         for r in new:
             tag = "identical" if r["identical"] else "DIFFERENT"
-            extra = f"compared {r['compared']} equal {r['equal']} max|d| {r['max_abs_dlogprob']:.3g}" if "compared" in r else \
+            extra = f"compared {r['compared']} equal {r['equal']} max|d| {r['max_abs_dlogprob']:.3g} routes {r['routes']} ({r['route_rows']} rows)" if "compared" in r else \
                 f"hit~cold {r['mean_exp_hit_vs_cold']:.4f} decode~cold {r['mean_exp_decode_vs_cold']:.4f}"
             print(f"[pcs] {r['id']:<36} {'judged' if r['expect_exact'] else 'char  '} {tag:<9} hit@{r.get('hit')} "
                   f"{extra} {'' if r['valid'] else 'INVALID ' + '; '.join(r['why_invalid'][:2])} ({time.time() - t0:.0f}s)",
@@ -579,6 +623,8 @@ def judge_run(d: dict, role: str) -> dict:
         ("recurrent state float32", meta.get("mamba_ssm_cache_dtype") == ["float32"]),
         (f"max_num_batched_tokens={meta['budget']}", meta.get("max_num_batched_tokens") == [str(meta["budget"])]),
         (f"block size {meta['block']}", meta.get("attention_block_size") == [str(meta["block"])]),
+        (f"GDN prefill backend {meta.get('backend_expected')}", not meta.get("backend_expected") or meta.get("gdn_prefill_backend") == [meta["backend_expected"]]),
+        ("enable_return_routed_experts=True", not meta.get("routes_expected") or meta.get("enable_return_routed_experts") == ["True"]),
     ):
         if not ok:
             fails.append(f"engine setting not confirmed in the server log: {name}")
@@ -596,6 +642,10 @@ def judge_run(d: dict, role: str) -> dict:
         if not r["valid"]:
             fails.append(f"{r['id']}: invalid — {'; '.join(r['why_invalid'][:3])}")
     judged = [r for r in present if r["expect_exact"]]
+    if meta.get("routes_expected"):
+        for r in judged:
+            if r.get("routes") not in ("identical", "different"):
+                fails.append(f"{r['id']}: routed experts {r.get('routes')} — the engine was expected to return them")
     reps = [r for r in judged if r["kind"] == "rep"]
     tests = [r for r in judged if r["kind"] != "rep"]
     if not reps or not tests:
@@ -609,7 +659,8 @@ def judge_run(d: dict, role: str) -> dict:
         for r in tests:
             if not r["identical"]:
                 fails.append(f"{r['id']}: hit differs from the reference ({r['equal']}/{r['compared']} positions equal, "
-                             f"max|d| {r['max_abs_dlogprob']:.3g}, first token divergence {r['first_token_divergence']})")  # fmt: skip
+                             f"max|d| {r['max_abs_dlogprob']:.3g}, first token divergence {r['first_token_divergence']}, "
+                             f"routes {r.get('routes')})")  # fmt: skip
     else:
         if not meta.get("fault_patched"):
             fails.append("negative control: the server log has no 'patched' marker")
@@ -632,6 +683,9 @@ def judge_run(d: dict, role: str) -> dict:
     return {
         "set": meta["set"], "role": role, "url": meta["url"], "pass": not fails, "fails": fails, "not_judged": notes,
         "judged_identical": f"{sum(r['identical'] for r in tests)}/{len(tests)}",
+        "judged_routes_identical": f"{sum(r.get('routes') == 'identical' for r in tests)}/{len(tests)}",
+        "judged_logprobs_identical": f"{sum(bool(r.get('lp_identical')) for r in tests)}/{len(tests)}",
+        "route_rows": sum(r.get("route_rows", 0) for r in tests),
         "judged_positions": sum(r.get("compared", 0) for r in tests),
         "cold_repeat_identical": f"{sum(r['identical'] for r in reps)}/{len(reps)}",
         "requests": len(reqs), "hit_requests": len(hits), "fault_fired_restores": len(meta.get("fault_fired_at") or []),
@@ -657,7 +711,8 @@ def cmd_judge(a: argparse.Namespace) -> int:
     out["pass"] = not out["fails"] and all(r["pass"] for r in out["clean"] + out["nc"])
     for r in out["clean"] + out["nc"]:
         print(f"[{r.get('role', '?'):5}] {r.get('set', '?'):6} {'PASS' if r['pass'] else 'FAIL'}  judged identical "
-              f"{r.get('judged_identical')} ({r.get('judged_positions')} positions) · cold repeat {r.get('cold_repeat_identical')} "
+              f"{r.get('judged_identical')} ({r.get('judged_positions')} positions; log-probs {r.get('judged_logprobs_identical')} · routes "
+              f"{r.get('judged_routes_identical')} over {r.get('route_rows')} rows) · cold repeat {r.get('cold_repeat_identical')} "
               f"· requests {r.get('requests')} (hits {r.get('hit_requests')}) · fault fired {r.get('fault_fired_restores')} "
               f"· backend {r.get('gdn_prefill_backend')}  {r['file']}")  # fmt: skip
         for f in r["fails"]:
@@ -682,6 +737,8 @@ def main() -> int:
     r.add_argument("--set", required=True, choices=["prod", "b1056", "nc"])
     r.add_argument("--out", required=True)
     r.add_argument("--serve-log")
+    r.add_argument("--routes", action="store_true", help="the engine returns routed experts (router replay): compare them and require them")
+    r.add_argument("--backend", help="GDN prefill backend the server log must name, e.g. Triton/FLA or FlashInfer")
     j = sub.add_parser("judge")
     j.add_argument("--clean", nargs="+", required=True)
     j.add_argument("--nc", nargs="*")
