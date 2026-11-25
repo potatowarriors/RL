@@ -55,16 +55,20 @@ for r in rows:
     node = None
     if base and base in env: node = "sub1" if re.search(r"ip=[0-9.]+\)[^\n]*" + re.escape(base), env) else "main1"
     # 패치 적용 거부: 채점 로그의 거부 줄을 경로로 모델 패치 · 테스트 패치에 귀속
-    rej_model = rej_test = None
+    rej_model = rej_test = None; pre_existing = []
     evlog = glob.glob(pd + "/apptainer_logs/*_eval.log") if pd else []
     if evlog and r.get("patch_exists"):
         t = open(evlog[0], errors="replace").read()
-        bad = set(re.findall(r"error: patch failed: (\S+?):\d+", t)) | set(re.findall(r"error: (\S+): (?:patch does not apply|No such file or directory|already exists in working directory)", t)) \
+        bad = set(re.findall(r"error: patch failed: (\S+?):\d+", t)) | set(re.findall(r"error: (\S+): (?:patch does not apply|No such file or directory)", t)) \
             | set(re.findall(r"Applying patch (\S+) with \d+ rejects?", t))
+        # 이미지에 원래 있던 추적 안 된 파일 (예: package-lock.json) 은 학생 패치에 "새 파일" 로 실리고, 채점 컨테이너에는 이미 있어
+        # `already exists in working directory` 로 그 파일만 거부된다 — 나머지는 적용된다 (2026-11-25 S2b: 12 건 전부 이 경우, 그중 2 건 보상 1). 따로 센다.
+        pre = set(re.findall(r"error: (\S+): already exists in working directory", t))
         mp = files_of(r.get("model_patch")); tp = set()
         tpf = os.path.join(pd, "eval_private/test_patch.diff")
         if os.path.exists(tpf): tp = files_of(open(tpf, errors="replace").read())
         rej_model = sorted(f for f in bad if f in mp and f not in tp); rej_test = sorted(f for f in bad if f in tp)
+        pre_existing = sorted(f for f in pre if f in mp)
     repo = "/" + (m.get("repo") or "/").split("/")[-1] + "/"
     edited_rel = {p[len(repo):] for p in edited if p.startswith(repo)}
     recs.append(dict(iid=m["instance_id"], lang=d.get("language") or "?", reward=r.get("reward"), patch=bool(r.get("patch_exists")), mask=bool(ic.get("mask_sample")),
@@ -72,7 +76,7 @@ for r in rows:
                      n_model=sum(o.get("type") in ("reasoning", "function_call", "message") for o in out), n_calls=len(calls), n_exec=len(executed), markup=markup,
                      max_comp=max(comp) if comp else None, n_turns=len(comp) if comp is not None else None, trunc=(max(comp) >= a.cap) if comp else None,
                      run_s=r.get("openhands_run_time"), model_s=r.get("total_model_call_time"), eval_s=r.get("final_eval_time"),
-                     rss=r.get("agent_peak_rss_mb"), erss=r.get("eval_peak_rss_mb"), node=node, rej_model=rej_model, rej_test=rej_test,
+                     rss=r.get("agent_peak_rss_mb"), erss=r.get("eval_peak_rss_mb"), node=node, rej_model=rej_model, rej_test=rej_test, pre_existing=pre_existing,
                      edited_missing=sorted(edited_rel - files_of(r.get("model_patch"))) if edited_rel else [], edited_n=len(edited_rel), patch_files=len(files_of(r.get("model_patch")))))
 
 N = len(recs); exp = None
@@ -89,7 +93,7 @@ execd = sum(x["n_exec"] >= 1 for x in recs); mk = sum(x["markup"] > 0 for x in r
 crit["4 도구 실행"] = (N > 0 and execd / N >= 0.90, f"실행된 명령 · 편집이 1 개 이상 {pct(execd, N)} · 도구 호출 표기가 글에 남은 롤아웃 {pct(mk, N)} (파싱 실패 흔적)")
 withp = [x for x in recs if x["patch"]]; rejm = [x for x in withp if x["rej_model"]]; unk = [x for x in withp if x["rej_model"] is None]
 ed_empty = [x for x in recs if x["edited_n"] > 0 and not x["patch"] and not x["mask"]]
-crit["5 패치 전달 (①③)"] = (not rejm and not unk, f"패치 있는 롤아웃 {len(withp)} 중 모델 패치 거부 {len(rejm)} · 채점 로그 없음 {len(unk)} · 테스트 패치 쪽 거부 {sum(bool(x['rej_test']) for x in withp)} (참고) · 편집했는데 패치가 빈 비마스킹 롤아웃 {len(ed_empty)}")
+crit["5 패치 전달 (①③)"] = (not rejm and not unk, f"패치 있는 롤아웃 {len(withp)} 중 모델 패치 거부 {len(rejm)} · 채점 로그 없음 {len(unk)} · 이미지에 원래 있던 파일이라 건너뛴 것 {sum(bool(x['pre_existing']) for x in withp)} (무해) · 테스트 패치 쪽 거부 {sum(bool(x['rej_test']) for x in withp)} (참고) · 편집했는데 패치가 빈 비마스킹 롤아웃 {len(ed_empty)} (되돌림 · 임시 파일 여부는 궤적에서 확인)")
 left = re.search(r"잔재: (.*)", run_log); lt = left.group(1) if left else ""
 clean = bool(re.search(r"containers main1 \[SWE_CONTAINERS sessions=\d+ left=0\] sub1 \[SWE_CONTAINERS sessions=\d+ left=0\]", lt)) and "gym_servers_left=0" in lt and "busy_gpus=0" in lt \
     and (lambda mo: bool(mo) and mo.group(1) == mo.group(2))(re.search(r"fuse_orphans before=(\S+) after=(\S+)", lt))
