@@ -45,7 +45,7 @@ v0.7 의 기동 최적화 9건(#2739·#2920·#3089·#3158·#2741·#2750·#2771·
 | 2 | 스냅샷 빌드 때 바이트코드 사전 컴파일 | 실측 `import torch,transformers,vllm` 11.6 s (pyc 없음) → 약 5 s |
 | 3 | 런타임 패치 사전 적용 | NeMo-RL 이 첫 실행에 TE·vLLM 파일을 제자리 수정한다. 워커 8개가 동시에 하면 경합이 생긴다 |
 | 4 | JIT 캐시(vLLM·Triton·FlashInfer·CUDA PTX)를 로컬로 | 기본이 HOME(49 GB)이다. `~/.cache/vllm_0..7`·`~/.triton` 이 이미 쌓이는 중이다 |
-| 5 | 별도 `venv-mcore`·`venv-vllm` 제거 | 31 GB 중복이다. 게이트 도구는 워커 venv 로 직접 실행한다 |
+| 5 | 별도 `venv-mcore`·`venv-vllm` 제거 (**2026-11-26 삭제 — 사용자 승인. 10-06 에 만든 뒤 남아 있어 11-26 에 학습 엔진 venv 로 잘못 짚였다**) | 32 GB 중복이다. 게이트 도구는 워커 venv (`$NRL_ROOT/venvs/<역할>`) 로 직접 실행한다 |
 | 6 | driver 를 `venv-driver/bin/python` 으로 실행 | `uv run` 의 매회 lock 검사·sync 를 건너뛴다. 단 `UV_NO_SYNC` 를 전역으로 두면 워커 venv 생성이 깨진다 |
 | 7 | Gym venv 로컬 + `skip_venv_if_present: true` | Gym 은 기본으로 매 실행 재설치한다 |
 
