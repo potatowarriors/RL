@@ -198,6 +198,28 @@ def check(cfg: dict) -> None:
                  "(Pai fleet 의 alpha 조합은 qwen3_xml/nemotron_v3)")
         if grpo.get("invalid_tool_call_advantage") is not None:
             warn("invalid_tool_call_advantage 가 켜져 있다 — G3(파서 스모크) 통과 전에는 정상 호출이 벌점을 받을 수 있다 (H3)")
+        # 하니스가 거부한 도구 호출 (인자 누락 · 없는 도구 이름) 은 본문 문자열 탐지에 안 잡힌다 — swe_agents 레시피는 거부 응답의 정규식이 있어야
+        # 벌점이 걸린다 (RL_PLAN 결정 88, docs/E2E_SANDBOX.md §7.11). 하니스 패치 적용 여부는 설정으로 알 수 없다 — 기동 전 점검이 본다.
+        out_pats = (env.get("nemo_gym") or {}).get("invalid_tool_call_output_patterns")
+        if out_pats is not None:
+            if not isinstance(out_pats, (list, tuple)) or not all(isinstance(x, str) for x in out_pats):
+                err("env.nemo_gym.invalid_tool_call_output_patterns 는 문자열 목록이어야 한다")
+            else:
+                for x in out_pats:
+                    try:
+                        rx = re.compile(x)
+                    except re.error as e:
+                        err(f"env.nemo_gym.invalid_tool_call_output_patterns 의 정규식이 틀렸다: {x!r} ({e})")
+                        continue
+                    if rx.match(""):
+                        err(f"env.nemo_gym.invalid_tool_call_output_patterns 의 {x!r} 는 빈 문자열에도 맞는다 — 모든 도구 출력이 거부로 표시된다")
+                    elif "name" not in rx.groupindex:
+                        warn(f"invalid_tool_call_output_patterns 의 {x!r} 에 `name` 그룹이 없다 — 도구 이름 대조 없이 출력의 앞머리만으로 표시한다")
+        if swe_harness and grpo.get("invalid_tool_call_advantage") is not None and not out_pats:
+            err("swe_agents 레시피에 env.nemo_gym.invalid_tool_call_output_patterns 가 없다 — 하니스가 거부한 도구 호출에 "
+                "invalid_tool_call_advantage 가 걸리지 않는다 (결정 88)")
+        if out_pats and grpo.get("invalid_tool_call_advantage") is None:
+            warn("invalid_tool_call_output_patterns 는 있는데 invalid_tool_call_advantage 가 없다 — 표지만 붙고 벌점은 없다")
         venv = vcfg.get("env_vars") or {}
         if str(venv.get("VLLM_ENFORCE_STRICT_TOOL_CALLING", "1")).lower() not in ("0", "false"):
             err("Gym 레시피에 vllm_cfg.env_vars.VLLM_ENFORCE_STRICT_TOOL_CALLING: \"0\" 이 없다 — strict:true 도구에서 vLLM 이 "

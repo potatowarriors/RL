@@ -46,6 +46,8 @@ grpo:
   val_period: 100000                    # 가이드와 같이 학습 중 검증 없음 — 판정은 SWE-V 벤치
   val_at_start: false
   val_at_end: false
+  # 벌점을 켜는 것은 `*_advantage` 값이다. 아래 불리언 둘과 `invalid_tool_call_strategy` 는 Ultra 레시피에서 옮겨 온 키로 코드가 읽지 않는다.
+  # 턴 전체 −5 로 시작한다 (결정 88) — 표지 비중 · 엔트로피 · 턴당 생성 길이를 본 런 첫 step 들에서 본다 (`docs/FRONTIER.md` "보상 · 벌점").
   invalid_tool_call_strategy: ''
   penalize_invalid_tool_call: true
   invalid_tool_call_advantage: -5.0
@@ -76,6 +78,13 @@ env:
   nemo_gym:
     cache_dir: /home/work/vidsearch/tools/nemo_rl/gym_cache    # 하니스 셋업 트리 (OpenHands · R2E-Gym · SWE-bench) — 두 노드 공용 NFS
     use_absolute_ip: true
+    # 하니스 (nv-OpenHands) 가 거부한 도구 호출의 오류 응답. 도구 출력이 이 정규식으로 시작하고 `name` 이 그 호출의 도구 이름과 같으면,
+    # 그 호출을 낸 모델 턴을 잘못된 도구 호출로 표시해 `grpo.invalid_tool_call_advantage` 를 건다 (결정 88).
+    # 파서가 호출로 읽었지만 인자 검증 · 도구 이름에서 걸린 것이라 본문 문자열 탐지 (`invalid_tool_call_patterns`) 에는 안 잡힌다.
+    # 전제: `tools/apply_harness_patches.sh check` 통과 — 패치가 없으면 하니스가 그 턴과 오류 문구를 대화에서 뺀다 (`docs/E2E_SANDBOX.md` §7.11).
+    invalid_tool_call_output_patterns:
+      - 'Validation failure for (?P<name>[^:\n]+): '
+      - '(?s)Tool (?P<name>.+?) is not registered\. \(arguments: '
     config_paths:
       - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
       - responses_api_agents/swe_agents/configs/swebench_openhands_training.yaml
