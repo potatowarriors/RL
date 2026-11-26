@@ -1,0 +1,129 @@
+# teacher_swe_e2e_alpha.yaml — SWE E2E teacher 초안 (2026-11-24, 값은 사용자 승인 전 · docs/E2E_SANDBOX.md §7).
+#
+# 과제마다 Apptainer 컨테이너를 둘 띄운다 (Gym `swe_agents`): 에이전트 컨테이너에서 모델이 도구 (셸 · 파일 편집) 로 저장소를 고치고,
+# 채점 컨테이너가 그 패치로 테스트를 돌린다. 보상은 0/1 이다 — FAIL_TO_PASS · PASS_TO_PASS 가 모두 통과할 때 1.
+#
+# 데이터 = Ultra 블렌드 `swe.jsonl` (사용자 결정 2026-11-24 "학습데이터를 ultra 블렌드로 바꿔"). 기준선의 SWE teacher 레시피는
+# examples/nemo_gym/nemotron-3-ultra/swe_teacher.yaml (32 × 16 · lr 3e-6 · 196,608 · 200 턴 · 3,600 s · 4 에폭 약 964 step, 128 노드) 이다.
+# 그 규모는 2 노드에 그대로 못 옮긴다 — 배치 · 문맥 · 턴은 문맥 131,072 인 가장 가까운 제공 레시피
+# examples/nemo_gym/grpo_qwen3_30ba3b_thinking_swe2.yaml (Qwen3-30B-A3B, 같은 프레임워크) 를 기본안으로 삼았다. 그 값을 그대로 따른 것:
+#   8 × 8 · advantage clip ±100 · 잘못된 도구 호출 / 사고 태그 advantage −5 · overlong_filtering · 궤적 나이 1 ·
+#   200 턴 · 에이전트 1,800 s · 실패 롤아웃 마스킹 · 학습 중 검증 없음 · prefix caching 켬.
+#   프롬프트 혼합은 가이드의 `run_with_mixed_prompts` 대신 `agent_prompt_overrides` 로 쓴다 — 이 Gym (3045a793) 은 앞의 키를 구현하지 않는다 (결정 81).
+# 벗어난 것과 이유:
+#   lr 3e-6 (가이드 1e-6)        — alpha 는 bf16 가중치라 1e-6 갱신의 약 12% 만 반영된다 (결정 22 · 23). Ultra SWE teacher · Xiaomi MOPD 도 3e-6.
+#   옵티마이저 Muon               — alpha 공통 (부모 상속).
+#   턴당 생성 상한 8,192 (가이드 131,072) — alpha 도구 teacher 값. `</think>` 를 닫지 않는 턴이 문맥 전체를 쓰는 것을 막는다 (KNOWN_ISSUES 11-14).
+#   동시 실행 128 (가이드 768)   — 2 노드 440 코어. step 당 롤아웃 64 개 × 겹치는 배치 2 개. 컨테이너 쓰기 공간 16 GB 가 세션 메모리에
+#                                  잡히므로 128 × 16 GB = 2,048 GiB (두 노드 합 한도 3,544 GiB) 가 상한 근거다.
+#   모델 서버 alpha_vllm_model    — strict 도구 렌더 유지 (결정 13).
+# 스모크에서 재서 정할 것: 턴당 생성 상한의 잘림 비율 · 동시 실행 · 메모리 상한 · step 시간.
+#
+# 시작점: MOPD1 학생 results/alpha/mopd1/hf/hf_step_00120 (SWE-V 12.0).
+# 데이터: RL/Nemotron-RL-Ultra-Training-Blends/swe.jsonl 7,816 (SWE-rebench-V2 7,610 다국어 · SWE-Gym 206). 8 × 8 이면 1 에폭 = 977 스텝.
+#   SWE-rebench 행은 Gym 의 정답 패치 검증 (verify_golden_patch) 으로 과제를 미리 거를 수 있다 (docs/E2E_SANDBOX.md §7.6).
+#   학습 규모 (에폭 · 스텝) 는 스모크에서 잰 롤아웃 처리량으로 정한다 — 결정 대기.
+# 이미지: $NRL_ROOT/sif/swe/ (tools/apptainer/build_sifs.py — Ultra 이미지 7,785 개는 변환 승인 대기). 하니스 셋업: $NRL_ROOT/gym_cache/swe_agents/.
+# 전제 (세션마다): tools/apptainer/setup_session.sh --pid-mode bindproc --sessiondir-mb 16384 (두 노드) ·
+#   runs/ray_cluster.sh start (raylet 환경에 APPTAINER_BIND=/proc).
+#
+# 실행: RECIPE=examples/configs/alpha/teacher_swe_e2e_alpha.yaml DATA=<swe.jsonl> VAL=<swe.jsonl> \
+#         examples/configs/alpha/runs/launch.sh teacher_swe_e2e <tag> policy.model_name=<mopd1/hf/hf_step_00120>
+defaults: teacher_tool_alpha.yaml
+
+checkpointing:
+  checkpoint_dir: "results/alpha_teacher_swe_e2e"
+  save_period: 30                       # 1 개 약 155 GB. 가이드는 5 (최고 step 118 을 고르려면 촘촘해야 한다 — 저장 주기는 결정 대기)
+
+grpo:
+  num_prompts_per_step: 8               # 가이드 값. 롤아웃 64 개 / step
+  num_generations_per_prompt: 8
+  max_num_steps: 977                    # 1 에폭 (7,816 // 8) — 규모는 결정 대기
+  max_num_epochs: 1
+  advantage_clip_low: -100
+  advantage_clip_high: 100
+  overlong_filtering: true
+  val_period: 100000                    # 가이드와 같이 학습 중 검증 없음 — 판정은 SWE-V 벤치
+  val_at_start: false
+  val_at_end: false
+  invalid_tool_call_strategy: ''
+  penalize_invalid_tool_call: true
+  invalid_tool_call_advantage: -5.0
+  penalize_malformed_thinking: true
+  malformed_thinking_advantage: -5.0
+  async_grpo:
+    max_trajectory_age_steps: 1         # 가이드 · Ultra SWE teacher 값 (alpha 단일 스텝 레시피는 2)
+
+policy:
+  # R3 (라우터 재생) 는 SWE E2E 에서 끈다 (사용자 2026-11-26 "R3 없이 SWE E2E 로 KL 측정"): swe_agents 하니스 (컨테이너 안의 OpenHands) 가
+  # expert 경로를 넘기지 않아 NeMo-RL 이 예외를 던진다 (docs/E2E_SANDBOX.md §7.9). 공개 E2E SWE 레시피 셋도 R3 없이 돈다.
+  # R3 없이 잰 KL 은 단일 턴에서 0.0015 (기준 0.001 초과) — SWE 다중 턴의 값은 S3 에서 잰다.
+  router_replay:
+    enabled: false
+  generation:
+    max_new_tokens: 8192                # 턴당 상한 (부모 값 그대로 명시). 가이드는 문맥 전체
+    vllm_cfg:
+      # D2 (prefix caching 끔) 를 SWE E2E 에서 뒤집는다: 다중 턴은 턴마다 문맥 전체를 다시 보낸다 (캐시 끔 측정에서 prefill 의 98% 가 재계산).
+      # 근거: PC-S 학습 엔진 설정 통과 (docs/GATES.md), 공개 E2E SWE 레시피 셋 모두 켬. 가중치 갱신 뒤에도 캐시는 비워지지 않는다
+      # (recompute_kv_cache_after_weight_updates: false — 공개 레시피와 같은 값, §7.9).
+      enable_prefix_caching: true
+
+env:
+  should_log_nemo_gym_responses: false  # 다중 턴 궤적 전체라 크다 — 스모크에서만 켠다
+  should_mask_flagged_samples: true     # 타임아웃 · OOM · 한도에 걸린 롤아웃은 손실에서 뺀다 (swe_agents 가 mask_sample 을 붙인다)
+  nemo_gym:
+    cache_dir: /home/work/vidsearch/tools/nemo_rl/gym_cache    # 하니스 셋업 트리 (OpenHands · R2E-Gym · SWE-bench) — 두 노드 공용 NFS
+    use_absolute_ip: true
+    config_paths:
+      - responses_api_models/alpha_vllm_model/configs/alpha_vllm_model_for_training.yaml
+      - responses_api_agents/swe_agents/configs/swebench_openhands_training.yaml
+    swe_agents_train:
+      responses_api_agents:
+        swe_agents:
+          agent_max_turns: 200
+          concurrency: 128
+          swebench_agent_timeout: 1800
+          agent_prompt_override_random: true    # 결정 81: 롤아웃마다 세 틀 (Codex · OpenCode · CodeAct) 중 하나를 고른다 (같은 프롬프트의 8 개도 서로 다른 틀이 된다)
+          agent_prompt_overrides:
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/codex/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/codex/system_prompt.j2
+              agent_cls: CodexAgent
+              diversify_tool_names: false
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/opencode/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/opencode/system_prompt.j2
+              agent_cls: OpenCodeAgent
+              diversify_tool_names: false
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/openhands/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/openhands/system_prompt.j2
+              agent_cls: CodeActAgent
+              diversify_tool_names: false
+          dataset_path: ${data.train.data_path}
+          container_formatter:
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/r2egym_{instance_id}.sif
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/swegym_sweb.eval.x86_64.{instance_id}.sif
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/swerebench/{instance_id}.sif
+    swe_agents_val:
+      responses_api_agents:
+        swe_agents:
+          agent_max_turns: 200
+          concurrency: 128
+          swebench_agent_timeout: 1800
+          agent_prompt_override_random: true    # 결정 81: 롤아웃마다 세 틀 (Codex · OpenCode · CodeAct) 중 하나를 고른다 (같은 프롬프트의 8 개도 서로 다른 틀이 된다)
+          agent_prompt_overrides:
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/codex/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/codex/system_prompt.j2
+              agent_cls: CodexAgent
+              diversify_tool_names: false
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/opencode/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/opencode/system_prompt.j2
+              agent_cls: OpenCodeAgent
+              diversify_tool_names: false
+            - user_prompt_template: responses_api_agents/swe_agents/prompts/openhands/user_prompt.j2
+              system_prompt_template: responses_api_agents/swe_agents/prompts/openhands/system_prompt.j2
+              agent_cls: CodeActAgent
+              diversify_tool_names: false
+          dataset_path: ${data.validation.data_path}
+          container_formatter:
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/r2egym_{instance_id}.sif
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/swegym_sweb.eval.x86_64.{instance_id}.sif
+            - /home/work/vidsearch/tools/nemo_rl/sif/swe/swerebench/{instance_id}.sif

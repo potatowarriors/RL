@@ -66,7 +66,19 @@ def check(cfg: dict) -> None:
     # alpha RL 기본값 (R1·R3 게이트)
     if vkw.get("mamba_ssm_cache_dtype") != "float32":
         err("policy.generation.vllm_kwargs.mamba_ssm_cache_dtype 가 float32 가 아니다 — GDN 재귀 상태 bf16 누적 (R1 FAIL 0.0042)")
-    if not r3:
+    # R3: 기본은 켬 (R1 — 끄면 KL 0.0015, 켜면 0.0006). 예외는 Gym `swe_agents` 다중 턴 롤아웃 하나다: 컨테이너 안의 OpenHands 가
+    # expert 경로를 넘기지 않아 R3 가 켜져 있으면 NeMo-RL 이 첫 결과에서 예외를 던진다 (docs/E2E_SANDBOX.md §7.9, 2026-11-26).
+    gym_env = env.get("nemo_gym") or {}
+    swe_harness = any(
+        isinstance(v, dict) and "swe_agents" in (v.get("responses_api_agents") or {}) for v in gym_env.values()
+    )
+    if swe_harness and r3:
+        err("policy.router_replay.enabled 가 true 인데 Gym swe_agents 를 쓴다 — 하니스가 expert 경로를 넘기지 않아 "
+            "nemo_gym.py 가 'requires NeMo Gym output items to include routed_experts' 로 죽는다 (E2E_SANDBOX §7.9)")
+    elif swe_harness:
+        warn("R3 꺼짐 (swe_agents E2E 의 예외, 사용자 결정 2026-11-26) — R3 없이 잰 KL 은 단일 턴에서 0.0015 로 기준 0.001 을 넘는다. "
+             "이 레시피의 KL 은 측정값으로 보고 기준은 따로 정한다 (E2E_SANDBOX §7.9)")
+    elif not r3:
         err("policy.router_replay.enabled 가 false — alpha RL 기본값 (R1)")
     if vcfg.get("turn_end_token_id") != 3:
         err("policy.generation.vllm_cfg.turn_end_token_id 가 3 이 아니다 — Gym 멀티턴 2번째 호출부터 깨짐 (R3)")
