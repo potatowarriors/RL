@@ -472,7 +472,7 @@ S2-dry 의 통과 기준은 종료 코드가 아니라 단계 표지다: 모델�
 | 항목 | 사실 | 근거 |
 |---|---|---|
 | 가중치 갱신과 캐시 | 갱신 때 엔진이 prefix cache 를 비우지 않는다. `Successfully reset prefix cache` 는 기동 직후 첫 refit 에만 8 대 모두 찍히고, step 뒤 갱신에는 없다 (§7.9 의 코드 읽기와 같다). 낡은 캐시의 영향은 이 런에서 미측정 — lr 이 워밍업 구간이라 갱신이 거의 없다 | `results/alpha/teacher_swe_e2e/s3b.log` |
-| 형식이 틀린 도구 호출 | 하니스가 그 응답을 버리고 같은 프롬프트로 다시 부른다 — 8,348 호출 중 58 (0.7%), 롤아웃 41/92. 예: `bash` 호출에 필수 인자 `command` 가 없는 응답. 버린 응답은 학습 궤적에 없어 **`invalid_tool_call_advantage: -5` 벌점이 걸리지 않는다** (궤적에 남은 것 기준 Invalid tool call rate 는 step 1 에서 3/3,230). KL 에는 영향 없다 | 덤프의 턴 ↔ 하니스 호출 대조 (`analyze_s3.py`), nv-OpenHands `agenthub/codeact_agent/function_calling.py` 328 ~ 334 (`ValidationFailureAction`) |
+| 형식이 틀린 도구 호출 | 하니스가 그 응답을 버리고 같은 프롬프트로 다시 부른다 — 학습에 들어간 96 롤아웃의 8,498 호출 중 97 (1.1%) (처음 적은 58/8,348 은 분석 도구의 짝짓기가 롤아웃 하나를 빼서 적게 센 값이다 — 진단과 정정은 §7.11). 예: `bash` 호출에 필수 인자 `command` 가 없는 응답. 버린 응답은 학습 궤적에 없어 **`invalid_tool_call_advantage: -5` 벌점이 걸리지 않는다** (궤적에 남은 것 기준 Invalid tool call rate 는 step 1 에서 3/3,230). KL 에는 영향 없다 | 덤프의 턴 ↔ 하니스 호출 대조 (`analyze_s3.py`), nv-OpenHands `agenthub/codeact_agent/function_calling.py` 328 ~ 334 (`ValidationFailureAction`) |
 | 덤프 키의 방향 | `env.should_log_nemo_gym_responses: true` 가 step 덤프 (`train_data_step*.jsonl`) 를 **건너뛴다**. 초안 레시피의 `false` 는 주석과 반대로 덤프를 쓴다 (32 행에 step 당 약 160 MB). 스모크에는 필요했지만 본 런 (64 행 × 977 step) 에서는 약 300 GB 가 쌓인다 → 본 런 전에 `true` 로 바꾼다 (레시피 변경, 승인 대상) | `nemo_rl/algorithms/grpo.py` `_should_log_nemo_gym_responses` |
 | 전부 마스킹된 step | `seq_logprob_error_in_loss=false` 에서는 런이 죽지 않고 KL 0 이 기록된다 (`true` 면 예외로 죽는다) → KL 은 유효 시퀀스 수와 함께 읽는다 | `megatron_policy_worker.py` 735 부근 (독립 검토) |
 | 마스킹 비율 | 96 롤아웃 중 15 (16%) 가 상한에 걸려 손실에서 빠졌다 (턴 상한 10 · 문맥 상한 5). 학생 측정 (`student_s2b_pc1`) 의 29% 보다 낮다 — 과제 12 개를 고른 표본이라 비교하지 않는다 | `s3b/analysis.json` |
@@ -495,6 +495,28 @@ S2-dry 의 통과 기준은 종료 코드가 아니라 단계 표지다: 모델�
 - 공개 E2E SWE 레시피 셋 (Ultra `swe_teacher.yaml` · Super `stage2_swe2.yaml` · Qwen3 `swe2`) 은 upstream `main` 에서도 **R3 · token capture 없이** 기존 async GRPO 로 학습한다. token capture 와 R3 를 함께 쓰는 레시피는 시험용 하나 (문맥 8,192 · 6 턴) 다.
 - 우리 SWE 레시피의 off-policy 대응은 Ultra `swe_teacher.yaml` 과 같다: 시퀀스 필터 2 · IS 보정 (TIS 5 / 0.2) · `force_on_policy_ratio` · `freeze_moe_router: true` · 궤적 나이 1 · 갱신 뒤 KV 재계산 안 함.
 - 확인하지 못한 것: Gym 패치가 0.6.0 에서 도는지, SingleController 가 AlphaBridge 와 도는지, OpenHands 의 이력 압축이 token capture 의 계보를 끊는지.
+
+### 7.11 형식이 틀린 도구 호출이 벌점 없이 사라진다 — 진단 (2026-11-26, 독립 검증 "확인")
+
+사용자 지시 2026-11-26 "하네스가 벌점이 안 걸리게 하는데 이건 수정해야겠어". 수정 방법은 보고 뒤 결정한다 (STATUS "열린 사용자 결정").
+
+**원인 (한 문장)**: 모델이 형식이 틀린 도구 호출을 생성하면 nv-OpenHands (`5f018005`) 가 그것을 `ValidationFailureAction` · `FunctionCallNotExistsAction` 으로 바꾸는데, 대화 조립 코드가 이 두 종류를 assistant 메시지로 만들지 않아 실패한 응답과 오류 문구가 다음 프롬프트와 학습 궤적에서 모두 빠진다. 모델은 오류를 보지 못한 채 토큰까지 같은 프롬프트로 다시 호출된다. 궤적에 남더라도 NeMo-RL 의 탐지기는 이런 호출을 잡지 못한다.
+
+| 고리 | 근거 |
+|---|---|
+| 틀린 것은 모델이 생성한 원문이다 | s3b 의 롤아웃 160 개 중 이력이 있는 127 개에서 거부 123 건 (55 롤아웃). 이력에 남은 `generation_token_ids` 를 복원: 필수 인자의 태그를 빼고 값만 씀 47 (그중 43 은 한 롤아웃의 반복) · 태그가 깨짐 46 (`<parameter Gupta>` · `<parameter permutation_description>`) · 없는 도구 이름 18 (`shellcommand` · `execute-bash` · `evaluate_bash`) · 그 밖의 스키마 오류 · 문맥 한도에서 잘림 2 (P 130,928 + 144 = 131,072). 호출된 함수의 블록 안에 필수 인자가 제대로 있던 경우는 누락 100 건 중 0. 틀 Codex 70 · CodeAct 39 · OpenCode 14. 샘플링 temperature 1.0 · top_p 1.0 |
+| 검증 실패가 예외가 아니라 action 이 된다 | `openhands/agenthub/codeact_agent/function_calling.py` 328 ~ 345 (codex 204 ~ 230 · opencode 278 ~ 295), 모델 응답 전체가 `tool_call_metadata` 로 붙는다 |
+| runtime 이 오류 문구를 observation 으로 돌려준다 | `runtime/base.py` 988 ~ 999 · 453 ~ 454 |
+| 대화 조립이 둘 다 버린다 | `memory/conversation_memory.py`: `_process_action` 254 ~ 285 의 목록에 두 action 이 없어 421 의 `return []` 로 빠진다 → 대기 중 assistant 메시지가 안 생긴다. observation 은 602 ~ 607 에서 문구가 만들어지지만 801 ~ 811 에서 `tool` 응답으로 보관되고, 내보내는 곳 (171 ~ 182) 은 대기 중 assistant 메시지가 있어야 돈다 |
+| 다음 프롬프트가 같다 | 다시 부른 쌍 120 개의 `prompt_token_ids` 가 토큰 단위로 같다. 거부 123 건 = 사라지고 다시 불린 호출 122 + 롤아웃의 마지막 호출 1 (궤적에 남았으나 마스킹된 표본, 표지 없음) |
+| 탐지기는 남아도 못 잡는다 | `nemo_rl/environments/nemo_gym.py` 169 ~ 231 은 마지막 출력 항목이 본문 · reasoning 텍스트이고 거기에 `<tool_call>` 류 문자열이 있을 때만 표시한다. 거부된 호출은 파서가 `function_call` 항목으로 만든 것이라 텍스트가 없다. 세 step 에서 표시된 14 건 (3 · 5 · 6) 은 함수 태그가 깨져 파싱되지 않은 종류다 (`<function:shell_command>`) |
+
+- **배제한 대안**: 서빙 파서가 잘 쓴 인자를 잃음 (원문 복원으로 배제 — 다만 2 건은 모델의 깨진 첫 블록 뒤에 온 멀쩡한 블록을 파서가 합치거나 살리지 못했다) · 전송 재시도 (호출마다 응답 id 와 이력 이벤트가 따로 있고 로그에 재시도 0 줄) · 이력 압축 (프롬프트 길이가 그대로) · Gym 의 궤적 조립 (그 전에 이미 프롬프트에 없다).
+- **결과**: ① 학습에 들어간 96 롤아웃에서 호출 8,498 중 97 이 사라졌다 (그 밖에 문맥 초과 때 Gym 이 남기는 0 토큰 기록 5) ② 오류를 못 본 모델이 같은 실수를 되풀이한다 — 같은 프롬프트에서 29 · 7 · 5 번 연속 재호출. 29 번 반복한 롤아웃은 재호출 44 번에 모델 시간 354 초 중 122 초 · 생성 23,362 토큰을 썼다 ③ 다시 부른 호출도 200 턴 상한과 1,800 초에 들어간다 — 턴 상한에 걸린 18 롤아웃 중 11 개에 재호출이 있었다 ④ `invalid_tool_call_advantage: -5` 는 이 호출들에 한 번도 걸리지 않는다.
+- **선행 사례**: 하니스 fork 이력 — `d6bd12edd` (2026-02-02) 가 action 을, `cdb815028` (03-22) 가 observation 문구와 테스트를 넣었으나 `_process_action` 목록은 그대로다. 코드 주석 ("Send error as a user message while preserving the assistant message") 과 fork 의 테스트 (`tests/unit/memory/test_tool_error_conversation_flow.py`) 는 assistant 메시지와 오류 응답이 함께 남기를 기대한다 — 의도가 아니라 미완성 구현으로 읽힌다 (작성자 확인은 아님). Gym main 이 고정한 `54d2a95e` 도 같다. upstream 이슈 · PR 검색 (`repo:NVIDIA-NeMo/Gym ValidationFailure` 0 건 · `repo:NVIDIA-NeMo/RL invalid_tool_call_advantage` 는 token capture 와의 병용 PR #5022 뿐) 에 이 문제는 없다. 프론티어는 `FRONTIER.md` "보상 · 벌점 · 길이 제어" — RL 처리를 공개한 계열 (Ultra · Qwen3-Coder-Next · MiMo-V2.6 · GLM-4.5) 은 모두 벌을 주고, MiMo 공개 하니스는 오류를 모델에 돌려주고 턴을 남겨 표시한다.
+- **독립 검증**: 새 검증자 (증상과 원자료만 받은 1 단계) 가 같은 원인에 도달 → 2 단계 판정 **확인**. 반론 요지 (반영함) — 사라진 호출 수는 58 이 아니라 97 (짝짓기 상한이 롤아웃 하나를 뺐다) · "모두 같은 프롬프트로 다시 불렸다" 는 0 토큰 기록 5 건에는 틀리다 · "학습기에 도달하지 않는다" 는 롤아웃의 마지막 호출에는 틀리다 (1 건) · 144 토큰에서 끝난 2 건은 조기 종료가 아니라 문맥 한도 · 반증 시험 "원문에 멀쩡한 `<parameter=command>` 가 0 건" 은 틀렸고 (다른 블록에 20 건) 호출된 함수의 블록 안으로 좁혀야 한다 (0/100).
+- **궤적에 남기면 학습기가 보는 것**: 토큰 ID 가 붙은 `function_call` 항목과 오류 문구 (`Validation failure for <도구>: …` · `Tool <이름> is not registered. …`) 의 `function_call_output` 항목. 메시지 단위로 "거부됨" 을 실어 보낼 기존 필드는 없다 — 표지는 NeMo-RL 본체가 붙여야 한다.
+- **부수 발견 (별개 문제, 미결)**: 서빙 파서가 모델 출력을 바꾸는 턴이 8,766 중 117 — 인자 값 앞뒤 공백 제거 37 (공백 · 탭 손실 18, 편집 인자의 선행 공백 손실 1) · `</tool_call>` 뒤 텍스트 누락 34 · 중복 `</think>` 제거 30 · `</think>` 없는 턴 6. 학습 토큰은 원문 그대로이고, 하니스가 실행 · 표시한 내용만 다르다.
 
 ## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
