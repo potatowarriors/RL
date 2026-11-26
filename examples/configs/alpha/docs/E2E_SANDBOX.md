@@ -442,8 +442,8 @@ S2-dry 의 통과 기준은 종료 코드가 아니라 단계 표지다: 모델�
 | 고정된 Gym (`3045a793`) 의 `swe_agents` 는 그 메시지와 마지막 응답으로 궤적을 다시 짓고 경로를 싣지 않는다 | `responses_api_agents/swe_agents/app.py` 3043 ~ 3065 |
 | 앞선 다중 턴 R3 런 (workplace `w1r` 등) 은 Gym 서버 안에서 도는 에이전트라 모델 응답 항목을 그대로 넘겼다 | Gym `responses_api_models/vllm_model/app.py` 943 · 993 |
 
-- **그대로 실어 나르는 것도 답이 아니다.** 턴마다 전체 시퀀스의 경로를 실으면 호출당 평균 10.6 MB (프롬프트 평균 55,063 토큰 × 24 층 × 8), `student_s2b_pc1` 규모 (512 롤아웃 · 61,835 호출) 에 약 654 GB 다.
-- **선행 사례**: 공개 E2E SWE 레시피 셋 (Qwen3-30B-A3B · Super · Ultra) 은 모두 prefix caching 켬 · **R3 없음** 이다. upstream 의 R3 + Gym 레시피는 단일 스텝 피벗뿐이다. upstream `main` (`61bc275da`, 우리 fork 보다 512 커밋 앞 · 분기점 2026-08-12) 에는 다중 턴용 **token capture** 경로가 있다 — `token_capture.defer_routed_experts_to_policy`, SingleController Gym 경로, 경로를 델타로 맞춘다 (`fe1d97ce2` #4610 · `681ca0463` #4345 — 둘 다 우리 브랜치에 없다), Gym `main` (`363af5e3e`) 의 `swe_agents` 가 token capture 와 `routed_experts` 를 다룬다. upstream 가이드 (`docs/guides/router-replay.md`, main) 는 R3 레시피에서 prefix caching 을 끈다고 적는다.
+- **그대로 실어 나르는 것도 답이 아니다.** 턴마다 전체 시퀀스의 경로를 실으면 호출당 평균 10.6 MB (프롬프트 평균 55,063 토큰 × 24 층 × 8), `student_s2b_pc1` 규모 (512 롤아웃 · 61,835 호출) 에 약 654 GB 다. **정정 (11-26, §7.10)**: expert id 는 int16 이라 (192 experts) 행당 384 B — 호출당 21.1 MB, 같은 규모에 약 1.3 TB 다. 턴마다 새 토큰의 행만 싣는 델타 방식이면 롤아웃당 최대 50 MB 다.
+- **선행 사례**: 공개 E2E SWE 레시피 셋 (Qwen3-30B-A3B · Super · Ultra) 은 모두 prefix caching 켬 · **R3 없음** 이다. upstream 의 R3 + Gym 레시피는 단일 스텝 피벗뿐이다. upstream `main` (`61bc275da`, 우리 fork 보다 512 커밋 앞 · 분기점 2026-08-12) 에는 다중 턴용 **token capture** 경로가 있다 — `token_capture.defer_routed_experts_to_policy`, SingleController Gym 경로, 경로를 델타로 맞춘다 (`fe1d97ce2` #4610 · `681ca0463` #4345 — 둘 다 우리 브랜치에 없다) [**정정 (§7.10)**: 이 둘은 뒤에 얹힌 수정이고 기반 커밋은 `7036e5d16` #3837 이다], Gym `main` (`363af5e3e`) 의 `swe_agents` 가 token capture 와 `routed_experts` 를 다룬다. upstream 가이드 (`docs/guides/router-replay.md`, main) 는 R3 레시피에서 prefix caching 을 끈다고 적는다.
 - R3 없이 잰 KL 은 0.0015 다 (R1 2 × 2 · R1-L B, 단일 턴 수학 프롬프트) — 기준 0.001 (결정 80) 을 넘는다. SWE 다중 턴에서의 값은 미측정이다.
 
 **같이 알게 된 것 (S3 계획에 들어간다)**
@@ -457,6 +457,44 @@ S2-dry 의 통과 기준은 종료 코드가 아니라 단계 표지다: 모델�
 | 죽은 키 | `run_with_mixed_prompts` · `penalize_invalid_tool_call` · `penalize_malformed_thinking` · `invalid_tool_call_strategy` · `max_rollout_turns` (Gym 경로) · `swe_agents.dataset_path` (읽지 않지만 값은 필요) | 조사 보고 (11-26) |
 | 토큰 연속성 | 하니스가 직전 턴의 토큰을 다시 보내고 엔진이 그 토큰을 그대로 이어 붙인다 (`required_prefix_token_ids`). 학습 엔진에서 `swe_agents` 로 이 경로가 돈 적은 없다 (S2 는 토큰 정보를 끄고 돌았다) | `vllm_worker_async.py` 526 ~ 690 · `nemo_gym.py` 691 ~ 698 |
 | 호스트 메모리 (계산) | 8 × 8 × 131,072: 배치 객체 3.49 GB · CP 8 랭크 27.9 GB · 워커 정점 55.8 GB. 컨테이너 쓰기 공간은 최악 128 × 16 GiB | `KNOWN_ISSUES.md` 10-20 의 식 |
+
+### 7.10 S3 — R3 없이 학습 경로를 돌려 KL 을 쟀다 (2026-11-26, 사용자 승인 "R3 없이 … KL 측정을 바로 진행해")
+
+**결과: R3 없이 SWE 다중 턴의 Generation KL 은 0.0016 이다 (on-policy step 0.00156 · 세 step 합산 0.00162, 95% 구간 0.0015 ~ 0.0017). 기준 0.001 을 넘고, 단일 턴에서 R3 없이 잰 0.0015 와 같은 수준이다.** 수치 · 분해 · 한계 · 검토 기록의 정본은 `GATES.md` "S3" 다. 여기에는 경과와 함께 알게 된 것을 적는다.
+
+| 런 | 구성 | 결과 |
+|---|---|---|
+| `s3a` (09:40 ~ 10:02) | 과제 2 × 2 회 · 1 step | rc 0 — 처음 도는 경로 통과 (토큰 연속성 · 빈 롤아웃 예외 0), KL 0.0018 (4 시퀀스) |
+| `s3b` (10:05 ~ 11:13) | 과제 12 · 4 × 8 · 3 step · 실제 상한 | rc 0 — KL 0.001555 / 0.001637 / 0.001658, 유효 81/96 시퀀스, 배치 재시도 0, 평균 보상 0.31 → 0.41 |
+
+**함께 알게 된 것**
+
+| 항목 | 사실 | 근거 |
+|---|---|---|
+| 가중치 갱신과 캐시 | 갱신 때 엔진이 prefix cache 를 비우지 않는다. `Successfully reset prefix cache` 는 기동 직후 첫 refit 에만 8 대 모두 찍히고, step 뒤 갱신에는 없다 (§7.9 의 코드 읽기와 같다). 낡은 캐시의 영향은 이 런에서 미측정 — lr 이 워밍업 구간이라 갱신이 거의 없다 | `results/alpha/teacher_swe_e2e/s3b.log` |
+| 형식이 틀린 도구 호출 | 하니스가 그 응답을 버리고 같은 프롬프트로 다시 부른다 — 8,348 호출 중 58 (0.7%), 롤아웃 41/92. 예: `bash` 호출에 필수 인자 `command` 가 없는 응답. 버린 응답은 학습 궤적에 없어 **`invalid_tool_call_advantage: -5` 벌점이 걸리지 않는다** (궤적에 남은 것 기준 Invalid tool call rate 는 step 1 에서 3/3,230). KL 에는 영향 없다 | 덤프의 턴 ↔ 하니스 호출 대조 (`analyze_s3.py`), nv-OpenHands `agenthub/codeact_agent/function_calling.py` 328 ~ 334 (`ValidationFailureAction`) |
+| 덤프 키의 방향 | `env.should_log_nemo_gym_responses: true` 가 step 덤프 (`train_data_step*.jsonl`) 를 **건너뛴다**. 초안 레시피의 `false` 는 주석과 반대로 덤프를 쓴다 (32 행에 step 당 약 160 MB). 스모크에는 필요했지만 본 런 (64 행 × 977 step) 에서는 약 300 GB 가 쌓인다 → 본 런 전에 `true` 로 바꾼다 (레시피 변경, 승인 대상) | `nemo_rl/algorithms/grpo.py` `_should_log_nemo_gym_responses` |
+| 전부 마스킹된 step | `seq_logprob_error_in_loss=false` 에서는 런이 죽지 않고 KL 0 이 기록된다 (`true` 면 예외로 죽는다) → KL 은 유효 시퀀스 수와 함께 읽는다 | `megatron_policy_worker.py` 735 부근 (독립 검토) |
+| 마스킹 비율 | 96 롤아웃 중 15 (16%) 가 상한에 걸려 손실에서 빠졌다 (턴 상한 10 · 문맥 상한 5). 학생 측정 (`student_s2b_pc1`) 의 29% 보다 낮다 — 과제 12 개를 고른 표본이라 비교하지 않는다 | `s3b/analysis.json` |
+| 마지막 배치 | 수집기는 마지막 갱신 뒤에도 배치를 하나 더 띄운다. 런이 끝날 때 컨테이너 세션 68 개가 돌고 있었고 래퍼가 정리했다 (남은 것 0) | `gates/swe_e2e_s3/s3b/run.log` |
+| Gym 서버의 노드 | Ray 가 기동마다 정한다 (s3a main1 · s3b sub1). `swe_agents` 서버 venv 는 NFS (`gates/gym_smoke/gym_venvs`) 에 첫 기동 때 만들어졌다 | 같은 로그 |
+| 벽시계 | 4 × 8 · 3 step 에 68 분 — 첫 배치 32 롤아웃 수집 20 분 47 초, 학습 step 281 ~ 423 s (첫 step 은 고정 비용 포함), step 3 은 롤아웃 대기 포함 1,376 s | 같은 로그 |
+
+**R3 를 SWE 에 쓰려면 — upstream token capture 경로의 범위 (읽기 전용 조사, 11-26)**
+
+| | upstream token capture 를 올린다 | 우리가 전달 경로를 만든다 |
+|---|---|---|
+| 무엇 | 엔진 워커가 토큰 · logprob · 경로를 TransferQueue 에 두고 Gym 은 좌표만 넘긴다. 에이전트 하니스는 아무것도 나르지 않는다 | alpha 모델 서버 플러그인이 턴마다 새 토큰의 경로 행을 노드 저장소에 두고, NeMo-RL 이 궤적을 조립할 때 가져온다 |
+| 규모 | NeMo-RL 본체 약 40 파일 · +15,000 줄 (기반 `7036e5d16` #3837 는 58 파일 · +9,007 줄, 단독 cherry-pick 은 28 경로 충돌) + Gym 커밋 3 개 약 +6,100 줄 | 파일 2 개 · 약 200 ~ 300 줄 (`nemo_rl/environments/nemo_gym.py` 700 ~ 792 · `gym_plugins/…/alpha_vllm_model/app.py`) |
+| 전제 | 학습 런타임을 SingleController 로 바꿔야 한다 — token capture 는 지금 쓰는 async GRPO 경로 (`grpo.py` · `trajectory_collector.py`) 가 읽지 않는다 | 런타임 그대로 |
+| 지금 핀 | vLLM 0.25.1 · nv-OpenHands 는 가능. Gym 0.6.0 은 그대로는 안 되고 커밋 3 개 (#2794 · #2996 · #2872) 를 패치로 얹어야 한다 (글자 충돌 0, 동작은 미확인). `uv lock` 미확인 | 가능 |
+| 잃는 것 | SingleController 는 검증 step (`val_period`) · `reward_shaping` · dynamic sampling 을 거부하고, token capture 와 메시지 단위 advantage 덮어쓰기 (`invalid_tool_call_advantage`) 를 함께 쓰지 못한다 | 없음 (upstream 의 대장 · 다이제스트 검증 · 고아 정리는 없다) |
+| 다시 돌릴 게이트 | E1 ~ E3 · R1 · R3 · G2 · G3 · G5 · G7 · PC-S | R3 · G3 · 새 CPU 조립 게이트 (음성 대조 포함) → 이 절의 KL 측정 |
+| 남는 문제 (둘 다) | prefix caching 과 R3 — upstream 은 R3 를 켤 때 캐시를 끄라고 권한다 (경로 행이 드물게 빠짐, `docs/guides/router-replay.md` 34 ~ 37). 우리 PC-S 는 순차 요청에서 경로가 비트 동일함을 확인했고 동시 요청은 보지 않았다. 가중치 갱신을 넘는 궤적은 표시만 되고 처리되지 않는다 | 같음 |
+
+- 공개 E2E SWE 레시피 셋 (Ultra `swe_teacher.yaml` · Super `stage2_swe2.yaml` · Qwen3 `swe2`) 은 upstream `main` 에서도 **R3 · token capture 없이** 기존 async GRPO 로 학습한다. token capture 와 R3 를 함께 쓰는 레시피는 시험용 하나 (문맥 8,192 · 6 턴) 다.
+- 우리 SWE 레시피의 off-policy 대응은 Ultra `swe_teacher.yaml` 과 같다: 시퀀스 필터 2 · IS 보정 (TIS 5 / 0.2) · `force_on_policy_ratio` · `freeze_moe_router: true` · 궤적 나이 1 · 갱신 뒤 KV 재계산 안 함.
+- 확인하지 못한 것: Gym 패치가 0.6.0 에서 도는지, SingleController 가 AlphaBridge 와 도는지, OpenHands 의 이력 압축이 token capture 의 계보를 끊는지.
 
 ## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
