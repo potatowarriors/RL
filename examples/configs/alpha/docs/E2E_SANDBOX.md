@@ -430,6 +430,34 @@ S2-dry 의 통과 기준은 종료 코드가 아니라 단계 표지다: 모델�
 
 **학습 설정으로 가져갈 관찰 (결정은 `STATUS.md` 열린 결정)**: 동시 128 에서 엔진 여유가 크다 (대기 0 · KV 최대 27%) · 시간 한도 1,800 s 는 p90 1,097 s 보다 넉넉하다 · 최대 턴 200 과 문맥 131,072 에 걸려 끝나는 롤아웃이 29% 다 · Codex 틀의 편집 도구는 지금 모델에서 거의 쓰이지 못한다 · 메모리 한도 초과 7 건.
 
+### 7.9 S3 계획 전 조사 — 막힌 곳과 알게 된 것 (2026-11-26, 읽기 · CPU 만)
+
+**R3 (라우터 재생) 는 지금 핀에서 `swe_agents` 다중 턴 롤아웃과 함께 쓸 수 없다 (코드로 확인, 실행으로는 미확인).**
+
+| 고리 | 근거 |
+|---|---|
+| R3 가 켜지면 NeMo-RL 은 Gym 결과의 학습 가능한 항목마다 `routed_experts` 를 요구하고, 없으면 예외를 던진다 | `nemo_rl/environments/nemo_gym.py` 728 ~ 735 (`require_routed_experts`), `nemo_rl/algorithms/grpo.py` 818 ~ 828 |
+| 항목의 경로는 그 턴 요청의 **전체 시퀀스** 행이어야 한다 (프롬프트 + 생성 이상) | `nemo_gym.py` 720 ~ 727 · 743 ~ 790 |
+| 에이전트 하니스 (컨테이너 안의 nv-OpenHands `5f018005`) 는 턴마다 토큰 필드 셋만 남긴다 — `routed_experts` 는 0 건 | `openhands/agenthub/nemo_gym_client.py` 149 ~ 156 · `openhands/core/message.py` 70 ~ 72 |
+| 고정된 Gym (`3045a793`) 의 `swe_agents` 는 그 메시지와 마지막 응답으로 궤적을 다시 짓고 경로를 싣지 않는다 | `responses_api_agents/swe_agents/app.py` 3043 ~ 3065 |
+| 앞선 다중 턴 R3 런 (workplace `w1r` 등) 은 Gym 서버 안에서 도는 에이전트라 모델 응답 항목을 그대로 넘겼다 | Gym `responses_api_models/vllm_model/app.py` 943 · 993 |
+
+- **그대로 실어 나르는 것도 답이 아니다.** 턴마다 전체 시퀀스의 경로를 실으면 호출당 평균 10.6 MB (프롬프트 평균 55,063 토큰 × 24 층 × 8), `student_s2b_pc1` 규모 (512 롤아웃 · 61,835 호출) 에 약 654 GB 다.
+- **선행 사례**: 공개 E2E SWE 레시피 셋 (Qwen3-30B-A3B · Super · Ultra) 은 모두 prefix caching 켬 · **R3 없음** 이다. upstream 의 R3 + Gym 레시피는 단일 스텝 피벗뿐이다. upstream `main` (`61bc275da`, 우리 fork 보다 512 커밋 앞 · 분기점 2026-08-12) 에는 다중 턴용 **token capture** 경로가 있다 — `token_capture.defer_routed_experts_to_policy`, SingleController Gym 경로, 경로를 델타로 맞춘다 (`fe1d97ce2` #4610 · `681ca0463` #4345 — 둘 다 우리 브랜치에 없다), Gym `main` (`363af5e3e`) 의 `swe_agents` 가 token capture 와 `routed_experts` 를 다룬다. upstream 가이드 (`docs/guides/router-replay.md`, main) 는 R3 레시피에서 prefix caching 을 끈다고 적는다.
+- R3 없이 잰 KL 은 0.0015 다 (R1 2 × 2 · R1-L B, 단일 턴 수학 프롬프트) — 기준 0.001 (결정 80) 을 넘는다. SWE 다중 턴에서의 값은 미측정이다.
+
+**같이 알게 된 것 (S3 계획에 들어간다)**
+
+| 항목 | 사실 | 근거 |
+|---|---|---|
+| 가중치 갱신과 캐시 | 초안 설정 (async · `in_flight_weight_updates: true` · `recompute_kv_cache_after_weight_updates: false` · 궤적 나이 1) 에서는 갱신 때 KV · GDN 상태 · 경로 슬롯을 아무것도 비우지 않는다. 궤적은 갱신을 넘어 이어지고, 첫 step 만 on-policy 다. `true` 면 진행 중 요청을 선점해 새 가중치로 다시 prefill 한다. 공개 SWE 레시피 셋은 모두 `false` 다 | `algorithms/async_utils/trajectory_collector.py` 876 ~ 943 · 337 ~ 353 · `vllm_worker_async.py` 1648 ~ 1660 |
+| 빈 롤아웃 | 생성 토큰이 없는 결과가 하나라도 오면 그 배치 (64 롤아웃) 의 흐름이 끊긴다. 설정으로 끌 수 없고 upstream main 도 같다. 수집기가 배치를 3 번 더 돌리고 네 번째 연속 실패는 치명이다. 두 학생 측정 (1,024 롤아웃) 에서는 0 건이었다 | `nemo_rl/environments/nemo_gym.py` 817 ~ 841 · `trajectory_collector.py` 1547 ~ 1616 |
+| 마스킹과 KL | 마스킹된 롤아웃은 KL 에서 빠진다. 턴 상한을 짧게 잡은 스모크는 전부 마스킹돼 KL 0 으로 "통과" 할 수 있다 → `num_mask_sample_filtered` · 유효 시퀀스 수를 함께 본다 | `algorithms/utils.py` 290 · Gym `app.py` 3852 ~ 3859 |
+| 실행기 | `launch.sh` 에는 SWE 기동 전 점검 (raylet 실행 위치 · 홈 여유 · Gym 패치 · 남은 컨테이너 · 메모리 감시) 이 없다. `uv_venv_dir` 가 가리키는 곳에 `swe_agents` 서버 venv 가 없다 | `runs/launch.sh` 29 ~ 57 · `runs/eval_swe_student.sh` 84 ~ 120 |
+| 죽은 키 | `run_with_mixed_prompts` · `penalize_invalid_tool_call` · `penalize_malformed_thinking` · `invalid_tool_call_strategy` · `max_rollout_turns` (Gym 경로) · `swe_agents.dataset_path` (읽지 않지만 값은 필요) | 조사 보고 (11-26) |
+| 토큰 연속성 | 하니스가 직전 턴의 토큰을 다시 보내고 엔진이 그 토큰을 그대로 이어 붙인다 (`required_prefix_token_ids`). 학습 엔진에서 `swe_agents` 로 이 경로가 돈 적은 없다 (S2 는 토큰 정보를 끄고 돌았다) | `vllm_worker_async.py` 526 ~ 690 · `nemo_gym.py` 691 ~ 698 |
+| 호스트 메모리 (계산) | 8 × 8 × 131,072: 배치 객체 3.49 GB · CP 8 랭크 27.9 GB · 워커 정점 55.8 GB. 컨테이너 쓰기 공간은 최악 128 × 16 GiB | `KNOWN_ISSUES.md` 10-20 의 식 |
+
 ## 8. Terminal E2E — 제공되는 것 조사 (2026-11-20, 읽기 전용)
 
 조사 에이전트의 보고 (파일 경로 근거) 를 옮긴 것이다. 실패 마스킹을 읽는 위치 · `harbor_agent` 의 실패 처리 · 로컬 데이터 존재는 주 세션이 다시 확인했다.
