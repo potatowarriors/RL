@@ -33,13 +33,15 @@ defaults: teacher_tool_alpha.yaml
 
 checkpointing:
   checkpoint_dir: "results/alpha_teacher_swe_e2e"
-  save_period: 30                       # 1 개 약 155 GB. 가이드는 5 (최고 step 118 을 고르려면 촘촘해야 한다 — 저장 주기는 결정 대기)
+  save_period: 20                       # 결정 93. 1 개 약 155 GB (가이드는 5). 저장되는 체크포인트는 전부 HF 로 반출한다 (tools/export_watch.sh)
+  keep_top_k: 10                        # 최근 10 개만 남는다 (재개용 순환 1.6 TB) — 점수로 고르는 것이 아니다
 
 grpo:
   num_prompts_per_step: 8               # 가이드 값. 롤아웃 64 개 / step
   num_generations_per_prompt: 8
   max_num_steps: 875                    # 1 에폭 (7,002 // 8). 결정 92: 처음부터 1 에폭으로 띄우고 중간 체크포인트를 보며 멈춘다
-  max_num_epochs: 1
+  max_num_epochs: 2                     # step 수는 max_num_steps 가 정한다. 2 로 두는 것은 재개 때문이다 — 저장되는 데이터 위치가 진행 중인 배치 둘만큼
+                                        # 앞서 있어, 재개하면 프롬프트를 최대 16 개 건너뛴다. 875 × 8 = 7,000 이 7,002 행에 딱 맞아 1 이면 875 전에 데이터가 끝난다
   advantage_clip_low: -100
   advantage_clip_high: 100
   overlong_filtering: true
@@ -55,6 +57,7 @@ grpo:
   malformed_thinking_advantage: -5.0
   async_grpo:
     max_trajectory_age_steps: 1         # 가이드 · Ultra SWE teacher 값 (alpha 단일 스텝 레시피는 2)
+    rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl   # 그룹별 보상 · 생성 토큰 수 (launch.sh 가 절대경로 log_dir 을 준다). step 덤프 없이 관문 점검기가 쓴다
 
 policy:
   # R3 (라우터 재생) 는 SWE E2E 에서 끈다 (사용자 2026-11-26 "R3 없이 SWE E2E 로 KL 측정"): swe_agents 하니스 (컨테이너 안의 OpenHands) 가
@@ -140,3 +143,23 @@ env:
             - /home/work/vidsearch/tools/nemo_rl/sif/swe/r2egym_{instance_id}.sif
             - /home/work/vidsearch/tools/nemo_rl/sif/swe/swegym_sweb.eval.x86_64.{instance_id}.sif
             - /home/work/vidsearch/tools/nemo_rl/sif/swe/swerebench/{instance_id}.sif
+
+logger:
+  wandb:
+    # 부모 (student_rlvr1_alpha.yaml) 의 목록에 SWE E2E 의 감시 지표를 더한 것이다 — 목록은 덮어쓰이므로 부모 것을 다시 적는다.
+    metric_allowlist:
+      - train/total_reward/mean                       # 보상
+      - train/[^/]+/reward/mean                       # agent 별 보상
+      - train/(loss|grad_norm|lr|approx_entropy)      # 최적화
+      - train/(gen_kl_error|token_mult_prob_error|num_masked_seqs_by_logprob_error|avg_trajectory_age)  # rollout↔학습 정합
+      - train/gen_tokens_per_sample/(mean|max)        # 길이
+      - train/(truncation_rate|natural_termination_rate|malformed_think_tag_rate|empty_final_answer_rate)  # 형식
+      - timing/train/(total_step_time|exposed_generation|policy_training|weight_sync)  # 속도 · refit
+      - performance/(tokens_per_sec|generation_tokens_per_sec)
+      # SWE E2E 감시 (GATES "S4"): 하니스 거부 · 잘못된 도구 호출 · 턴 · 유효 시퀀스 · 해결률
+      - train/swe_agents_train/num_harness_rejected_tool_calls/(mean|max)
+      - train/(invalid_tool_call_rate|malformed_thinking_rate)
+      - train/turns_per_sample/mean
+      - train/max_gen_tokens_per_turn/mean
+      - train/(global_valid_seqs|seq_logprob_error_valid_seqs|num_mask_sample_filtered)
+      - train/swe_agents_train/(resolved|patch_exists)/mean

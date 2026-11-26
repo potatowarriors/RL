@@ -300,6 +300,22 @@ Pai `eval_sft/prefix_cache_check.py` (서버 두 대에 같은 토큰을 강제�
 - **독립 검토**: 측정 설계 — "보완 필요" (step 2 ~ 3 은 워밍업 lr 이라 낡은 캐시 효과를 못 잰다 · 적중률 수집 수단 없음 · KL 분모가 로그에 없다 · 표본 16 은 빠듯) → 반영 → 실행 설정 "진행 가능". 분석 도구 — 네 번 고친 뒤 "신뢰 가능": KL 을 계산하지 못한 step · 빠진 step · 유효 시퀀스 0 · 사유 없는 마스킹 · 상한에 걸렸는데 KL 에 남은 행이 모두 "문제 없음" 으로 통과하던 경로를 막았고 음성 대조로 확인했다. 재표본 단위는 시퀀스가 아니라 프롬프트 그룹이다 (한 프롬프트의 8 개는 같은 과제). 보고 문장 대조 — "on-policy" 는 step 1 에만 쓴다 · 위치별 하락의 절반은 구성 효과 · 갱신을 넘은 것은 step 3 뿐.
 - **다시 잴 때**: R3 전달 경로가 생기면 같은 명령으로 대조한다. `seq_logprob_error_in_loss=false` 에서는 롤아웃이 전부 마스킹돼도 런이 죽지 않고 KL 0 이 기록된다 — 유효 시퀀스 수 (`train/global_valid_seqs`) 를 함께 읽는다.
 
+### S4 — SWE E2E 본 런의 첫 step 판정 (2026-11-26 정의, `RL_PLAN.md` 결정 85 · 86 · 90 · 93)
+
+별도 런 없이 본 런 (`teacher_swe_e2e` / `s4`, 8 × 8 · 875 step) 의 첫 step 들로 판정하고, 통과하면 그대로 학습을 잇는다. step 덤프는 쓰지 않는다 — TensorBoard · 드라이버 로그 · 그룹 보상 로그 (`rollout_groups.jsonl`) · 하니스 결과로 본다. 실행 `$NRL_ROOT/gates/swe_e2e_s4/run_s4.sh` · 정지 `stop_s4.sh` (기본은 다음 체크포인트가 완성된 뒤).
+
+| 단계 | 시점 | 기준 | 어긋나면 |
+|---|---|---|---|
+| G1 | step 1 ~ 2 | `check_g1.py <run dir> --steps 2` 가 0: 예외 0 · `gen_kl_error` < 0.002 · `num_masked_seqs_by_logprob_error` 0 · 유효 시퀀스 32 이상 · step 1 의 lr 1e-7 · `weight_sync` > 0 과 "Updated weight version to s" · 하니스 거부 지표 > 0 · 그룹 8 개 × 롤아웃 8 개가 하니스 기록과 전부 짝지어지고 (생성 토큰 수) 과제 하나 · 첫 프롬프트 길이 하나 · 짝지은 롤아웃의 거부 사건 합 = `num_harness_rejected_tool_calls/mean` × 64 · R3 꺼짐 · prefix caching 켬 · 틀 고정 · 거부 문구 정규식 | 중단 · 진단 · 보고 |
+| G2 | step 2 ~ 10 | 기준선과 step 간 잡음을 잰다: `gen_kl_error / approx_entropy` · `(token_mult_prob_error − 1) / approx_entropy` · `approx_entropy` · `gen_tokens_per_sample/mean` · `max_gen_tokens_per_turn/mean` · `turns_per_sample/mean` · 롤아웃당 하니스 거부 수 · 마스킹 비율 (1 − 유효 시퀀스 / 64) · 해결률 · step 주기 (짧은 step 과 긴 step 따로) | 예외면 중단 |
+| G3 낡은 캐시 · off-policy | step 11 ~ 30 | 두 비율의 10 step 이동평균이 기준선의 +20% 를 넘으면 보고 (이 비율은 낡은 캐시 없이도 20% 넘게 움직인 적이 있어 정지 기준이 아니다). 어느 step 이든 `gen_kl_error` > 0.004 면 중단. `num_masked_seqs_by_logprob_error` 가 0 이 아니면 보고 | 보고 (대응 후보: 갱신 때 KV 재계산 · lr 낮춤) |
+| G4 벌점 부작용 | step 11 부터 10 step 마다 | `approx_entropy` · `gen_tokens_per_sample/mean` · `max_gen_tokens_per_turn/mean` · `turns_per_sample/mean` 의 10 step 이동평균이 기준선 ±30% 를 벗어나거나, 거부 수가 줄지 않은 채 해결률이 떨어지면 보고하고 −2 로 내릴지 묻는다 | 곡선과 함께 보고 |
+| G5 상태 | 상시 | 마스킹 비율 40% 초과 5 step 연속 · step 주기가 G2 에서 잰 긴 step p95 의 1.5 배 초과 (저장 step 제외) · 그 2 배 동안 step 없음 = 정지 (엔진별 생성 토큰 증가량으로 낙오와 교착을 가른다) · 호스트 메모리 (`ray/node.*.mem_gb`) · NFS · 홈 여유 · 반출 실패 (`hf_s4/*.failed`) | 진단 · 보고 |
+
+- **잡음 바닥**: step 당 KL 1σ 약 5% (과제 8 개) · 엔트로피 CV 2.5 ~ 5% · 생성 토큰 6 ~ 12% · 턴당 최대 16 ~ 40% (앞선 실제 런). KL 은 엔트로피를 따라 움직인다 (상관 0.83 ~ 0.98) — 그래서 비율로 본다. `probs_ratio*` (`force_on_policy_ratio` 라 늘 1) 와 `avg_trajectory_age` (늘 1) 는 쓰지 않는다.
+- **이 판정이 보지 못하는 것**: 엔진이 갱신된 가중치로 정확히 계산하는지 (G3 이 유일한 안전장치) · prefix cache 적중률 · 상한에 걸려 마스킹된 롤아웃 · 롤아웃의 마지막 호출이 거부된 경우.
+- **독립 검토**: 계획 — 1 차 "보완 필요" (KL 임계 0.0025 가 잡음과 동떨어지고 엔트로피에 가려진다 · 벌점 관문이 한 방향만 본다 · 체크포인트 값이 레시피에 없다) → 반영. 준비물 — "보완 필요" (하니스 결과 위치 · 최근 10 개만 남는 보존 · 재개 시 데이터 부족 · 점검기 오경보) → 반영 → "반출 감시 수정 둘이면 신뢰 가능" → 반영. `check_g1.py` 는 스모크 `s3c` 에서 통과하고 수정 전 `s3b` 에서 문제 18 건을 낸다.
+
 ## 커널·데이터 (K·D)
 
 | # | 게이트 | 도구 | 기준 | 결과 |
