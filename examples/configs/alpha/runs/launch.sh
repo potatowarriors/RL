@@ -23,6 +23,22 @@ VAL=${VAL:-$DATA}
 CKPT=${CKPT:-$OUT/ckpt}
 mkdir -p $OUT/$tag
 cd $REPO
+# Gym `swe_agents` 를 쓰는 레시피면 nv-OpenHands 하니스 패치가 적용돼 있어야 한다 — 없으면 하니스가 거부한 도구 호출이 대화와 학습 궤적에서
+# 빠진다 (RL_PLAN 결정 88 · 91, docs/E2E_SANDBOX.md §7.11). 레시피와 그 부모 (`defaults:`) 를 본다. 덮어쓰기로만 swe_agents 를 넣는 경우는
+# `tools/check_alpha_recipe.py` 가 본다.
+uses_swe_agents() {
+  local f=$1 d
+  while [ -n "$f" ] && [ -f "$f" ]; do
+    grep -q "responses_api_agents/swe_agents/" "$f" && return 0
+    d=$(awk '/^defaults:/{print $2; exit}' "$f" | tr -d "\"'")
+    [ -n "$d" ] || return 1
+    f=$(dirname "$f")/$d
+  done
+  return 1
+}
+if uses_swe_agents "$RECIPE"; then
+  $REPO/examples/configs/alpha/tools/apply_harness_patches.sh check >> $OUT/runs.log 2>&1 || { echo "[$(date '+%F %T')] case=$tag 하니스 패치가 적용돼 있지 않다 (tools/apply_harness_patches.sh) — 기동 중단" | tee -a $OUT/runs.log; exit 1; }
+fi
 ray_py() { $NRL/clean_run.sh /usr/bin/env RAY_ADDRESS=main1:6379 $NRL/venv-driver/bin/python -I "$@" </dev/null 2>/dev/null; }
 # 순서: 살아 있는 런 액터가 없을 때만 남은 Gym 서버를 정리하고, 그 뒤 GPU 점유를 본다. Gym judge(local_vllm_model)는 Gym 서버가 띄운
 # Ray 액터라 런이 끝나도 GPU 를 잡고 남는다 — 정리 전에 GPU 를 보면 기동이 막힌다 (KNOWN_ISSUES 2026-10-10).

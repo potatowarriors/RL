@@ -109,6 +109,13 @@ fi
 if [ "$GYM" = /home/work/vidsearch/tools/Gym ]; then   # 설치된 Gym 이면 upstream 수정 (결정 79) 이 얹혀 있어야 한다 — 빠지면 결과 조립이 500 으로 죽는다
   "$REPO/examples/configs/alpha/tools/apply_gym_patches.sh" check >> "$LOG" 2>&1 || { log "ABORT: Gym 패치가 적용돼 있지 않다 (tools/apply_gym_patches.sh)"; exit 1; }
 fi
+# nv-OpenHands 하니스 패치 — 없으면 하니스가 거부한 도구 호출이 대화와 결과에서 빠진다 (RL_PLAN 결정 88 · 91). 패치를 되돌린 음성 대조
+# (`$NRL_ROOT/gates/swe_e2e_s3/run_stub_reject.sh … reverted`) 만 HARNESS_UNPATCHED_OK=1 로 이 점검을 건너뛴다.
+if [ "${HARNESS_UNPATCHED_OK:-0}" = 1 ]; then
+  log "HARNESS_UNPATCHED_OK=1 — 하니스 패치 점검을 건너뛴다 (음성 대조용. 측정 · 학습에는 쓰지 않는다)"
+else
+  "$REPO/examples/configs/alpha/tools/apply_harness_patches.sh" check >> "$LOG" 2>&1 || { log "ABORT: 하니스 패치가 적용돼 있지 않다 (tools/apply_harness_patches.sh)"; exit 1; }
+fi
 for p in 8100 $PORTS; do
   (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && { log "ABORT: 포트 $p 를 이미 누가 듣고 있다 (묵은 fleet · 프록시 · 터널)"; exit 1; }
 done
