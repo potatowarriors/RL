@@ -239,11 +239,18 @@ def _postprocess_flags(output_items, patterns):
             _MockSelf(), {}, nemo_gym_result, _CountingTokenizer()
         )
     )
-    return [
+    flags = [
         message["is_invalid_tool_call"]
         for message in result["message_log"]
         if message["role"] == "assistant"
     ]
+    # The per-rollout count is reported only when tool outputs are inspected, and
+    # every flag in these cases comes from a rejection.
+    if patterns:
+        assert result["full_result"]["num_harness_rejected_tool_calls"] == sum(flags)
+    else:
+        assert "num_harness_rejected_tool_calls" not in result["full_result"]
+    return flags
 
 
 def _three_model_calls(second_output, *, second_name="execute_bash"):
@@ -363,3 +370,47 @@ def test_postprocess_flags_model_call_with_parallel_tool_calls_when_one_is_rejec
         _tool_output("c3", "done"),
     ]
     assert _postprocess_flags(items, _REJECTION_PATTERNS) == [True, False]
+
+
+def test_postprocess_counts_rejections_apart_from_text_flags():
+    # A leftover textual tool call (the text detector's case) is flagged but is not a
+    # harness rejection; a call rejected by two outputs is counted once.
+    items = [
+        {
+            "type": "message",
+            "content": [{"text": "<tool_call> oops"}],
+            "prompt_token_ids": [1, 2],
+            "generation_token_ids": [3],
+            "generation_log_probs": [-0.1],
+        },
+        _tool_call("c1", "execute_bash"),
+        _tool_call(
+            "c2",
+            "execute_bash",
+            prompt_token_ids=[1, 2, 3, 4],
+            generation_token_ids=[5],
+        ),
+        _tool_output("c1", _VALIDATION_ERROR),
+        _tool_output("c2", _VALIDATION_ERROR),
+    ]
+
+    class _MockSelf:
+        cfg = {"invalid_tool_call_output_patterns": _REJECTION_PATTERNS}
+        _processor = None
+
+    nemo_gym_result = {
+        "response": {"output": items},
+        "responses_create_params": {"input": []},
+    }
+    result = (
+        NemoGym.__ray_metadata__.modified_class._postprocess_nemo_gym_to_nemo_rl_result(
+            _MockSelf(), {}, nemo_gym_result, _CountingTokenizer()
+        )
+    )
+    flags = [
+        m["is_invalid_tool_call"]
+        for m in result["message_log"]
+        if m["role"] == "assistant"
+    ]
+    assert flags == [True, True]
+    assert result["full_result"]["num_harness_rejected_tool_calls"] == 1

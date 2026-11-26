@@ -154,7 +154,9 @@ class NemoGymConfig(TypedDict):
     # validation failure, unknown tool), and the model call that made it is flagged
     # as an invalid tool call. A pattern may capture the tool name in a group called
     # ``name``; the capture must then equal the name of the answered tool call.
-    # Unset or empty: tool outputs are not inspected.
+    # Unset or empty: tool outputs are not inspected. When set, each rollout result
+    # also carries ``num_harness_rejected_tool_calls`` (model calls flagged this way),
+    # which is logged per agent like the other numeric result fields.
     invalid_tool_call_output_patterns: NotRequired[List[str] | None]
     thinking_tags: NotRequired[
         List[str] | None
@@ -777,6 +779,8 @@ Depending on your data shape, you may want to change these values."""
         rejection_patterns = _compile_tool_output_patterns(
             self.cfg.get("invalid_tool_call_output_patterns")
         )
+        # Indexes (in the message log) of assistant messages flagged by a rejection.
+        rejected_message_indexes: set[int] = set()
         for output_item_dict in nemo_gym_result["response"]["output"]:
             if (
                 output_item_dict.get("type") == "function_call"
@@ -808,6 +812,7 @@ Depending on your data shape, you may want to change these values."""
                     )
                 ):
                     nemo_rl_message_log[-1]["is_invalid_tool_call"] = True
+                    rejected_message_indexes.add(len(nemo_rl_message_log) - 1)
                 continue
 
             assert (
@@ -974,6 +979,14 @@ output prompt token ids till seen: {output_item_dict["prompt_token_ids"][: len(s
                     container[key], _ = _without_initial_image_sources(
                         container[key], raw_initial_sources
                     )
+
+        if rejection_patterns:
+            # A numeric result field, so it is aggregated per agent with the other
+            # rollout metrics. It separates harness rejections from the text-based
+            # flags that share ``is_invalid_tool_call``.
+            nemo_gym_result["num_harness_rejected_tool_calls"] = len(
+                rejected_message_indexes
+            )
 
         result = {
             "message_log": nemo_rl_message_log,
