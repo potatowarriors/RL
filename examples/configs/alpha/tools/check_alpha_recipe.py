@@ -19,9 +19,11 @@ ERROR 가 하나라도 있으면 종료 코드 1. WARN 은 결정 대기·확인
 """
 
 import collections
+import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 ERRORS: list[str] = []
@@ -45,7 +47,88 @@ SANDBOX_CONFIGS = ["ns_tools", "math_formal_lean"]
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 GYM_ROOTS = [os.path.join(REPO, "3rdparty", "Gym-workspace", "Gym"), os.path.join(REPO, "examples", "configs", "alpha", "gym_plugins")]
 POLICY_MODELS = ("policy_model", "policy_model_reasoning_off")
+# nv-OpenHands 하니스 패치 (RL_PLAN 결정 88) 가 겨냥하는 커밋 — tools/apply_harness_patches.sh 의 PIN 과 같아야 한다
+HARNESS_PIN = "5f0180054732945df08ad2293903e6873f0492b6"
+HARNESS_PATCH_DIR = os.path.join(REPO, "examples", "configs", "alpha", "harness_patches")
 JUDGE_FIELDS = ("judge_model_server", "genrm_model_server")  # resources server 가 채점 모델을 가리키는 필드
+
+
+def _find_swe_agent_blocks(node, out: list) -> None:
+    """설정 트리에서 `responses_api_agents.swe_agents` 블록을 모은다 (이름 → 블록)."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            agents = (v.get("responses_api_agents") or {}) if isinstance(v, dict) else {}
+            if isinstance(agents, dict) and isinstance(agents.get("swe_agents"), dict):
+                out.append((k, agents["swe_agents"]))
+            _find_swe_agent_blocks(v, out)
+
+
+def check_swe_harness_tree(gym_env: dict) -> None:
+    """swe_agents 가 실제로 쓸 nv-OpenHands 트리에 하니스 패치가 적용돼 있는지 본다 (결정 88).
+
+    Gym 은 `<cache_dir>/swe_agents/swe_openhands_setup/<저장소 이름>-<sha256(URL) 8 자>/<커밋>/OpenHands` 를 고른다
+    (`swe_agents/app.py` `_openhands_setup_target` · `_repo_slug`). 트리가 없거나 `.venv/bin/python` 이 없으면 새로 받고,
+    HEAD 가 다르면 통째로 되돌린다 — 어느 경우든 패치 없는 하니스로 돈다. 그래서 설정이 가리키는 바로 그 트리를 본다.
+    """
+    cache_dir = gym_env.get("cache_dir")
+    if not cache_dir:
+        err("env.nemo_gym.cache_dir 가 없다 — swe_agents 가 Gym 설치 디렉토리 안의 하니스 트리를 쓴다 (하니스 패치를 확인할 수 없다)")
+        return
+    # Gym 설정 파일의 블록을 읽고 레시피의 같은 이름 블록으로 덮는다 (Gym 의 설정 병합과 같은 순서)
+    import yaml  # 검사기를 돌리는 드라이버 venv 에 있다
+
+    blocks: dict[str, dict] = {}
+    for rel in gym_env.get("config_paths") or []:
+        if "responses_api_agents/swe_agents/" not in str(rel):
+            continue
+        path = next((os.path.join(r, rel) for r in GYM_ROOTS if os.path.exists(os.path.join(r, rel))), None)
+        if path is None:
+            err(f"Gym 설정 파일을 찾지 못했다: {rel}")
+            continue
+        found: list = []
+        _find_swe_agent_blocks(yaml.safe_load(open(path)), found)
+        for name, block in found:
+            blocks.setdefault(name, {}).update(block)
+    found = []
+    _find_swe_agent_blocks(gym_env, found)
+    for name, block in found:
+        if name in blocks:
+            blocks[name].update(block)
+    if not blocks:
+        err("swe_agents 설정 블록을 찾지 못했다 — 하니스 트리를 확인할 수 없다")
+    patches = sorted(f for f in os.listdir(HARNESS_PATCH_DIR) if f.endswith(".patch")) if os.path.isdir(HARNESS_PATCH_DIR) else []
+    if not patches:
+        err(f"하니스 패치 파일이 없다: {HARNESS_PATCH_DIR}")
+    seen = set()
+    for name, block in sorted(blocks.items()):
+        if (block.get("agent_framework") or "openhands") != "openhands":
+            continue
+        repo, commit = block.get("agent_framework_repo"), str(block.get("agent_framework_commit") or "")
+        if commit != HARNESS_PIN:
+            err(f"{name}: agent_framework_commit 이 {commit[:12] or '(없음)'} 다 — 하니스 패치는 {HARNESS_PIN[:12]} 용이다 (결정 88)")
+            continue
+        slug = "default-repo" if not repo else (re.sub(r"\.git$", "", repo.rstrip("/").rsplit("/", 1)[-1]) or "repo") + "-" + hashlib.sha256(repo.encode()).hexdigest()[:8]
+        tree = os.path.join(str(cache_dir), "swe_agents", "swe_openhands_setup", slug, commit, "OpenHands")
+        if tree in seen:
+            continue
+        seen.add(tree)
+        if not os.path.exists(os.path.join(tree, ".git")):
+            err(f"{name}: 하니스 트리가 없다 ({tree}) — Gym 이 새로 받으면 패치가 없다. 먼저 하니스 셋업을 돌리고 tools/apply_harness_patches.sh 를 적용한다")
+            continue
+        head = subprocess.run(["git", "-C", tree, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        if head != commit:
+            err(f"{name}: 하니스 트리의 HEAD 가 {head[:12]} 다 ({tree}) — Gym 이 {commit[:12]} 로 되돌리면서 패치를 지운다")
+            continue
+        if not os.path.exists(os.path.join(tree, ".venv", "bin", "python")):
+            err(f"{name}: {tree}/.venv/bin/python 이 없다 — Gym 이 트리를 지우고 새로 받는다 (패치가 사라진다)")
+            continue
+        for f in patches:
+            r = subprocess.run(["git", "-C", tree, "apply", "--reverse", "--check", os.path.join(HARNESS_PATCH_DIR, f)], capture_output=True)
+            if r.returncode != 0:
+                err(f"{name}: 하니스 패치 {f} 가 적용돼 있지 않다 ({tree}) — tools/apply_harness_patches.sh 를 돌린다. "
+                    "없으면 하니스가 거부한 도구 호출이 대화와 궤적에서 빠진다 (E2E_SANDBOX §7.11)")
+    if blocks and not seen and not ERRORS:
+        err("openhands 하니스를 쓰는 swe_agents 블록이 없다 — 하니스 트리를 확인하지 못했다")
 
 
 def check(cfg: dict) -> None:
@@ -80,6 +163,8 @@ def check(cfg: dict) -> None:
              "이 레시피의 KL 은 측정값으로 보고 기준은 따로 정한다 (E2E_SANDBOX §7.9)")
     elif not r3:
         err("policy.router_replay.enabled 가 false — alpha RL 기본값 (R1)")
+    if swe_harness:
+        check_swe_harness_tree(gym_env)
     if vcfg.get("turn_end_token_id") != 3:
         err("policy.generation.vllm_cfg.turn_end_token_id 가 3 이 아니다 — Gym 멀티턴 2번째 호출부터 깨짐 (R3)")
 
