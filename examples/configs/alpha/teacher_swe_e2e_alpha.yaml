@@ -38,7 +38,7 @@ checkpointing:
 grpo:
   num_prompts_per_step: 8               # 가이드 값. 롤아웃 64 개 / step
   num_generations_per_prompt: 8
-  max_num_steps: 977                    # 1 에폭 (7,816 // 8) — 규모는 결정 대기
+  max_num_steps: 875                    # 1 에폭 (7,002 // 8). 결정 92: 처음부터 1 에폭으로 띄우고 중간 체크포인트를 보며 멈춘다
   max_num_epochs: 1
   advantage_clip_low: -100
   advantage_clip_high: 100
