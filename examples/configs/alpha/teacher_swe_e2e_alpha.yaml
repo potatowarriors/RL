@@ -69,7 +69,9 @@ policy:
       enable_prefix_caching: true
 
 env:
-  should_log_nemo_gym_responses: false  # 다중 턴 궤적 전체라 크다 — 스모크에서만 켠다
+  # true = step 덤프 (`train_data_step*.jsonl`) 를 건너뛴다 (`grpo.py` `_should_log_nemo_gym_responses`). 다중 턴 궤적 전체라 32 행에 160 MB 다 (결정 87).
+  # 토큰별 KL 분석이 필요한 스모크만 `env.should_log_nemo_gym_responses=false loss_fn.seq_logprob_error_in_loss=false` 로 덮어쓴다 (GATES "S3").
+  should_log_nemo_gym_responses: true
   should_mask_flagged_samples: true     # 타임아웃 · OOM · 한도에 걸린 롤아웃은 손실에서 뺀다 (swe_agents 가 mask_sample 을 붙인다)
   nemo_gym:
     cache_dir: /home/work/vidsearch/tools/nemo_rl/gym_cache    # 하니스 셋업 트리 (OpenHands · R2E-Gym · SWE-bench) — 두 노드 공용 NFS
