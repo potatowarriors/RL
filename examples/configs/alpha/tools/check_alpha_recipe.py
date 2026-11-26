@@ -68,10 +68,10 @@ def check(cfg: dict) -> None:
         err("policy.generation.vllm_kwargs.mamba_ssm_cache_dtype 가 float32 가 아니다 — GDN 재귀 상태 bf16 누적 (R1 FAIL 0.0042)")
     # R3: 기본은 켬 (R1 — 끄면 KL 0.0015, 켜면 0.0006). 예외는 Gym `swe_agents` 다중 턴 롤아웃 하나다: 컨테이너 안의 OpenHands 가
     # expert 경로를 넘기지 않아 R3 가 켜져 있으면 NeMo-RL 이 첫 결과에서 예외를 던진다 (docs/E2E_SANDBOX.md §7.9, 2026-11-26).
+    # 판별은 실제로 띄우는 서버 설정 (`config_paths`) 으로 한다 — 덮어쓰기 블록만 물려받고 swe_agents 를 쓰지 않는 레시피가
+    # 예외로 새지 않고, `config_paths` 로만 swe_agents 를 넣은 레시피도 잡힌다 (독립 검토 2026-11-26).
     gym_env = env.get("nemo_gym") or {}
-    swe_harness = any(
-        isinstance(v, dict) and "swe_agents" in (v.get("responses_api_agents") or {}) for v in gym_env.values()
-    )
+    swe_harness = any("responses_api_agents/swe_agents/" in str(p) for p in (gym_env.get("config_paths") or []))
     if swe_harness and r3:
         err("policy.router_replay.enabled 가 true 인데 Gym swe_agents 를 쓴다 — 하니스가 expert 경로를 넘기지 않아 "
             "nemo_gym.py 가 'requires NeMo Gym output items to include routed_experts' 로 죽는다 (E2E_SANDBOX §7.9)")
