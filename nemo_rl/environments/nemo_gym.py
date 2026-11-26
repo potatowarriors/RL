@@ -13,6 +13,7 @@
 # limitations under the License.
 import math
 import os
+import re
 import subprocess
 import sys
 from collections import Counter
@@ -148,6 +149,13 @@ class NemoGymConfig(TypedDict):
     invalid_tool_call_patterns: NotRequired[
         List[str] | None
     ]  # Substrings in assistant text content that indicate an invalid tool call
+    # Regular expressions matched at the start of a tool-output item's text. A match
+    # means the agent harness rejected the tool call that output answers (argument
+    # validation failure, unknown tool), and the model call that made it is flagged
+    # as an invalid tool call. A pattern may capture the tool name in a group called
+    # ``name``; the capture must then equal the name of the answered tool call.
+    # Unset or empty: tool outputs are not inspected.
+    invalid_tool_call_output_patterns: NotRequired[List[str] | None]
     thinking_tags: NotRequired[
         List[str] | None
     ]  # Thinking tags to check for malformed usage
@@ -229,6 +237,89 @@ def _detect_invalid_tool_call_and_malformed_thinking(
             has_malformed_thinking = True
 
     return is_invalid_tool_call, has_malformed_thinking
+
+
+def _compile_tool_output_patterns(patterns: list[str] | None) -> list[re.Pattern[str]]:
+    """Compile ``invalid_tool_call_output_patterns``, failing on a bad expression.
+
+    Args:
+        patterns: Regular expressions from the config, or None when the key is unset.
+
+    Returns:
+        The compiled patterns (empty when ``patterns`` is None or empty).
+
+    Raises:
+        ValueError: If a pattern is not a string or is not a valid regular expression.
+    """
+    compiled = []
+    for pattern in patterns or []:
+        if not isinstance(pattern, str):
+            raise ValueError(
+                "env.nemo_gym.invalid_tool_call_output_patterns must be a list of "
+                f"strings, got {pattern!r}."
+            )
+        try:
+            compiled.append(re.compile(pattern))
+        except re.error as e:
+            raise ValueError(
+                "env.nemo_gym.invalid_tool_call_output_patterns has an invalid "
+                f"regular expression {pattern!r}: {e}"
+            ) from e
+    return compiled
+
+
+def _tool_output_text(output_item_dict: dict[str, Any]) -> str | None:
+    """Return the text of a ``function_call_output`` item, or None for other items."""
+    if output_item_dict.get("type") != "function_call_output":
+        return None
+    output = output_item_dict.get("output")
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        return "".join(
+            part["text"]
+            for part in output
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+    return None
+
+
+def _is_rejected_tool_call_output(
+    output_item_dict: dict[str, Any],
+    *,
+    rejection_patterns: list[re.Pattern[str]],
+    called_tool_name: str | None,
+) -> bool:
+    """Whether a tool-output item is the harness rejecting the call it answers.
+
+    An agent harness that validates tool calls answers a rejected call (missing
+    or malformed arguments, unknown tool) with an error message instead of
+    running the tool. Such a call reached NeMo-Gym through the structured API, so
+    the text-based detector does not see it. Matching is anchored at the start of
+    the output text, and a pattern with a ``name`` group also requires the captured
+    name to equal the called tool's name, so that ordinary tool output that merely
+    contains the same words is not flagged.
+
+    Args:
+        output_item_dict: A NeMo-Gym output item.
+        rejection_patterns: Compiled ``invalid_tool_call_output_patterns``.
+        called_tool_name: Name of the tool call this output answers, or None when
+            the call is unknown.
+
+    Returns:
+        True if the item is a tool output matching one of the patterns.
+    """
+    text = _tool_output_text(output_item_dict)
+    if text is None:
+        return False
+    for pattern in rejection_patterns:
+        match = pattern.match(text)
+        if match is None:
+            continue
+        if "name" in pattern.groupindex and match.group("name") != called_tool_name:
+            continue
+        return True
+    return False
 
 
 ########################################
@@ -398,6 +489,8 @@ class NemoGym(EnvironmentInterface):
 
     def __init__(self, cfg: NemoGymConfig):
         self.cfg = cfg
+        # Fail at actor construction on a bad pattern instead of in the first rollout.
+        _compile_tool_output_patterns(cfg.get("invalid_tool_call_output_patterns"))
         # Reconstruct the processor inside the actor (rather than serializing it
         # per rollout call) for full-trajectory multimodal postprocessing.
         self._processor: Optional[Any] = None
@@ -675,7 +768,23 @@ Depending on your data shape, you may want to change these values."""
         nemo_rl_message_log = []
         seen_token_ids: List[int] = []
         batch_decode_items = []
+        # Tool calls of the model call being assembled (call_id -> tool name), and
+        # those of the last assistant message appended to the log. A model call's
+        # tool outputs follow all of its output items, so an output answering one of
+        # ``last_assistant_tool_calls`` belongs to the last assistant message.
+        open_tool_calls: Dict[str, str | None] = {}
+        last_assistant_tool_calls: Dict[str, str | None] = {}
+        rejection_patterns = _compile_tool_output_patterns(
+            self.cfg.get("invalid_tool_call_output_patterns")
+        )
         for output_item_dict in nemo_gym_result["response"]["output"]:
+            if (
+                output_item_dict.get("type") == "function_call"
+                and output_item_dict.get("call_id") is not None
+            ):
+                open_tool_calls[output_item_dict["call_id"]] = output_item_dict.get(
+                    "name"
+                )
             # Nemo RL really only has two types of messages: assistant and not assistant since that is all that it is concerned with (i.e. to train or not to train)
             # Here we map all the trainable messages to assistant and all the non-trainable messages to user.
             # Eventually we can maybe be smarter about this, but this is functional for now.
@@ -686,6 +795,19 @@ Depending on your data shape, you may want to change these values."""
                 "generation_token_ids" not in output_item_dict
                 or not output_item_dict["generation_token_ids"]
             ):
+                # The harness rejected a tool call of the last assistant message
+                # (see _is_rejected_tool_call_output): flag that message.
+                output_call_id = output_item_dict.get("call_id")
+                if (
+                    rejection_patterns
+                    and output_call_id in last_assistant_tool_calls
+                    and _is_rejected_tool_call_output(
+                        output_item_dict,
+                        rejection_patterns=rejection_patterns,
+                        called_tool_name=last_assistant_tool_calls[output_call_id],
+                    )
+                ):
+                    nemo_rl_message_log[-1]["is_invalid_tool_call"] = True
                 continue
 
             assert (
@@ -790,6 +912,8 @@ output prompt token ids till seen: {output_item_dict["prompt_token_ids"][: len(s
                     generation_start:generation_end
                 ]
             nemo_rl_message_log.append(assistant_message)
+            last_assistant_tool_calls = open_tool_calls
+            open_tool_calls = {}
 
             seen_token_ids.extend(new_prompt_token_ids)
             seen_token_ids.extend(generation_token_ids)
@@ -984,7 +1108,7 @@ def spinup_nemo_gym_actor(
     Args:
         env_configs: The master_config.env mapping; env_configs["nemo_gym"] supplies
             the Gym global config plus NeMo-RL detection knobs (invalid_tool_call_patterns,
-            thinking_tags, num_gpu_nodes).
+            invalid_tool_call_output_patterns, thinking_tags, num_gpu_nodes).
         base_urls: Per-DP-rank OpenAI-compatible server base URLs from the generation backend.
         model_name: Served model name the Gym rollouts should target.
         enable_router_replay: Sets require_routed_experts on the NemoGymConfig.
@@ -1001,6 +1125,9 @@ def spinup_nemo_gym_actor(
     # NeMo-RL-side detection knobs are top-level NemoGymConfig fields
     # (where the detector reads them), not part of Gym's global config.
     invalid_tool_call_patterns = nemo_gym_dict.pop("invalid_tool_call_patterns", None)
+    invalid_tool_call_output_patterns = nemo_gym_dict.pop(
+        "invalid_tool_call_output_patterns", None
+    )
     thinking_tags = nemo_gym_dict.pop("thinking_tags", None)
     tokenizer_config = nemo_gym_dict.pop("tokenizer_config", None)
 
@@ -1017,6 +1144,7 @@ def spinup_nemo_gym_actor(
         model_name=model_name,
         base_urls=base_urls,
         invalid_tool_call_patterns=invalid_tool_call_patterns,
+        invalid_tool_call_output_patterns=invalid_tool_call_output_patterns,
         thinking_tags=thinking_tags,
         tokenizer_config=tokenizer_config,
         require_routed_experts=enable_router_replay,

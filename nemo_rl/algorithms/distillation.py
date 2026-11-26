@@ -533,6 +533,9 @@ def setup(
                 invalid_tool_call_patterns = nemo_gym_dict.pop(
                     "invalid_tool_call_patterns", None
                 )
+                invalid_tool_call_output_patterns = nemo_gym_dict.pop(
+                    "invalid_tool_call_output_patterns", None
+                )
                 thinking_tags = nemo_gym_dict.pop("thinking_tags", None)
                 # Pass prebuilt cache + venv dirs through the global config so the
                 # gym reuses image-baked venvs instead of rebuilding them.
@@ -546,6 +549,7 @@ def setup(
                     model_name=generation_config["model_name"],
                     base_urls=deferred_vllm.dp_openai_server_base_urls,
                     invalid_tool_call_patterns=invalid_tool_call_patterns,
+                    invalid_tool_call_output_patterns=invalid_tool_call_output_patterns,
                     thinking_tags=thinking_tags,
                     use_fastokens=bool(policy_config["tokenizer"].get("use_fastokens")),
                     initial_global_config_dict=nemo_gym_dict,
