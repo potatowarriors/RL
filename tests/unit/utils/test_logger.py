@@ -374,6 +374,40 @@ class TestWandbLogger:
         mock_run.log.assert_called_once_with(expected_metrics, step=step)
 
     @patch("nemo_rl.utils.logger.wandb")
+    def test_step_offset_shifts_every_explicit_step(self, mock_wandb, temp_dir):
+        """`step_offset` is added to the step of metrics, plots and histograms.
+
+        It is not a wandb.init argument, and a custom `step_metric` is left alone.
+        """
+        logger = WandbLogger({"project": "p", "step_offset": 40}, log_dir=temp_dir)
+        mock_wandb.init.assert_called_once_with(project="p", dir=temp_dir)
+        mock_run = mock_wandb.init.return_value
+
+        logger.log_metrics({"loss": 0.5}, step=1)
+        mock_run.log.assert_called_with({"loss": 0.5}, step=41)
+        logger.log_metrics({"loss": 0.4}, step=2, step_finished=True)
+        mock_run.log.assert_called_with({"loss": 0.4}, step=42, commit=True)
+        logger.log_plot("figure", step=3, name="plot")
+        mock_run.log.assert_called_with({"plot": "figure"}, step=43)
+        logger.log_histogram([1.0, 2.0], step=4, name="hist")
+        assert mock_run.log.call_args.kwargs["step"] == 44
+        logger.log_metrics({"x": 7, "y": 1.0}, step=5, step_metric="x")
+        mock_run.log.assert_called_with({"x": 7, "y": 1.0}, commit=False)
+
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_step_offset_absent_or_null_keeps_the_step(self, mock_wandb):
+        for cfg in ({"project": "p"}, {"project": "p", "step_offset": None}):
+            logger = WandbLogger(cfg)
+            logger.log_metrics({"loss": 0.5}, step=3)
+            mock_wandb.init.return_value.log.assert_called_with({"loss": 0.5}, step=3)
+
+    @pytest.mark.parametrize("bad", [-1, 1.5, "40", True])
+    @patch("nemo_rl.utils.logger.wandb")
+    def test_step_offset_rejects_invalid_values(self, mock_wandb, bad):
+        with pytest.raises(ValueError, match="step_offset"):
+            WandbLogger({"project": "p", "step_offset": bad})
+
+    @patch("nemo_rl.utils.logger.wandb")
     def test_metric_allowlist_not_passed_to_wandb_init(self, mock_wandb, temp_dir):
         """The allowlist is a NeMo RL control, not a wandb.init argument."""
         WandbLogger(

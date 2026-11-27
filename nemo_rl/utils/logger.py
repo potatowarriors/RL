@@ -59,6 +59,12 @@ class WandbConfig(TypedDict):
     # Only the W&B backend filters; TensorBoard and other backends still receive
     # every metric. A key used as `step_metric` is kept when its group survives.
     metric_allowlist: NotRequired[list[str] | None]
+    # Added to every explicit step sent to W&B (metrics, plots, histograms). Use it
+    # when a run continues an earlier W&B history whose steps must come first, e.g.
+    # a run started from another run's step-40 checkpoint logs its step 1 as 41.
+    # Absent or null sends the step unchanged (default). Only the W&B backend
+    # applies it; TensorBoard and other backends keep the trainer's own step.
+    step_offset: NotRequired[int | None]
 
 
 class SwanlabConfig(TypedDict):
@@ -256,6 +262,17 @@ class WandbLogger(LoggerInterface):
         self._metric_allowlist = (
             [re.compile(pattern) for pattern in allowlist] if allowlist else None
         )
+        step_offset = wandb_init_config.pop("step_offset", None)
+        if step_offset is not None and (
+            isinstance(step_offset, bool)
+            or not isinstance(step_offset, int)
+            or step_offset < 0
+        ):
+            raise ValueError(
+                "logger.wandb.step_offset must be a non-negative integer or null, "
+                f"got {step_offset!r}"
+            )
+        self._step_offset: Optional[int] = step_offset
         self.run = wandb.init(**wandb_init_config, dir=log_dir)
 
         if os.environ.get("RAY_BACKEND_LOG_LEVEL", "").lower() == "debug":
@@ -270,6 +287,12 @@ class WandbLogger(LoggerInterface):
         print(
             f"Initialized WandbLogger for project {cfg.get('project')}, run {cfg.get('name')} at {log_dir}"
         )
+
+    def _wandb_step(self, step: int) -> int:
+        """Return the step to send to W&B: `step` shifted by `step_offset`, if set."""
+        if self._step_offset is None:
+            return step
+        return step + self._step_offset
 
     def _log_diffs(self):
         """Log git diffs to wandb.
@@ -429,9 +452,9 @@ class WandbLogger(LoggerInterface):
         elif step_finished:
             # Commit param defaults to None. By default if step is set, then commit defaults to False
             # Here, we have an explicit fork for commit in case W&B ever decides to change their default logic.
-            self.run.log(metrics, step=step, commit=True)
+            self.run.log(metrics, step=self._wandb_step(step), commit=True)
         else:
-            self.run.log(metrics, step=step)
+            self.run.log(metrics, step=self._wandb_step(step))
 
     def log_hyperparams(self, params: Mapping[str, Any]) -> None:
         """Log hyperparameters to wandb.
@@ -448,7 +471,7 @@ class WandbLogger(LoggerInterface):
             figure: Matplotlib figure to log
             step: Global step value
         """
-        self.run.log({name: figure}, step=step)
+        self.run.log({name: figure}, step=self._wandb_step(step))
 
     def finish(self) -> None:
         """Flush queued metrics and close the wandb service.
@@ -468,12 +491,15 @@ class WandbLogger(LoggerInterface):
             step: Global step value
             name: Name of the metric
         """
+        wandb_step = self._wandb_step(step)
         try:
-            self.run.log({name: wandb.Histogram(histogram)}, step=step)
+            self.run.log({name: wandb.Histogram(histogram)}, step=wandb_step)
         except ValueError:
             # When all values are identical, numpy cannot create finite-sized bins.
             # Log the scalar value instead.
-            self.run.log({name: histogram[0] if len(histogram) > 0 else 0}, step=step)
+            self.run.log(
+                {name: histogram[0] if len(histogram) > 0 else 0}, step=wandb_step
+            )
 
 
 class SwanlabLogger(LoggerInterface):
