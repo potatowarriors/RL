@@ -848,6 +848,43 @@ class TestCrossCutting:
         counts = apply_reward_penalties([], {"penalize_unwanted_tokens": True})
         assert all(v == 0 for v in counts.values())
 
+    @pytest.mark.parametrize("reward, expected", [(1.0, 0.0), (0.0, 0.0), (-1.0, -1.0)])
+    def test_penalty_never_raises_a_negative_reward(self, reward, expected):
+        """A triggered penalty zeroes a positive reward but keeps a negative one.
+
+        An environment-side penalty (e.g. the SWE agent's unfinished-trajectory reward
+        of -1) must not be lifted to 0.0 because the same rollout also ends with an
+        empty final answer or repeats its reasoning.
+        """
+        empty_final = _make_result(reward=reward, output_items=[_message_item("")])
+        duplicated = _make_result(
+            reward=reward,
+            output_items=[_reasoning_item("same text"), _message_item("same text")],
+        )
+        counts = apply_reward_penalties(
+            [empty_final, duplicated],
+            {
+                "penalize_empty_final_answer": True,
+                "penalize_duplicated_reasoning": True,
+            },
+        )
+        assert counts["empty_final_answer"] == 1
+        assert counts["duplicated_reasoning"] == 1
+        assert empty_final["full_result"]["reward"] == expected
+        assert duplicated["full_result"]["reward"] == expected
+
+    def test_negative_reward_kept_without_violation(self):
+        result = _make_result(reward=-1.0, output_items=[_message_item("answer")])
+        counts = apply_reward_penalties(
+            [result],
+            {
+                "penalize_empty_final_answer": True,
+                "penalize_duplicated_reasoning": True,
+            },
+        )
+        assert all(v == 0 for v in counts.values())
+        assert result["full_result"]["reward"] == -1.0
+
     def test_multiple_penalties_stack(self):
         """A result that triggers both duplicated reasoning and unwanted-token penalty."""
         cfg = {

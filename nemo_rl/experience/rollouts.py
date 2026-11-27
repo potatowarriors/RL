@@ -1933,10 +1933,22 @@ def resolve_reward_penalty_config(
     return resolved
 
 
+def _remove_positive_reward(result: dict) -> None:
+    """Take the credit away from a rollout that triggered a reward penalty.
+
+    A positive reward becomes 0.0. A reward that is already negative is kept: an
+    environment may have assigned a penalty of its own (for example the SWE agent's
+    unfinished-trajectory reward), and a violation must not raise it back to 0.0.
+    """
+    result["full_result"]["reward"] = min(float(result["full_result"]["reward"]), 0.0)
+
+
 def apply_reward_penalties(
     results: list[dict], reward_penalty_config: dict[str, Any] | BaseModel | None
 ) -> dict[str, int]:
     """Apply reward penalties to results, setting reward to 0.0 when triggered.
+
+    A reward that is already negative is left unchanged (see ``_remove_positive_reward``).
 
     All penalties are gated by reward_penalty_config flags. Returns a dict of penalty
     counts keyed by penalty name.
@@ -2040,7 +2052,7 @@ def apply_reward_penalties(
                     is_duplicated = True
                     break
             if is_duplicated:
-                result["full_result"]["reward"] = 0.0
+                _remove_positive_reward(result)
 
                 counts["duplicated_reasoning"] += 1
 
@@ -2067,7 +2079,7 @@ def apply_reward_penalties(
                     final_answer_text = content.strip()
                     break
             if final_answer_text is None or final_answer_text == "":
-                result["full_result"]["reward"] = 0.0
+                _remove_positive_reward(result)
 
                 counts["empty_final_answer"] += 1
 
@@ -2089,7 +2101,7 @@ def apply_reward_penalties(
                     has_unwanted_token = True
                     break
             if has_unwanted_token:
-                result["full_result"]["reward"] = 0.0
+                _remove_positive_reward(result)
 
                 counts["unwanted_token"] += 1
 
@@ -2175,7 +2187,7 @@ def apply_reward_penalties(
                         has_violation = True
                         break
             if has_violation:
-                result["full_result"]["reward"] = 0.0
+                _remove_positive_reward(result)
 
                 counts["malformed_think_tag"] += 1
 
