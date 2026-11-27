@@ -164,6 +164,18 @@ Qwen3-30B-A3B 가이드의 공개 결과 (SWE-V pass@1, 500): 원본 23.6 → �
 | Ultra `swe.jsonl` | `RL/Nemotron-RL-Ultra-Training-Blends/` | 7,816 | `swerebenchv2/…` 7,610 · SWE-Gym 206 | Python 1,496 · TS 1,407 · JS 1,338 · Go 1,049 · Rust 781 · PHP 643 · Julia 366 · Java 291 외 | SWE-rebench-V2 중앙 0.81 GiB (n=48) | 약 6.8 TiB |
 
 - 표본 85 개가 전부 amd64 다. Ultra 문서의 ARM 재빌드는 우리에게 필요 없다.
+- **alpha 가 이 언어들을 얼마나 봤나 (2026-11-27 ~ 28 측정, CPU 표본 스캔)**: 사전학습 코드 말뭉치 (Nemotron-Pretraining-Code-v1 Synthetic-Code, 3.13 억 행) 의 언어는 Python · SQL · Shell · R · Java · PHP · C · JavaScript · Makefile · C# · C++ 뿐이다. 본 런 데이터 (`teacher_swe_e2e_v1.jsonl` 7,002 과제) 의 49.7% 가 거기 없는 언어 (TS · Go · Rust · Julia · Kotlin · Clojure · Dart) 이고, `s4` 에서 한 번이라도 성공한 과제의 비율은 그 언어들 3.1% · 나머지 8.2% 였다. 다른 단계에서의 노출 (문서 · 궤적 안에 그 언어의 파일 확장자나 코드 블록 표기가 **나오는** 비율 — 과제의 언어가 아니다. 도구 설명 같은 상용구도 잡혀 Python · TS 는 부풀 수 있다):
+
+  | 데이터 (표본) | TS | Go | Rust | Julia | Kotlin | Clojure | Dart | 참고: Python · JS |
+  |---|---|---|---|---|---|---|---|---|
+  | 사전학습 후반 웹 코드 말뭉치 `cc_code` (100,000) | 0.6% | 0.5% | 0.4% | 0.1% | 0.4% | 0.6% | 0.4% | 9.7% · 11.4% |
+  | SFT SWE-v3 궤적 (4,500) | 13.9% | 8.4% | 4.4% | 1.7% | 0.7% | 0.0% | 0.0% | 80.7% · 18.4% |
+  | SFT OpenCode-v1 궤적 (3,600) | 100% | 1.9% | 0 | 0 | 0 | 0 | 0 | 100% · 33.6% |
+  | SFT Terminal-Corpus 궤적 (1,500) | 0.2% | 0.1% | 0 | 0 | 0 | 0 | 0 | 92.5% · 0.7% |
+  | RL Code·Math 블렌드 (6,000) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% · 0 |
+  | RL terminal 피벗 블렌드 (4,000) | 1.9% | 3.7% | 2.1% | 1.7% | 0.1% | 0 | 0 | 72.0% · 5.4% |
+
+  사전학습의 synthetic 하위 묶음 다섯 (question-answering · code-review · rewriting · student-teacher · transpilation) 은 언어 필드가 없어 이 스캔으로 재지 못했다 (미측정). 읽는 법: 일곱 언어는 SFT 의 SWE 궤적에서 TS · Go · Rust 정도만 눈에 띄게 나오고 Clojure · Dart 는 SFT 에 사실상 없다.
 - **변환은 지금 세션에서도 된다** — `apptainer build` 는 namespace 를 쓰지 않는다. `$NRL_ROOT/apptainer_test/` 의 1.5.5 로 실측: R2E-Gym 42 s · 0.56 GB, SWE-rebench-V2 78 s · 0.43 GB, SWE-Gym 115 s · 1.1 GB (`sif_samples/`).
 - 도구 `tools/apptainer/build_sifs.py`: 블렌드가 쓰는 행만 받고, Gym 이 찾는 이름으로 저장하고, 이어받고, 풀 속도를 제한한다. 이름 검산은 두 블렌드 9,234 개 (SWE-Gym 26 개 중복 제외) 에서 어긋남 0.
 - 풀 한도: 이 노드의 익명 한도는 시간당 100 이다 (레지스트리 응답 헤더 실측). 그 한도면 Super 약 18 시간 · Ultra 약 98 시간 (시간당 80 기준). 3 건을 받는 동안 잔여 수가 줄지 않아 실제로 걸리는지는 미확정이다.
