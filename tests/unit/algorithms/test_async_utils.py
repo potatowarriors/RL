@@ -1973,9 +1973,12 @@ class TestAsyncTrajectoryCollector:
         assert "unexpected add status" in str(exc.value.__cause__)
 
     def test_nemo_gym_batch_retry_forwards_effort_config_without_duplicates(
-        self, monkeypatch
+        self, monkeypatch, capsys
     ):
-        """Retries preserve effort shaping and do not re-enqueue buffered groups."""
+        """Retries preserve effort shaping and do not re-enqueue buffered groups.
+
+        The retry message names the error that caused it.
+        """
 
         class _ReadyResult:
             def __init__(self, value):
@@ -2073,6 +2076,13 @@ class TestAsyncTrajectoryCollector:
 
         assert rollout_calls == 2
         assert replay_buffer.add.task_indices == [7, 8]
+        retry_lines = [
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "did not complete prompt groups" in line
+        ]
+        assert len(retry_lines) == 1
+        assert "cause: RuntimeError: transient stream failure" in retry_lines[0]
         assert target_weight not in collector._generating_targets
 
     def test_invalid_gym_batch_releases_target(self):

@@ -1605,11 +1605,14 @@ class AsyncTrajectoryCollector:
                 break
 
             retry_delay = _NEMO_GYM_RETRY_DELAY_BASE_SECONDS * (2 ** (attempt - 1))
+            # Name the cause: without it a retry of the whole batch looks the same
+            # whether one rollout came back empty or the stream itself broke.
+            cause = " ".join(f"{type(last_error).__name__}: {last_error}".split())
             print(
                 "❌ NeMo-Gym batch did not complete prompt groups "
                 f"{sorted(pending_group_indices)}; retrying in "
                 f"{retry_delay:.1f}s "
-                f"(attempt {attempt + 1}/{max_attempts})"
+                f"(attempt {attempt + 1}/{max_attempts}) — cause: {cause[:600]}"
             )
             await asyncio.sleep(retry_delay)
 
