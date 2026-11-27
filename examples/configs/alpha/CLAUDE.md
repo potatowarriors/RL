@@ -35,6 +35,8 @@ alpha_v2 (15.08B GatedDeltaNet + Attention + MoE 하이브리드, `model_type: "
 - Ultra 의 `reward_penalties.token_ids`(2·12·13)는 Nemotron id 다 — alpha 에서는 `<|im_start|>`·`<tool_response>`·`</tool_response>`. alpha think 는 14·15.
 - **레시피를 돌리기 전에 `tools/check_alpha_recipe.py <recipe>` 가 ERROR 0 이어야 한다** (H1·H3·H5·GBS·CP 패딩·eos 등 자동 검사).
 - **W&B 에는 실제 학습 런만 올린다.** 스모크·게이트·속도 시험은 `WANDB=0`. 지표는 `logger.wandb.metric_allowlist`(부모 레시피)로 핵심만 보내고, 전체는 TensorBoard 에 남는다 (사용자 2026-10-08).
+- **다른 런의 가중치에서 이어 시작하는 학습 런은 W&B 에서도 앞 런에 이어지게 한다** (사용자 2026-11-27, `s4` step 40 → `s6` 에서 정함).
+  기동 직전에 `tools/wandb_seed_from_run.py --apply` 로 앞 런의 step 1 ~ N 을 새 W&B 런에 복사하고, 런은 `++logger.wandb.id=<새 id> ++logger.wandb.resume=allow ++logger.wandb.step_offset=N` 으로 띄운다 (재개 때도 같은 값). 첫 step 뒤 W&B 의 step 이 N + 1 인지 확인한다. step 당 프롬프트 수가 앞 런과 다르면 x 축 한 칸의 뜻이 달라진다 — 보고에 적는다.
 - Pai·Ultra 노브를 옮길 때는 NeMo-RL 이 실제로 읽는지 확인한다. `megatron_cfg` 최상위의 모르는 키와 Ultra 의 loss 정규화 키 4개는 조용히 무시된다.
   위험 목록과 게이트 계획은 [`docs/RLVR_READINESS.md`](docs/RLVR_READINESS.md).
 - `policy.megatron_cfg.env_vars` 에 `CUDNN_HOME`(Megatron 워커 venv 의 pip cuDNN 경로) 필수.

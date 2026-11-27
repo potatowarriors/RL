@@ -62,6 +62,7 @@ Nemotron-3-Ultra 레시피(이 리포 `examples/nemo_gym/nemotron-3-ultra/`, 구
 | `runs/check_placement.py` · `runs/sample_gpu_layout.py` | 런 중 배치 그룹 → 노드 · GPU 배치 판정 + teacher 액터 (pid · 노드) 저장 (MS2 ①②) · 노드별 GPU 메모리 표본 |
 | `runs/eval_lcb.sh` · `tools/summarize_lcb.py` | LiveCodeBench v5 322 × 4 @32K (16 GPU, Gym code_gen 채점). 완료 판정은 `DONE` 이 아니라 `lcb_summary.json` 존재로 (KNOWN_ISSUES 11-11) |
 | `tools/export_watch.sh` | 본 런 체크포인트를 N 스텝마다 `export_rl_hf.sh` 로 반출하는 감시 루프 (keep_top_k 가 지우기 전에) |
+| `tools/wandb_seed_from_run.py` | 다른 런의 step N 가중치에서 시작하는 런의 W&B 곡선을 앞 런에 이어 붙인다 — 앞 런의 step 1 ~ N 이력을 새 W&B 런에 복사 (`--apply` 없으면 읽기만). 런은 `++logger.wandb.step_offset=N` 으로 띄운다 |
 | `tools/analyze_gym_full_results.py` | Gym 전체 결과(오프라인 W&B 표)에서 judge 판정 파싱 실패율 · 재판정(`check_full_generation_on_fail`) 시도·성공 · rdkit 추출 실패를 센다 (CPU, J1). `should_log_nemo_gym_responses: true` 레시피는 덤프를 안 남기므로 게이트에서 `WANDB_MODE=offline` + 표 켬으로 남긴다 |
 | `tools/analyze_reward_penalties.py` | Ultra reward_penalties 4종을 롤아웃에 오프라인으로 적용해 발동률·오탐(보상 > 0 이 0 으로 깎이는 수)을 잰다 (CPU) |
 | `tools/bench_flashqla.py` | FlashQLA 벤치 3구성: fla-MHA / qla-MHA / qla-네이티브GQA (K1) |
