@@ -1,4 +1,4 @@
-# teacher_swe_e2e_alpha.yaml — SWE E2E teacher 초안 (2026-11-24, 값은 사용자 승인 전 · docs/E2E_SANDBOX.md §7).
+# teacher_swe_e2e_alpha.yaml — SWE E2E teacher (2026-11-24 초안 · 11-26 본 런 s4 는 8 × 8 · 11-27 결정 94 로 32 × 8 — docs/E2E_SANDBOX.md §7 · RL_PLAN 결정 76 ~ 94).
 #
 # 과제마다 Apptainer 컨테이너를 둘 띄운다 (Gym `swe_agents`): 에이전트 컨테이너에서 모델이 도구 (셸 · 파일 편집) 로 저장소를 고치고,
 # 채점 컨테이너가 그 패치로 테스트를 돌린다. 보상은 0/1 이다 — FAIL_TO_PASS · PASS_TO_PASS 가 모두 통과할 때 1.
@@ -33,15 +33,18 @@ defaults: teacher_tool_alpha.yaml
 
 checkpointing:
   checkpoint_dir: "results/alpha_teacher_swe_e2e"
-  save_period: 20                       # 결정 93. 1 개 약 155 GB (가이드는 5). 저장되는 체크포인트는 전부 HF 로 반출한다 (tools/export_watch.sh)
+  save_period: 5                        # 결정 94 (32 × 8 — 과제 160 개 · 약 5.7 시간마다; 8 × 8 때는 20). 1 개 약 155 GB. 전부 HF 로 반출한다 (tools/export_watch.sh)
   keep_top_k: 10                        # 최근 10 개만 남는다 (재개용 순환 1.6 TB) — 점수로 고르는 것이 아니다
 
 grpo:
-  num_prompts_per_step: 8               # 가이드 값. 롤아웃 64 개 / step
+  # 결정 94 (사용자 2026-11-27 "32*8로 적용하자"): 8 × 8 (Qwen3 가이드 값, s4) 에서는 보상이 갈리는 그룹이 5.5% 라 업데이트의 3 분의 2 가
+  # 과제 신호 없이 형식 벌점만으로 움직였다. 프롬프트 32 면 업데이트의 84% 에 신호가 든다 (하루 업데이트 84 → 21, 하루에 보는 과제 수는 같다).
+  # 이 데이터의 공개 레시피 (Ultra swe_teacher) 는 32 × 16 — 생성 16 은 신호 비율 5.7 → 7.4% (추정) 에 과제당 비용 2 배라 8 로 둔다.
+  num_prompts_per_step: 32              # 롤아웃 256 개 / step · 약 68 분
   num_generations_per_prompt: 8
-  max_num_steps: 875                    # 1 에폭 (7,002 // 8). 결정 92: 처음부터 1 에폭으로 띄우고 중간 체크포인트를 보며 멈춘다
+  max_num_steps: 218                    # 1 에폭 (7,002 // 32). 중간 체크포인트를 보며 멈춘다 (결정 92)
   max_num_epochs: 2                     # step 수는 max_num_steps 가 정한다. 2 로 두는 것은 재개 때문이다 — 저장되는 데이터 위치가 진행 중인 배치 둘만큼
-                                        # 앞서 있어, 재개하면 프롬프트를 최대 16 개 건너뛴다. 875 × 8 = 7,000 이 7,002 행에 딱 맞아 1 이면 875 전에 데이터가 끝난다
+                                        # 앞서 있어, 재개하면 프롬프트를 최대 64 개 건너뛴다. 218 × 32 = 6,976 이 7,002 행에 거의 맞아 1 이면 218 전에 데이터가 끝난다
   advantage_clip_low: -100
   advantage_clip_high: 100
   overlong_filtering: true
@@ -60,6 +63,9 @@ grpo:
     rollout_group_log: ${logger.log_dir}/rollout_groups.jsonl   # 그룹별 보상 · 생성 토큰 수 (launch.sh 가 절대경로 log_dir 을 준다). step 덤프 없이 관문 점검기가 쓴다
 
 policy:
+  megatron_cfg:
+    scheduler:
+      lr_warmup_iters: 3                # 결정 94 — 부모는 10 step. 32 × 8 은 step 당 68 분이라 3 step (롤아웃 768 개, 8 × 8 의 10 step 640 개와 비슷)
   # R3 (라우터 재생) 는 SWE E2E 에서 끈다 (사용자 2026-11-26 "R3 없이 SWE E2E 로 KL 측정"): swe_agents 하니스 (컨테이너 안의 OpenHands) 가
   # expert 경로를 넘기지 않아 NeMo-RL 이 예외를 던진다 (docs/E2E_SANDBOX.md §7.9). 공개 E2E SWE 레시피 셋도 R3 없이 돈다.
   # R3 없이 잰 KL 은 단일 턴에서 0.0015 (기준 0.001 초과) — SWE 다중 턴의 값은 S3 에서 잰다.
@@ -72,6 +78,12 @@ policy:
       # 근거: PC-S 학습 엔진 설정 통과 (docs/GATES.md), 공개 E2E SWE 레시피 셋 모두 켬. 가중치 갱신 뒤에도 캐시는 비워지지 않는다
       # (recompute_kv_cache_after_weight_updates: false — 공개 레시피와 같은 값, §7.9).
       enable_prefix_caching: true
+
+# 결정 94: think 태그 위반이 한 턴이라도 있으면 롤아웃 보상을 0 으로 만드는 규칙을 이 레시피에서 끈다. 130 턴짜리 롤아웃은 32 ~ 41% 가 걸리고
+# (s4: 해결한 75 개 중 위반 7 개가 전부 보상 0, 그중 5 개는 음의 advantage), 단일 턴에서 검증한 규칙이다 (부모 주석). 나머지 셋은 부모 그대로 켠다
+# (s4 발동: 빈 최종 답 34 건 · 원치 않는 토큰 0 건). 턴 단위 벌점 (`malformed_thinking_advantage`) 은 그대로다.
+reward_penalties:
+  penalize_malformed_think_tag: false
 
 env:
   # true = step 덤프 (`train_data_step*.jsonl`) 를 건너뛴다 (`grpo.py` `_should_log_nemo_gym_responses`). 다중 턴 궤적 전체라 32 행에 160 MB 다 (결정 87).
