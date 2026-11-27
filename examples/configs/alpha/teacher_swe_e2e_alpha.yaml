@@ -47,7 +47,10 @@ grpo:
                                         # 앞서 있어, 재개하면 프롬프트를 최대 64 개 건너뛴다. 218 × 32 = 6,976 이 7,002 행에 거의 맞아 1 이면 218 전에 데이터가 끝난다
   advantage_clip_low: -100
   advantage_clip_high: 100
-  overlong_filtering: true
+  # 결정 95 의 일부: 미완 궤적 벌점이 손실에 닿으려면 잘린 시퀀스 필터를 꺼야 한다. 문맥 한도로 끝난 롤아웃의 약 40% 는 마지막 호출이 정확히
+  # 131,072 토큰에서 끝나 `truncated` 가 되고, 필터가 켜져 있으면 손실 가중치가 0 이 돼 벌점 −1 이 조용히 빠진다 (적대적 검토, s4 · s5 의 701 개 중 269 개).
+  # false 는 이 데이터의 공개 레시피 (Ultra swe_teacher) 값이다. 가이드 (Qwen3) 는 true. 부수 효과: 한도 밖에서 잘린 롤아웃 (s4 의 0.7%) 도 손실에 들어간다.
+  overlong_filtering: false
   val_period: 100000                    # 가이드와 같이 학습 중 검증 없음 — 판정은 SWE-V 벤치
   val_at_start: false
   val_at_end: false
