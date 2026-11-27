@@ -68,6 +68,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-27 | SWE 런에서 `NeMo-Gym batch did not complete prompt groups … retrying` 이 뜨고 배치가 통째로 다시 돎, 종료 때 vLLM 엔진이 `sem_unlink` FileNotFoundError | 한 에이전트 컨테이너의 삭제 명령이 모든 컨테이너가 함께 쓰는 `OpenHands/evaluation/oh` 와 호스트 `/dev/shm` 까지 지움 (Gym 의 공유 읽기 · 쓰기 마운트 + `mount dev`) → 빈 결과 → 학습기가 배치 전체 재시도 (오류는 안 찍힌다). 판별: 두 노드의 `/dev/shm` 항목 수 · Gym 서버 로그의 `No completion files found` · `Expected exactly one file`. 조치는 `docs/STATUS.md` (KNOWN_ISSUES 11-27) |
 | 11-27 | 시작 체크포인트 게이트 M2 가 FAIL — 한 프롬프트의 다음 토큰이 HF 와 다름, cos 는 0.99997 | bf16 참조 로짓의 최댓값이 두 토큰에서 정확히 같고 도구가 `argmax` 의 첫 인덱스만 정답으로 봄 (M4 도구는 08-24 에 고쳤고 M2 로 옮기지 않았다) → 게이트 FAIL 로그의 후보 토큰 로짓을 먼저 본다. 수정 · 재실행 계획은 `docs/GATES.md` "S6" (KNOWN_ISSUES 11-27) |
 | 11-27 | SWE E2E 본 런의 보상이 48 step 동안 1.8% 에서 오르지 않음 — 사전 측정은 7.4% · 보상이 갈린 과제 15.6% 였다 | 사전 측정 64 과제를 먼저 변환된 687 과제 묶음에서 뽑았고 그 묶음이 쉬웠다 (본 런에서 묶음 7.3% · 나머지 1.5%). 전체에서는 과제의 5.7% 만 성공이 나와 기울기의 56% 가 형식 벌점이다 → 학습 신호를 재는 표본은 **학습 데이터 전체에서 무작위로** 뽑고, 본 런 step 10 에서 사전 측정과 대조한다. 상속된 `reward_penalties` 는 다중 턴에서 성공 롤아웃의 11% 를 보상 0 으로 만든다 (`docs/KNOWN_ISSUES.md`) |
 | 11-25 | sub1 의 SWE 롤아웃이 전부 초기 설정에서 `No space left on device`, 결과에는 모델 호출 0 · 오류 종류 없음 | Apptainer 가 실행 위치를 컨테이너에 붙인다 (Gym 옵션에 `cwd` 없음) · sub1 raylet 이 `/home/work` 에서 떠 호스트 홈 (49 GB) 이 과제 캐시로 가득 참 → `ray_cluster.sh` 가 raylet 을 새 빈 디렉토리 `/tmp/ray_cwd_<시각>` 에서 띄우고 Gym 패치 0002 가 `--no-mount … cwd` 를 더한다. 기동 전에 두 노드의 raylet cwd · 홈 여유를 본다 (KNOWN_ISSUES 11-25) |
