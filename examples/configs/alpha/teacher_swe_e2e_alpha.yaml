@@ -109,6 +109,11 @@ env:
           agent_max_turns: 200
           concurrency: 128
           swebench_agent_timeout: 1800
+          # 결정 95 (사용자 2026-11-27 "미완 궤적에 보상벌점 방식을 적용하자"): 턴 한도 · 문맥 한도에 걸려 끝나고 과제를 풀지 못한 롤아웃은 보상 −1 을
+          # 받고 손실에 남는다 (Gym 패치 0003 — 기본은 채점한 보상 + 마스킹). 시간 초과 · 메모리 초과 · 채점 시간 초과와, 한도에 걸렸지만 푼 롤아웃은
+          # 그대로 마스킹한다. 근거: `s4` · `s5` 에서 턴이 33% 길어지며 마스킹이 33 → 47% 로 늘었는데 마스킹된 롤아웃은 손실에 없어 교정 신호가 없었다.
+          # 벌점의 크기는 그룹 안 정규화 때문에 결과를 바꾸지 않는다 (docs/E2E_SANDBOX.md §7.13). Qwen3-Coder-Next · Kimi K3 (−1) 와 같은 형태.
+          unfinished_trajectory_reward: -1.0
           agent_prompt_override_random: false   # 결정 81 · 89: 세 틀 (Codex · OpenCode · CodeAct) 을 과제 ID 를 시드로 고른다 — 한 과제의 롤아웃은 같은 틀이다.
           # true (롤아웃마다 무작위) 면 첫 프롬프트가 달라져 한 과제의 8 개가 틀별로 갈린 채 baseline 이 계산된다 (docs/E2E_SANDBOX.md §7.12).
           agent_prompt_overrides:
@@ -174,4 +179,4 @@ logger:
       - train/turns_per_sample/mean
       - train/max_gen_tokens_per_turn/mean
       - train/(global_valid_seqs|seq_logprob_error_valid_seqs|num_mask_sample_filtered)
-      - train/swe_agents_train/(resolved|patch_exists)/mean
+      - train/swe_agents_train/(resolved|patch_exists|unfinished_penalized)/mean

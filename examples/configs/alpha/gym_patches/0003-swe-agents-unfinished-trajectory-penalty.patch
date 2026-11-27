@@ -1,0 +1,87 @@
+From: alpha <alpha@local>
+Subject: [PATCH] swe_agents: unfinished-trajectory penalty (unfinished_trajectory_reward)
+
+A rollout that ends at the turn limit or the context limit without resolving the task is
+masked from the GRPO loss by default, so the policy gets no signal against running into the
+limits. With unfinished_trajectory_reward set, such a rollout keeps its place in the loss with
+that reward (and unfinished_penalized=True in the result) instead of being masked.
+Resolved-but-unfinished rollouts, timeouts and OOM kills keep the default masking.
+alpha: RL_PLAN decision 95 (2026-11-27). Not upstream.
+---
+diff --git a/responses_api_agents/swe_agents/app.py b/responses_api_agents/swe_agents/app.py
+--- a/responses_api_agents/swe_agents/app.py
++++ b/responses_api_agents/swe_agents/app.py
+@@ -138,6 +138,15 @@
+ 
+     swebench_agent_timeout: int = Field(default=45 * 60, description="Timeout for running the agent (seconds)")
+ 
++    unfinished_trajectory_reward: Optional[float] = Field(
++        default=None,
++        description=(
++            "Unfinished-trajectory penalty. If set, a rollout that ends at the turn limit or the context "
++            "limit without resolving the task gets this reward and is NOT masked from the GRPO loss. "
++            "None (default) keeps the graded reward with mask_sample=True."
++        ),
++    )
++
+     apptainer_memory_limit_mb: int = Field(
+         default=64 * 1024,
+         description=(
+@@ -286,6 +295,7 @@
+ 
+     # GRPO related fields
+     mask_sample: bool = False
++    unfinished_penalized: bool = False
+ 
+     @property
+     def instance_id(self) -> str:
+@@ -305,6 +315,8 @@
+     agent_error_kind: Optional[str] = None
+     agent_timed_out: Optional[bool] = None
+     eval_timed_out: Optional[bool] = None
++    # True when the unfinished-trajectory penalty replaced the reward (unfinished_trajectory_reward).
++    unfinished_penalized: Optional[bool] = None
+ 
+     # Memory watchdog signals
+     oom_killed: Optional[bool] = None
+@@ -3849,13 +3861,22 @@
+         agent_timed_out = bool(persisted_metrics.agent_timed_out)
+         oom_killed = bool(persisted_metrics.oom_killed)
+         eval_oom_killed = bool(persisted_metrics.eval_oom_killed)
++        unfinished = agent_error_kind in ("max_iteration", "context_window")
++        unreliable = eval_timed_out or agent_timed_out or oom_killed or eval_oom_killed
++        # Unfinished-trajectory penalty: the agent ran into the turn or the context limit without
++        # resolving the task. With unfinished_trajectory_reward set, such a rollout stays in the loss
++        # with that reward instead of being masked. A resolved-but-unfinished rollout (case 1) and
++        # every unreliable one (cases 2-5) are still masked.
++        metrics_to_update["unfinished_penalized"] = False
+         if (
+-            agent_error_kind in ("max_iteration", "context_window")
+-            or eval_timed_out
+-            or agent_timed_out
+-            or oom_killed
+-            or eval_oom_killed
++            unfinished
++            and not unreliable
++            and not metrics_to_update["resolved"]
++            and params.unfinished_trajectory_reward is not None
+         ):
++            params.unfinished_penalized = True
++            metrics_to_update["unfinished_penalized"] = True
++        elif unfinished or unreliable:
+             params.mask_sample = True
+ 
+         trajectories_dir = params.persistent_dir / "trajectories"
+@@ -3988,7 +4009,11 @@
+             return SWEBenchVerifyResponse(
+                 responses_create_params=responses_create_params,
+                 response=response,
+-                reward=1.0 if metrics.resolved else 0.0,
++                reward=(
++                    self.config.unfinished_trajectory_reward
++                    if metrics.unfinished_penalized and self.config.unfinished_trajectory_reward is not None
++                    else (1.0 if metrics.resolved else 0.0)
++                ),
+                 **metrics.model_dump(),
+                 instance_config=SWEBenchWrapperInstanceConfig.model_validate_json(
+                     metadata["instance_config"]
