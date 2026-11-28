@@ -5,15 +5,18 @@
   2. B 를 `++logger.wandb.id=<B id> ++logger.wandb.resume=allow ++logger.wandb.step_offset=N` 으로 띄운다
      (`step_offset` 은 본체 `nemo_rl/utils/logger.py` 의 W&B 전용 설정 — B 의 step 1 이 N + 1 로 기록된다. 재개할 때도 같은 값을 준다).
 
-  wandb_seed_from_run.py --project alpha-rl --source-id <A id> --upto N --new-id <B id> --name <B 이름> --group <캠페인> [--entity E] [--apply]
+  wandb_seed_from_run.py --project alpha-rl --source-id <A id> --upto N --new-id <B id> --name <B 이름> --group <캠페인> [--entity E] [--apply | --verify]
 
 `--apply` 가 없으면 읽기만 한다 (복사할 step 범위와 지표 수를 찍는다). `--apply` 는 W&B 에 새 런을 만든다 — 같은 id 의 런이 이미 있으면 멈춘다.
+`--verify` 는 이미 복사된 대상 런의 step 1 ~ N 을 다시 읽어 원본과 값까지 비교한다 (읽기 전용, 대상 런이 B 의 step 을 더 쌓은 뒤에도 쓸 수 있다).
+복사 직후의 확인은 W&B 반영을 기다린다 — 기록 직후에는 이력이 0 행으로 읽힌다 (2026-11-28 실측: 약 40 초 뒤 40 행). 행 수가 맞을 때까지 10 초 간격으로 최대 3 분 다시 읽는다.
 복사하는 것은 스칼라 이력뿐이다 (A 가 W&B 에 보낸 지표 그대로). 시스템 지표 · 아티팩트 · 원래의 기록 시각은 옮기지 않는다 — 복사된 구간은 Step 축으로만 읽는다.
 키는 환경변수 `WANDB_API_KEY` 로 받는다 (`runs/launch.sh` 와 같은 키 파일).
 """
 import argparse
 import math
 import sys
+import time
 
 import wandb
 
@@ -34,6 +37,47 @@ def read_history(api: "wandb.Api", path: str, upto: int) -> list[tuple[int, dict
     return sorted(rows.items())
 
 
+READBACK_TRIES = 18
+READBACK_WAIT_S = 10.0
+
+
+def compare_copy(source: list[tuple[int, dict]], copied: list[tuple[int, dict]]) -> list[str]:
+    """Return the differences between the source rows and the copied rows (empty = identical)."""
+    src, dst = dict(source), dict(copied)
+    problems = []
+    if sorted(src) != sorted(dst):
+        problems.append(f"step 이 다르다: 원본 {len(src)} 개 · 대상 {len(dst)} 개 · 대상에 없는 step {sorted(set(src) - set(dst))[:10]}")
+    for step in sorted(set(src) & set(dst)):
+        if set(src[step]) != set(dst[step]):
+            problems.append(f"step {step}: 지표 키가 다르다 ({sorted(set(src[step]) ^ set(dst[step]))[:5]})")
+            continue
+        bad = [k for k, v in src[step].items() if not math.isclose(v, dst[step][k], rel_tol=1e-9, abs_tol=0.0)]
+        if bad:
+            problems.append(f"step {step}: 값이 다른 지표 {len(bad)} 개 ({bad[:3]})")
+    return problems
+
+
+def read_back(path: str, source: list[tuple[int, dict]], upto: int, *, tries: int, wait_s: float) -> list[tuple[int, dict]]:
+    """Read the copied history, waiting for W&B to serve all rows (it serves none right after a write)."""
+    copied: list[tuple[int, dict]] = []
+    for attempt in range(tries):
+        copied = read_history(wandb.Api(), path, upto)
+        if len(copied) >= len(source):
+            break
+        if attempt + 1 < tries:
+            time.sleep(wait_s)
+    return copied
+
+
+def report_copy(source: list[tuple[int, dict]], copied: list[tuple[int, dict]]) -> int:
+    got = [s for s, _ in copied]
+    problems = compare_copy(source, copied)
+    print(f"복사 확인: 대상 런의 step {got[0] if got else '없음'} ~ {got[-1] if got else '없음'} · {len(got)} 행 · 원본과 {'같다' if not problems else '다르다'}")
+    for line in problems[:10]:
+        print(f"   ! {line}")
+    return 0 if not problems else 1
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project", required=True)
@@ -44,7 +88,10 @@ def main() -> int:
     ap.add_argument("--name", required=True)
     ap.add_argument("--group")
     ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--verify", action="store_true", help="이미 복사된 대상 런을 원본과 비교한다 (읽기 전용)")
     args = ap.parse_args()
+    if args.apply and args.verify:
+        ap.error("--apply 와 --verify 는 함께 쓰지 않는다")
     if args.upto < 1:
         ap.error("--upto 는 1 이상이어야 한다")
 
@@ -62,6 +109,9 @@ def main() -> int:
     if not steps or steps[-1] != args.upto:
         print(f"중단: 원본에 step {args.upto} 이 없다 — 시작 체크포인트의 step 과 맞지 않는다")
         return 1
+
+    if args.verify:
+        return report_copy(rows, read_back(dst, rows, args.upto, tries=1, wait_s=0.0))
 
     try:
         existing = api.run(dst)
@@ -89,11 +139,7 @@ def main() -> int:
         run.log(metrics, step=step, commit=True)
     run.finish()
 
-    copied = read_history(wandb.Api(), dst, args.upto)
-    got = [s for s, _ in copied]
-    ok = got == steps and all(set(m) == set(dict(rows)[s]) for s, m in copied)
-    print(f"복사 확인: 대상 런의 step {got[0] if got else '없음'} ~ {got[-1] if got else '없음'} · {len(got)} 행 · 원본과 {'같다' if ok else '다르다'}")
-    return 0 if ok else 1
+    return report_copy(rows, read_back(dst, rows, args.upto, tries=READBACK_TRIES, wait_s=READBACK_WAIT_S))
 
 
 if __name__ == "__main__":
