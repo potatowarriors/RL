@@ -68,6 +68,7 @@ python examples/configs/alpha/tools/analyze_rollout_logprob_gap.py <dir>/exp_*/t
 
 | 날짜 | 증상 | 원인 → 대응 |
 |---|---|---|
+| 11-28 | SWE E2E 의 step 1 · 3 에서 시간 초과 16 ~ 22% (마스킹), 첫 step 점검의 "이력 없는 롤아웃 12.5%" 상한 초과 | 롤아웃 128 개가 한꺼번에 뜨면 (기동 직후 · 시스템이 빈 뒤의 배치) 기동이 중앙 약 600 초 — 1,800 초 한도에 포함돼 그 물결의 21 ~ 34% 가 시간 초과. 마스킹된 시간 초과는 보상 0 으로 그룹 기준선에 남는다. 건수 기준 (필터 0 · 12.5%) 은 step 당 64 롤아웃 때의 값 (`KNOWN_ISSUES.md` 11-28) |
 | 11-27 | SWE 런에서 `NeMo-Gym batch did not complete prompt groups … retrying` 이 뜨고 배치가 통째로 다시 돎, 종료 때 vLLM 엔진이 `sem_unlink` FileNotFoundError | 한 에이전트 컨테이너의 삭제 명령이 모든 컨테이너가 함께 쓰는 `OpenHands/evaluation/oh` 와 호스트 `/dev/shm` 까지 지움 (Gym 의 공유 읽기 · 쓰기 마운트 + `mount dev`) → 빈 결과 → 학습기가 배치 전체 재시도 (오류는 안 찍힌다). 판별: 두 노드의 `/dev/shm` 항목 수 · Gym 서버 로그의 `No completion files found` · `Expected exactly one file`. 조치는 `docs/STATUS.md` (KNOWN_ISSUES 11-27) |
 | 11-27 | 시작 체크포인트 게이트 M2 가 FAIL — 한 프롬프트의 다음 토큰이 HF 와 다름, cos 는 0.99997 | bf16 참조 로짓의 최댓값이 두 토큰에서 정확히 같고 도구가 `argmax` 의 첫 인덱스만 정답으로 봄 (M4 도구는 08-24 에 고쳤고 M2 로 옮기지 않았다) → 게이트 FAIL 로그의 후보 토큰 로짓을 먼저 본다. 수정 · 재실행 계획은 `docs/GATES.md` "S6" (KNOWN_ISSUES 11-27) |
 | 11-27 | SWE E2E 본 런의 보상이 48 step 동안 1.8% 에서 오르지 않음 — 사전 측정은 7.4% · 보상이 갈린 과제 15.6% 였다 | 사전 측정 64 과제를 먼저 변환된 687 과제 묶음에서 뽑았고 그 묶음이 쉬웠다 (본 런에서 묶음 7.3% · 나머지 1.5%). 전체에서는 과제의 5.7% 만 성공이 나와 기울기의 56% 가 형식 벌점이다 → 학습 신호를 재는 표본은 **학습 데이터 전체에서 무작위로** 뽑고, 본 런 step 10 에서 사전 측정과 대조한다. 상속된 `reward_penalties` 는 다중 턴에서 성공 롤아웃의 11% 를 보상 0 으로 만든다 (`docs/KNOWN_ISSUES.md`) |
