@@ -1,0 +1,172 @@
+From: alpha_v2 RL (NeMo-RL fork examples/configs/alpha)
+Date: 2026-11-28
+Subject: [PATCH] swe_agents: per-run writable mounts, read-only prompt templates, private /dev/shm, optional rerun of an empty rollout
+
+Every OpenHands container (agent and eval) got evaluation/oh, logs and .eval_sessions of the one OpenHands
+checkout read-write, the prompt template files read-write, and - through apptainer.conf `mount dev = yes` -
+the node's own /dev/shm. One command in one container could therefore delete the output.jsonl and the
+llm_completions of every rollout in flight and the shared-memory files of every process of the same user on
+the node (observed 2026-11-27: both in-flight batches were retried; examples/configs/alpha/docs/KNOWN_ISSUES.md).
+
+- writable directories are per run: only evaluation/oh/<agent_run_id> is writable, the sibling runs are
+  hidden behind an empty read-only view, logs and .eval_sessions live under the rollout's own directory
+- prompt template binds are read-only
+- the SWE-bench setup directory is read-only in SWE-rebench eval containers (that harness never writes there)
+- `--contain`: minimal /dev with a private /dev/shm
+- `empty_trajectory_reruns` (default 0): run a rollout again when it comes back without any model-call
+  record, instead of returning an empty output that makes the trainer retry the whole batch
+
+The opencode framework path still binds its shared evaluation/oh (not used by the alpha recipes).
+Not an upstream commit (upstream main 363af5e3e has the same shared mounts).
+---
+--- a/responses_api_agents/swe_agents/app.py	2026-11-28 08:42:49.273565625 +0900
++++ b/responses_api_agents/swe_agents/app.py	2026-11-28 09:06:51.157520697 +0900
+@@ -170,6 +170,15 @@
+ 
+     # Concurrency control
+     concurrency: int = Field(default=256, description="Maximum number of concurrent SWE-bench runs")
++    empty_trajectory_reruns: int = Field(
++        default=0,
++        description=(
++            "How many times to run a rollout again when it comes back without any model-call record "
++            "(no completion files, so the response output would be empty). A trainer that requires "
++            "generation data in every result otherwise fails the whole batch on one such rollout. "
++            "0 keeps the previous behaviour."
++        ),
++    )
+ 
+     dataset_path: Optional[str] = Field(
+         default=None,
+@@ -3407,17 +3416,33 @@
+             # OpenHands path (default).
+             assert params.openhands_setup_dir is not None, "openhands_setup_dir not set"
+             openhands_dir = f"{params.openhands_setup_dir}/OpenHands"
++            # Writable directories are per run, not the shared parents of the one OpenHands
++            # checkout: with the shared evaluation/oh, logs and .eval_sessions bound read-write
++            # into every container, one command in one container could delete (or read) the
++            # outputs of every other rollout. The harness still writes to
++            # evaluation/oh/<agent_run_id> and the server still reads it from the checkout.
++            run_oh_dir = Path(openhands_dir) / "evaluation" / "oh" / params.agent_run_id
++            run_oh_dir.mkdir(parents=True, exist_ok=True)
++            # Empty read-only view of evaluation/oh that holds only this run's mount point.
++            oh_view_dir = params.persistent_dir / "oh_view"
++            (oh_view_dir / params.agent_run_id).mkdir(parents=True, exist_ok=True)
++            run_logs_dir = params.persistent_dir / "oh_logs"
++            run_logs_dir.mkdir(parents=True, exist_ok=True)
++            run_sessions_dir = params.persistent_dir / "oh_eval_sessions"
++            run_sessions_dir.mkdir(parents=True, exist_ok=True)
+             mount_args.extend(
+                 [
+                     # Read-only base mounts (parent first)
+                     f"--mount type=bind,src={openhands_dir},dst=/openhands_setup/OpenHands,ro",
+                     f"--mount type=bind,src={openhands_dir},dst={openhands_dir},ro",
+-                    f"--mount type=bind,src={openhands_dir}/.eval_sessions,dst=/openhands_setup/OpenHands/.eval_sessions",
+-                    f"--mount type=bind,src={openhands_dir}/.eval_sessions,dst={openhands_dir}/.eval_sessions",
+-                    f"--mount type=bind,src={openhands_dir}/logs,dst=/openhands_setup/OpenHands/logs",
+-                    f"--mount type=bind,src={openhands_dir}/logs,dst={openhands_dir}/logs",
+-                    f"--mount type=bind,src={openhands_dir}/evaluation/oh,dst=/openhands_setup/OpenHands/evaluation/oh",
+-                    f"--mount type=bind,src={openhands_dir}/evaluation/oh,dst={openhands_dir}/evaluation/oh",
++                    f"--mount type=bind,src={run_sessions_dir},dst=/openhands_setup/OpenHands/.eval_sessions",
++                    f"--mount type=bind,src={run_sessions_dir},dst={openhands_dir}/.eval_sessions",
++                    f"--mount type=bind,src={run_logs_dir},dst=/openhands_setup/OpenHands/logs",
++                    f"--mount type=bind,src={run_logs_dir},dst={openhands_dir}/logs",
++                    f"--mount type=bind,src={oh_view_dir},dst=/openhands_setup/OpenHands/evaluation/oh,ro",
++                    f"--mount type=bind,src={oh_view_dir},dst={openhands_dir}/evaluation/oh,ro",
++                    f"--mount type=bind,src={run_oh_dir},dst=/openhands_setup/OpenHands/evaluation/oh/{params.agent_run_id}",
++                    f"--mount type=bind,src={run_oh_dir},dst={openhands_dir}/evaluation/oh/{params.agent_run_id}",
+                     # Data
+                     f"--mount type=bind,src={dataset_path_to_mount},dst=/root/dataset/data.jsonl",
+                 ]
+@@ -3425,14 +3450,14 @@
+ 
+             if params.resolved_user_prompt_template:
+                 mount_args.append(
+-                    f"--mount type=bind,src={params.resolved_user_prompt_template},dst=/openhands_setup/OpenHands/user_prompt.j2"
++                    f"--mount type=bind,src={params.resolved_user_prompt_template},dst=/openhands_setup/OpenHands/user_prompt.j2,ro"
+                 )
+             if params.resolved_system_prompt_template:
+                 mount_args.append(
+-                    f"--mount type=bind,src={params.resolved_system_prompt_template},dst=/openhands_setup/OpenHands/system_prompt.j2"
++                    f"--mount type=bind,src={params.resolved_system_prompt_template},dst=/openhands_setup/OpenHands/system_prompt.j2,ro"
+                 )
+                 mount_args.append(
+-                    f"--mount type=bind,src={params.resolved_system_prompt_template},dst=/openhands_setup/OpenHands/system_prompt_long_horizon.j2"
++                    f"--mount type=bind,src={params.resolved_system_prompt_template},dst=/openhands_setup/OpenHands/system_prompt_long_horizon.j2,ro"
+                 )
+ 
+             miniforge3_path = Path(params.openhands_setup_dir) / "miniforge3"
+@@ -3444,8 +3469,13 @@
+         if command.mode == "eval" and data_point["dataset_name"] not in ("nv-internal-1", "swe-bench-ext", "deepswe"):
+             # Mount the entire setup directory at both /swebench_setup and its original absolute path
+             # This is needed because uv venv has hardcoded absolute paths
+-            mount_args.append(f"--mount type=bind,src={params.swebench_setup_dir},dst=/swebench_setup")
+-            mount_args.append(f"--mount type=bind,src={params.swebench_setup_dir},dst={params.swebench_setup_dir}")
++            # The SWE-rebench harness never writes there (its tests run in the repository and are
++            # parsed on the host); the SWE-bench harness writes logs/run_evaluation under it.
++            setup_ro = ",ro" if "SWE-rebench" in data_point["dataset_name"] else ""
++            mount_args.append(f"--mount type=bind,src={params.swebench_setup_dir},dst=/swebench_setup{setup_ro}")
++            mount_args.append(
++                f"--mount type=bind,src={params.swebench_setup_dir},dst={params.swebench_setup_dir}{setup_ro}"
++            )
+ 
+         if command.mode == "eval" and "SWE-bench_Multilingual" in data_point["dataset_name"]:
+             mount_args.append(
+@@ -3608,6 +3638,12 @@
+             f"{mount_str} "
+             f" {params.container} bash {container_script_path}"
+         )
++        # Minimal /dev with a private /dev/shm: apptainer.conf `mount dev = yes` otherwise gives
++        # every container the node's own /dev/shm, so a command in one container could delete the
++        # shared-memory files of every process of the same user on that node. (A bind onto
++        # /dev/shm is refused: "source and destination must be identical when binding to /dev".)
++        # Home and /tmp stay as before because `--no-mount home,tmp` is kept.
++        apptainer_cmd = apptainer_cmd.replace("apptainer exec ", "apptainer exec --contain ", 1)
+ 
+         return apptainer_cmd
+ 
+@@ -3814,21 +3850,34 @@
+         return params, dataset_processor
+ 
+     async def responses(self, body: NeMoGymResponseCreateParamsNonStreaming = Body()) -> NeMoGymResponse:
+-        params, dataset_processor = self._setup_params(body)
++        reruns_left = self.config.empty_trajectory_reruns
++        while True:
++            params, dataset_processor = self._setup_params(body)
+ 
+-        with (params.eval_private_dir / "params.json").open("w") as f:
+-            f.write(params.model_dump_json(indent=4))
++            with (params.eval_private_dir / "params.json").open("w") as f:
++                f.write(params.model_dump_json(indent=4))
+ 
+-        try:
+-            return await self._inner_responses(params, dataset_processor)
+-        except Exception as e:
+-            traceback_file = params.persistent_dir / "traceback.err"
+-            with traceback_file.open("w") as f:
+-                f.write(format_exc())
++            try:
++                response = await self._inner_responses(params, dataset_processor)
++            except Exception as e:
++                traceback_file = params.persistent_dir / "traceback.err"
++                with traceback_file.open("w") as f:
++                    f.write(format_exc())
++
++                print(
++                    f"Hit an exception in {self.config.name}! See {traceback_file} for more details", file=sys.stderr
++                )
+ 
+-            print(f"Hit an exception in {self.config.name}! See {traceback_file} for more details", file=sys.stderr)
++                raise e
+ 
+-            raise e
++            if response.output or reruns_left <= 0:
++                return response
++            reruns_left -= 1
++            print(
++                f"Empty trajectory for {params.instance_id} (run {params.agent_run_id}): no model-call record. "
++                f"Running the rollout again ({reruns_left} rerun(s) left).",
++                flush=True,
++            )
+ 
+     async def _inner_responses(
+         self, params: SWEBenchWrapperInstanceConfig, dataset_processor: BaseDatasetHarnessProcessor

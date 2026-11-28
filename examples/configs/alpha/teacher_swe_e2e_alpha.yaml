@@ -117,6 +117,9 @@ env:
           # 그대로 마스킹한다. 근거: `s4` · `s5` 에서 턴이 33% 길어지며 마스킹이 33 → 47% 로 늘었는데 마스킹된 롤아웃은 손실에 없어 교정 신호가 없었다.
           # 벌점의 크기는 그룹 안 정규화 때문에 결과를 바꾸지 않는다 (docs/E2E_SANDBOX.md §7.13). Qwen3-Coder-Next · Kimi K3 (−1) 와 같은 형태.
           unfinished_trajectory_reward: -1.0
+          # 모델 호출 기록 없이 돌아온 롤아웃은 그 롤아웃만 한 번 다시 돈다 (Gym 패치 0004, 사용자 승인 2026-11-28). 빈 결과가 그대로 가면 학습기가
+          # `no generation data` 로 배치 전체 (256 롤아웃 · 약 1 시간) 를 다시 수집한다 — `s6smoke` 에서 세 번 (docs/KNOWN_ISSUES.md 2026-11-27).
+          empty_trajectory_reruns: 1
           agent_prompt_override_random: false   # 결정 81 · 89: 세 틀 (Codex · OpenCode · CodeAct) 을 과제 ID 를 시드로 고른다 — 한 과제의 롤아웃은 같은 틀이다.
           # true (롤아웃마다 무작위) 면 첫 프롬프트가 달라져 한 과제의 8 개가 틀별로 갈린 채 baseline 이 계산된다 (docs/E2E_SANDBOX.md §7.12).
           agent_prompt_overrides:
