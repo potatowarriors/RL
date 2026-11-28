@@ -101,7 +101,8 @@
 다중 uid 매핑은 Ubuntu 24.04 의 `newuidmap` 이 권한을 낮추지 않고 map 을 열어 CAP_SYS_ADMIN 을 요구한다 → setuid 대신 file capability 로 바꾸면 된다 (`setup_session.sh --multi-uid`, 실측 PASS).
 fakeroot instance 는 `instance start --fakeroot` 뒤 `exec` 를 `--fakeroot` 없이 부른다 (실측 PASS, 붙이면 실패).
 
-**그 밖** (미측정): 샌드박스가 세션 network namespace 를 공유한다 (Ray · vLLM 포트에 닿음) · 기본 `mount dev = yes` 가 세션 `/dev` 를 통째로 넘긴다 · `--writable-tmpfs` 크기는 `sessiondir max size` 기본 64 MB 다.
+**그 밖** (미측정): 샌드박스가 세션 network namespace 를 공유한다 (Ray · vLLM 포트에 닿음) · `--writable-tmpfs` 크기는 `sessiondir max size` 기본 64 MB 다.
+**컨테이너가 쓸 수 있는 호스트 경로 (2026-11-28 실측 · Gym `swe_agents` 경로)**: 기본 `mount dev = yes` 는 노드의 `/dev/shm` 을 통째로 넘기고, Gym 은 하나뿐인 OpenHands 체크아웃의 `evaluation/oh` · `logs` · `.eval_sessions` 와 프롬프트 템플릿을 모든 에이전트 · 채점 컨테이너에 읽기 · 쓰기로 붙였다 — 한 컨테이너의 삭제가 돌고 있던 롤아웃 전부의 결과와 main1 의 `/dev/shm` 을 지웠다 (`KNOWN_ISSUES.md` 2026-11-27). Gym 패치 0004 뒤에 남는 쓰기 가능한 경로는 그 롤아웃 자신의 것뿐이다: `/trajectories_mount` · `evaluation/oh/<run id>` · 롤아웃별 `logs` · `.eval_sessions` · 과제 데이터 파일 · (채점) 패치 파일. `--contain` 으로 `/dev` 는 최소 구성 (`null zero random urandom tty ptmx pts shm fd std*`), `/dev/shm` 은 컨테이너 전용이다. 손대지 않은 것: 호스트 `/proc` (위 `oom_score_adj`) · 네트워크 · SWE-bench 하니스 (SWE-Gym) 채점 컨테이너의 `swebench_setup` · `agent_framework: opencode` 경로. 새 환경을 붙일 때는 이 목록을 그 환경에 대해 다시 만든다 (확인 도구: `GATES.md` "S6" 의 격리 탐침).
 시험 도구 주의: FUSE 를 쓰는 실행을 `strace -f` 로 통째로 추적하지 않는다 (교착, `KNOWN_ISSUES.md` 2026-11-20).
 
 ## 6. 적용된 뒤의 순서
